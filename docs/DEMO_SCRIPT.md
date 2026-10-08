@@ -140,6 +140,10 @@ Use this when the audience knows Gemini Enterprise. It needs `./agdemo publish-g
 4. Talk track: "Same agent, same Gemini Enterprise experience. The difference is the gateway policy, set centrally and enforced on every outbound call."
 5. Skip scenario 5 in Gemini Enterprise: it supports the egress gateway only.
 
+## Resetting between runs
+
+**Reset** returns the theme to step 1: removes every policy, detaches both gateways in one change, turns Model Armor off, opens the Wide open tab and clears the log. Policies that weren't applied are reported as "not present". In Live mode the detach takes about 2.5 minutes. When nothing is pending any more, the UI **verifies** the start state automatically and logs a ✓/✗ checklist. Click **Verify** at any time to re-check.
+
 ## General recovery tips
 
 | Problem | Do this |

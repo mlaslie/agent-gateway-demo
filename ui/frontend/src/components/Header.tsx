@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Mode } from "../api/types";
 import type { Demo } from "../useDemo";
 import { MA_KEY } from "../useDemo";
-import { CopyIcon, GatewayIcon, OpenInNewIcon, RefreshIcon, ShieldIcon } from "./Icons";
+import { CopyIcon, GatewayIcon, OpenInNewIcon, RefreshIcon, ShieldIcon, CheckIcon } from "./Icons";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PendingProgress, SettledPop, useSettled } from "./Progress";
 
@@ -129,6 +129,17 @@ export function Header({ d }: { d: Demo }) {
       <button className="btn btn-outline" disabled={!d.canAdmin || !d.theme || d.busy === "reset"} title={adminTip ?? "Remove every policy for this theme and detach the gateways"} onClick={() => setConfirm(true)}>
         <RefreshIcon size={16} />
         {d.busy === "reset" ? "Resetting…" : "Reset"}
+      </button>
+
+      <button
+        className="btn btn-outline"
+        disabled={!d.theme || d.busy === "verify" || d.busy === "reset"}
+        title="Check that this theme is back at step 1: no policies, no gateways, Model Armor off, every connection direct"
+        aria-label="Verify the start state"
+        onClick={() => d.verify()}
+      >
+        <CheckIcon size={16} />
+        {d.busy === "verify" ? "Verifying…" : "Verify"}
       </button>
 
       {confirm && (

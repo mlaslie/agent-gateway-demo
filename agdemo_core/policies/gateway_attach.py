@@ -25,6 +25,10 @@ class GatewayAttach:
     def remove(self, ctx: Ctx, theme: Theme, policy: Policy) -> None:
         engines.set_gateways(L.r(ctx), ctx.config, L.engine(ctx, theme), _path(policy), None)
 
+    def remove_many(self, ctx: Ctx, theme: Theme, policies: list[Policy]) -> None:
+        """Detach several directions in ONE engine PATCH (used by reset)."""
+        engines.set_gateway_paths(L.r(ctx), ctx.config, L.engine(ctx, theme), {_path(p): None for p in policies})
+
     def status(self, ctx: Ctx, theme: Theme, policy: Policy) -> PolicyStatus:
         try:
             r, cfg, p = L.r(ctx), ctx.config, _path(policy)
@@ -38,10 +42,11 @@ class GatewayAttach:
             if rec and rec.get("path") is None:
                 return L.status(bool(bound), f"engine update in progress (operation {rec['op'].split('/')[-1]})",
                                 "pending" if not bound else "pending_removal")
-            if rec and rec.get("path") == p:
+            paths = (rec or {}).get("paths") or ({rec["path"]: rec.get("target")} if rec and rec.get("path") else {})
+            if rec and p in paths:
                 if rec.get("error"):
                     return L.status(bool(bound), f"gateway PATCH failed: {rec['error']}", "error")
-                target_on = rec.get("target") is not None
+                target_on = paths[p] is not None
                 return L.status(target_on, f"engine redeploying with {p} gateway "
                                 f"{'attached' if target_on else 'detached'} (PATCH {rec['op'].split('/')[-1]})",
                                 "pending" if target_on else "pending_removal")

@@ -107,7 +107,7 @@ def _persist(engine: str, rec: dict | None) -> None:
         if rec is None:
             ops.pop(engine, None)
         else:
-            ops[engine] = {k: rec[k] for k in ("op", "path", "target", "started")}
+            ops[engine] = {k: rec[k] for k in ("op", "path", "target", "paths", "started") if k in rec}
         save_state(st)
     except Exception:  # noqa: BLE001
         pass
@@ -144,26 +144,69 @@ def inflight(r: Rest, cfg: DemoConfig, engine: str) -> dict | None:
     return rec
 
 
+BUSY_MARKER = "already being bound or unbound"     # HTTP 400 while another gateway PATCH runs
+_engine_locks: dict[str, threading.Lock] = {}
+
+
+def _engine_lock(engine: str) -> threading.Lock:
+    with _lock:
+        return _engine_locks.setdefault(engine, threading.Lock())
+
+
+def _wait_idle(r: Rest, cfg: DemoConfig, engine: str, timeout: float) -> None:
+    """Block until no update operation is running on the engine (GCP allows one gateway change at a time)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        running = _running_update_op(r, cfg, engine)
+        if not running:
+            return
+        time.sleep(10)
+    raise GcpError(409, f"engine {engine} still has an update running after {int(timeout)}s")
+
+
 def set_gateways(r: Rest, cfg: DemoConfig, engine: str, path: str, gateway: str | None,
                  wait: bool = False, timeout: float = 1800) -> dict:
     """Bind (gateway=resource) or unbind (gateway=None) one direction, preserving the other."""
-    eng = get_engine(r, cfg, engine)
-    if eng is None:
-        raise GcpError(404, f"engine {engine} not found")
-    cur = gateway_config(eng)
-    new: dict[str, Any] = {}
-    for p, k in KEYS.items():
-        gw = gateway if p == path else (cur.get(k) or {}).get("agentGateway")
-        if gw:
-            new[k] = {"agentGateway": gw}
-    if {k: (v or {}).get("agentGateway") for k, v in cur.items()} == {k: v["agentGateway"] for k, v in new.items()}:
-        return {"changed": False}
-    body = {"spec": {"deploymentSpec": {"agentGatewayConfig": new}}}
-    op = r.patch(engine_url(cfg, engine), json=body, params={"updateMask": MASK})
-    rec = {"op": op.get("name", ""), "path": path, "target": gateway, "started": time.time(), "done": False}
-    with _lock:
-        _inflight[engine] = rec
-    _persist(engine, rec)
+    return set_gateway_paths(r, cfg, engine, {path: gateway}, wait=wait, timeout=timeout)
+
+
+def set_gateway_paths(r: Rest, cfg: DemoConfig, engine: str, targets: dict[str, str | None],
+                      wait: bool = False, timeout: float = 1800) -> dict:
+    """Set one or both directions in a single PATCH ({path: gateway or None}); others are preserved.
+
+    Changes to the same engine are serialized: a running update is waited for (and a "busy" 400 is
+    retried), then the current config is re-read so a concurrent change to the other direction isn't lost.
+    """
+    with _engine_lock(engine):
+        for attempt in range(6):
+            _wait_idle(r, cfg, engine, timeout)
+            eng = get_engine(r, cfg, engine)
+            if eng is None:
+                raise GcpError(404, f"engine {engine} not found")
+            cur = gateway_config(eng)
+            new: dict[str, Any] = {}
+            for p, k in KEYS.items():
+                gw = targets[p] if p in targets else (cur.get(k) or {}).get("agentGateway")
+                if gw:
+                    new[k] = {"agentGateway": gw}
+            if {k: (v or {}).get("agentGateway") for k, v in cur.items() if (v or {}).get("agentGateway")} == \
+                    {k: v["agentGateway"] for k, v in new.items()}:
+                return {"changed": False}
+            body = {"spec": {"deploymentSpec": {"agentGatewayConfig": new}}}
+            try:
+                op = r.patch(engine_url(cfg, engine), json=body, params={"updateMask": MASK})
+            except GcpError as e:
+                if BUSY_MARKER in str(e) and attempt < 5:
+                    time.sleep(10)
+                    continue
+                raise
+            first = next(iter(targets))
+            rec = {"op": op.get("name", ""), "path": first, "target": targets[first], "paths": dict(targets),
+                   "started": time.time(), "done": False}
+            with _lock:
+                _inflight[engine] = rec
+            _persist(engine, rec)
+            break
     if wait:
         r.wait(op, aiplatform(cfg.region), timeout=timeout, interval=15)
     return {"changed": True, "operation": op.get("name")}

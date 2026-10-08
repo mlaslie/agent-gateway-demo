@@ -176,6 +176,10 @@ class FakeGcp:
                 on = policy.id in g.applied
                 return {"applied": on, "status": "applied" if on else "removed", "detail": "", "changed_at": None}
 
+            def remove_many(self, ctx, theme, policies):
+                for p in policies:
+                    self.remove(ctx, theme, p)
+
             def describe(self, ctx, theme, policy):
                 return [f"gcloud fake {policy.id}"]
         return H()
@@ -293,3 +297,42 @@ def test_probe_requests_send_test_prompt_and_show_replies():
     lines = reply_lines(theme, [{"edge": "hr-records-agent", "outcome": "ok", "result": "jdoe earns $182,000."},
                                 {"edge": "kb-agent", "outcome": "denied", "result": None}])
     assert lines == ["HR Records Agent replied: jdoe earns $182,000."]
+
+
+def test_demo_verify_start_state(client):
+    r = client.post("/api/themes/helpdesk/verify", json={"mode": "demo"}).json()
+    assert r["ok"] is True and any(c["id"] == "connections" for c in r["checks"])
+    client.post("/api/themes/helpdesk/policies/gw-egress", json={"action": "apply", "mode": "demo"})
+    r = client.post("/api/themes/helpdesk/verify", json={"mode": "demo"}).json()
+    assert r["ok"] is False and not next(c for c in r["checks"] if c["id"] == "gw-egress")["ok"]
+    client.post("/api/themes/helpdesk/reset", json={"mode": "demo"})
+    assert client.post("/api/themes/helpdesk/verify", json={"mode": "demo"}).json()["ok"] is True
+
+
+def test_live_reset_detaches_gateways_in_one_call_and_skips_absent(live, client):
+    calls = []
+    import agdemo_core.policies as pol
+    real = pol.get_handler
+
+    class GW:
+        def __init__(self, h): self.h = h
+        def __getattr__(self, n): return getattr(self.h, n)
+        def remove_many(self, ctx, theme, policies):
+            calls.append(sorted(p.id for p in policies))
+            for p in policies:
+                self.h.remove(ctx, theme, p)
+
+    import pytest as _pt
+    mp = _pt.MonkeyPatch()
+    mp.setattr(pol, "get_handler", lambda t: GW(real(t)) if t == "gateway_attach" else real(t))
+    try:
+        for pid in ("gw-egress", "gw-ingress"):
+            client.post(f"/api/themes/helpdesk/policies/{pid}", json={"action": "apply", "mode": "live"})
+        import time as _t
+        _t.sleep(0.5)
+        r = client.post("/api/themes/helpdesk/reset", json={"mode": "live"}).json()
+        assert "not present" in r["policies"]["allow-kb"]["detail"]
+        _t.sleep(0.5)
+        assert calls == [["gw-egress", "gw-ingress"]]
+    finally:
+        mp.undo()

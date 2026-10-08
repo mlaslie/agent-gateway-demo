@@ -162,6 +162,7 @@ Every mutating request carries `mode: "live" | "demo" | "live_with_fallback"`. D
 | POST | `/api/themes/{id}/tests/{test_id}/run` | `{mode, use_llm: bool}` | **SSE** stream of events (below) |
 | POST | `/api/themes/{id}/probe` | `{mode}` | `{edges:{...}}`: probes every edge, then refreshes the state |
 | POST | `/api/themes/{id}/reset` | `{mode}` | Removes every applied policy and detaches the gateways (Live) |
+| POST | `/api/themes/{id}/verify` | `{mode}` | `{ok, checks:[{id,label,ok,detail}]}`: fresh (uncached) check that the theme is back at step 1: every policy removed, Model Armor off, and every egress connection probes `direct` |
 | POST | `/api/themes/{id}/tests/{test_id}/record` | | Live only. Runs the test and saves a recording |
 | GET | `/api/themes/{id}/policies/{pid}/explain` | | `{lines:[...]}` |
 

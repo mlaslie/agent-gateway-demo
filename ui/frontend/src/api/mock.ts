@@ -336,6 +336,19 @@ export const mockApi: Api = {
     }
     return delay({ ok: true }, 300);
   },
+  async verify(id, mode) {
+    const theme = getThemeOrThrow(id);
+    const st = stateFor(theme, mode);
+    const checks = theme.policies.map((p) => {
+      const s = st.policies[p.id];
+      const ok = !s?.applied && s?.status === "removed";
+      return { id: p.id, label: p.text, ok, detail: ok ? "not present" : s?.status ?? "unknown" };
+    });
+    checks.push({ id: "model-armor", label: "Model Armor is off", ok: !st.model_armor.enabled, detail: st.model_armor.status });
+    const bad = Object.entries(st.edges).filter(([e, v]) => !e.startsWith("ingress:") && v.state !== "direct").map(([e]) => e);
+    checks.push({ id: "connections", label: "Every connection goes direct (no gateway)", ok: bad.length === 0, detail: bad.join(", ") || "all direct" });
+    return delay({ ok: checks.every((c) => c.ok), checks }, 600);
+  },
   async record(id, testId, body) {
     let n = 0;
     for await (const e of runEvents(id, testId, body.scenario_id, "live", body.use_llm)) {

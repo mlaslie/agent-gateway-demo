@@ -246,6 +246,18 @@ async def reset(theme_id: str, body: ModeBody, request: Request) -> dict[str, An
         raise HTTPException(409, f"Live mode unavailable: {e}") from e
 
 
+@app.post("/api/themes/{theme_id}/verify")
+async def verify(theme_id: str, body: ModeBody) -> dict[str, Any]:
+    """Is the theme back at step 1 (no policies, no gateways, Model Armor off, all connections direct)?"""
+    theme = _theme(theme_id)
+    if body.mode == "demo":
+        return engine.demo.verify_start_state(theme)
+    try:
+        return await engine.live.verify_start_state(theme)
+    except LiveUnavailable as e:
+        raise HTTPException(409, f"Live mode unavailable: {e}") from e
+
+
 @app.post("/api/themes/{theme_id}/tests/{test_id}/record")
 async def record(theme_id: str, test_id: str, request: Request, body: RecordBody | None = None) -> dict[str, Any]:
     theme = _theme(theme_id)

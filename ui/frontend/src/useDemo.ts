@@ -62,6 +62,8 @@ export function useDemo(api: Api) {
   const [log, setLog] = useState<LogEntry[]>([]);
   const [useLlm, setUseLlm] = useState<boolean>(LS.get("agdemo.useLlm") === "1");
   const [busy, setBusy] = useState<string | null>(null);
+  // After a Live reset: verify the start state automatically once nothing is pending any more.
+  const [awaitingVerify, setAwaitingVerify] = useState(false);
   const [toast, setToast] = useState<Toast | null>(null);
   const [geDemo, setGeDemoRaw] = useState<boolean>(LS.get("agdemo.geDemo") === "1");
   // When the user clicked a policy / Model Armor toggle: fallback start time for the progress timer
@@ -288,8 +290,12 @@ export function useDemo(api: Api) {
       await refresh();
       addLog({
         kind: "system",
-        text: mode === "demo" ? "Reset complete." : "Reset requested. GCP changes show as pending until they finish.",
+        text:
+          mode === "demo"
+            ? "Reset complete."
+            : "Reset requested. GCP changes show as pending until they finish; the start state is verified automatically afterwards.",
       });
+      setAwaitingVerify(true);
     } catch (e) {
       addLog({ kind: "error", text: `Reset failed: ${(e as Error).message}` });
       flash(`Reset failed: ${(e as Error).message}`, "error");
@@ -298,6 +304,39 @@ export function useDemo(api: Api) {
       setBusy(null);
     }
   }, [api, themeId, theme, serverState, mode, addLog, refresh, flash]);
+
+  // Check, fresh from GCP, that the theme is back at step 1 and log a checklist.
+  const verify = useCallback(async () => {
+    if (!themeId) return;
+    setBusy("verify");
+    addLog({ kind: "status", text: "Verifying the start state (policies, gateways, Model Armor, connections)…" });
+    try {
+      const r = await api.verify(themeId, mode);
+      for (const c of r.checks)
+        addLog({ kind: c.ok ? "system" : "error", text: `${c.ok ? "✓" : "✗"} ${c.label}${c.ok ? "" : ` (${c.detail})`}` });
+      addLog({
+        kind: r.ok ? "done" : "error",
+        text: r.ok ? "Verified: everything is back at step 1, Wide open." : "Not back at the start yet: see the ✗ items above.",
+      });
+      flash(r.ok ? "Verified: back at the start state" : "Start state not reached yet", r.ok ? "ok" : "error");
+      await refresh();
+    } catch (e) {
+      addLog({ kind: "error", text: `Verify failed: ${(e as Error).message}` });
+      flash(`Verify failed: ${(e as Error).message}`, "error");
+    } finally {
+      setBusy(null);
+    }
+  }, [api, themeId, mode, addLog, flash, refresh]);
+
+  useEffect(() => {
+    if (!awaitingVerify || !state || busy) return;
+    const pending = Object.values(state.policies).some((s) => s.status === "pending" || s.status === "pending_removal")
+      || state.model_armor.status === "pending";
+    if (!pending) {
+      setAwaitingVerify(false);
+      void verify();
+    }
+  }, [awaitingVerify, state, busy, verify]);
 
   const probe = useCallback(async () => {
     if (!themeId) return;
@@ -556,6 +595,7 @@ export function useDemo(api: Api) {
     applyPreconditions,
     setModelArmor,
     reset,
+    verify,
     probe,
     busy,
     canAdmin,

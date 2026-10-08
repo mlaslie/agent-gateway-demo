@@ -1,5 +1,5 @@
 // HTTP client for the FastAPI backend (CONTRACTS §7).
-import type { AppConfig, Mode, PolicyStatus, ProbeResult, RecordResult, SseEvent, ThemeResponse, ThemeState } from "./types";
+import type { AppConfig, Mode, PolicyStatus, ProbeResult, RecordResult, SseEvent, ThemeResponse, ThemeState, VerifyResult } from "./types";
 
 export interface Api {
   getConfig(): Promise<AppConfig>;
@@ -17,6 +17,7 @@ export interface Api {
   probe(id: string, mode: Mode): Promise<ProbeResult>;
   record(id: string, testId: string, body: { use_llm: boolean; scenario_id?: string }): Promise<RecordResult>;
   reset(id: string, mode: Mode): Promise<unknown>;
+  verify(id: string, mode: Mode): Promise<VerifyResult>;
   explain(id: string, pid: string): Promise<{ lines: string[] }>;
   readonly isMock: boolean;
 }
@@ -89,6 +90,7 @@ export const httpApi: Api = {
   setModelArmor: (enabled, mode) => req("POST", "/api/model-armor", { enabled, mode }),
   probe: (id, mode) => req("POST", `/api/themes/${enc(id)}/probe`, { mode }),
   reset: (id, mode) => req("POST", `/api/themes/${enc(id)}/reset`, { mode }),
+  verify: (id, mode) => req("POST", `/api/themes/${enc(id)}/verify`, { mode }),
   record: (id, testId, body) => req("POST", `/api/themes/${enc(id)}/tests/${enc(testId)}/record`, body),
   explain: (id, pid) => req("GET", `/api/themes/${enc(id)}/policies/${enc(pid)}/explain`),
   async runTest(id, testId, body, onEvent, signal) {

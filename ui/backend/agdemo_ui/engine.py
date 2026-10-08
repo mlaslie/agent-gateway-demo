@@ -62,6 +62,18 @@ class DemoStore:
     def reset(self, theme_id: str) -> None:
         self.applied[theme_id] = set()
 
+    def verify_start_state(self, theme: Theme) -> dict[str, Any]:
+        applied = self.applied_for(theme.id)
+        checks = [{"id": p.id, "label": p.text, "ok": p.id not in applied,
+                   "detail": "applied (simulated)" if p.id in applied else "not present"} for p in theme.policies]
+        checks.append({"id": "model-armor", "label": "Model Armor is off", "ok": not self.model_armor,
+                       "detail": "on" if self.model_armor else "off"})
+        edges = simulate.evaluate(theme, applied, self.model_armor)
+        bad = [e for e, st in edges.items() if not e.startswith("ingress:") and st["state"] != "direct"]
+        checks.append({"id": "connections", "label": "Every connection goes direct (no gateway)",
+                       "ok": not bad, "detail": "all direct (simulated)" if not bad else ", ".join(bad)})
+        return {"ok": all(c["ok"] for c in checks), "checks": checks}
+
     def state(self, theme: Theme) -> dict[str, Any]:
         applied = self.applied_for(theme.id)
         edges = simulate.evaluate(theme, applied, self.model_armor)
@@ -115,6 +127,7 @@ class Op:
         self.done_at: float | None = None
         self.error: str | None = None
         self.confirmed = False
+        self.note: str | None = None       # e.g. "not present": remove was a no-op
 
 
 class LiveTheme:
@@ -187,6 +200,8 @@ class LiveEngine:
         if op.error:
             return {"applied": base.get("applied", False), "status": "error", "changed_at": op.started_iso,
                     "detail": op.error}
+        if op.note:
+            return {**base, "detail": op.note, "changed_at": op.started_iso}
         age = time.time() - (op.done_at or op.started)
         if not op.confirmed and age < PENDING_SECONDS and base.get("status") in ("applied", "removed"):
             return {**base, "applied": apply, "status": pend, "changed_at": op.started_iso,
@@ -282,6 +297,12 @@ class LiveEngine:
             from agdemo_core.policies import get_handler
 
             h = get_handler(policy.type)
+            if op.action == "remove":
+                cur = dict(await self._thread(h.status, self.ctx(), theme, policy))
+                if not cur.get("applied") and cur.get("status") == "removed":
+                    # Nothing in GCP to remove: treat as already at the start state, not an error.
+                    op.note, op.confirmed = "Policy not present: nothing to remove", True
+                    return
             fn = h.apply if op.action == "apply" else h.remove
             await self._thread(fn, self.ctx(), theme, policy)
         except Exception as e:
@@ -328,17 +349,77 @@ class LiveEngine:
         return {"enabled": enabled, "status": "pending"}
 
     async def reset(self, theme: Theme) -> dict[str, Any]:
+        """Remove every policy. Gateway detaches are done in ONE engine PATCH (GCP rejects a second
+        gateway change while one is running); policies that aren't present are reported as such."""
         self.check_available(theme)
         statuses = await self.policy_statuses(theme)
-        out = {}
+        out: dict[str, Any] = {}
+        gw_policies: list[Policy] = []
         for p in theme.policies:
-            s = statuses[p.id]
-            if s.get("applied") or s.get("status") in ("pending", "error"):
-                out[p.id] = await self.set_policy(theme, p, False)
+            s_ = statuses[p.id]
+            if not (s_.get("applied") or s_.get("status") in ("pending", "error")):
+                out[p.id] = {**s_, "detail": "Policy not present: nothing to remove"}
+            elif p.type == "gateway_attach":
+                gw_policies.append(p)
             else:
-                out[p.id] = s
+                out[p.id] = await self.set_policy(theme, p, False)
+        if gw_policies:
+            lt = self.lt(theme.id)
+            ops = {p.id: Op("remove") for p in gw_policies}
+            for p in gw_policies:
+                lt.ops[p.id] = ops[p.id]
+                for e in policy_edges(theme, p):
+                    lt.probe_results.pop(e, None)
+            self._spawn(self._run_gateway_reset(theme, gw_policies, ops))
+            for p in gw_policies:
+                out[p.id] = self._effective(theme, p, {})
         self.lt(theme.id).probe_results.clear()
         return {"policies": out}
+
+    async def _run_gateway_reset(self, theme: Theme, policies: list[Policy], ops: dict[str, "Op"]) -> None:
+        err = None
+        try:
+            from agdemo_core.policies import get_handler
+
+            await self._thread(get_handler("gateway_attach").remove_many, self.ctx(), theme, policies)
+        except Exception as e:
+            err = f"remove failed: {type(e).__name__}: {e}"
+        lt = self.lt(theme.id)
+        for p in policies:
+            op = ops[p.id]
+            op.error, op.running, op.done_at = err, False, time.time()
+            lt.status_cache.pop(p.id, None)
+        if not err:
+            await asyncio.gather(*(self._confirm_loop(theme, p, ops[p.id]) for p in policies))
+
+    async def verify_start_state(self, theme: Theme) -> dict[str, Any]:
+        """Check (fresh from GCP, no caches) that the theme is back at step 1: no policies, no gateways,
+        Model Armor off, and every connection reachable directly."""
+        self.check_available(theme)
+        lt = self.lt(theme.id)
+        bases = await asyncio.gather(*(self._handler_status(theme, p, force=True) for p in theme.policies))
+        ma = await self.model_armor_status(force=True)
+        checks: list[dict[str, Any]] = []
+        for p, b in zip(theme.policies, bases):
+            op = lt.ops.get(p.id)
+            busy = bool(op and op.running)
+            ok = not b.get("applied") and b.get("status") == "removed" and not busy
+            checks.append({"id": p.id, "label": p.text, "ok": ok,
+                           "detail": "still being removed" if busy else (b.get("detail") or b.get("status", ""))})
+        checks.append({"id": "model-armor", "label": "Model Armor is off", "ok": not ma.get("enabled")
+                       and ma.get("status") != "pending", "detail": ma.get("detail") or ma.get("status", "")})
+        policies_clear = all(c["ok"] for c in checks)
+        edges_ok, bad = None, []
+        if policies_clear:
+            try:
+                res = await self.probe(theme, [e for e in edge_ids(theme) if not e.startswith("ingress:")])
+                bad = [e for e, st in res.items() if st.get("state") != "direct"]
+                edges_ok = not bad
+            except Exception as e:
+                bad, edges_ok = [f"probe failed: {type(e).__name__}: {e}"], False
+            checks.append({"id": "connections", "label": "Every connection goes direct (no gateway)",
+                           "ok": edges_ok, "detail": "all direct" if edges_ok else ", ".join(bad)})
+        return {"ok": policies_clear and bool(edges_ok), "checks": checks}
 
     # ---------------------------------------------------------------- probes / runs
     def _client(self, theme: Theme):

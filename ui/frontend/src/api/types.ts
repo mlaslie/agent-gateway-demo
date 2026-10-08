@@ -175,3 +175,15 @@ export type SseEvent =
   | { type: "fallback"; reason: string }
   | { type: "done"; edges: Record<string, EdgeState> }
   | { type: "error"; text: string };
+
+/** POST /api/themes/{id}/verify: is the theme back at step 1? */
+export interface VerifyCheck {
+  id: string;
+  label: string;
+  ok: boolean | null;
+  detail: string;
+}
+export interface VerifyResult {
+  ok: boolean;
+  checks: VerifyCheck[];
+}
