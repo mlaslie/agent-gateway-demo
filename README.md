@@ -1,6 +1,27 @@
 # Agent Gateway & Agent Registry Demo
 
-An interactive, portable demo of governing AI agents on Google Cloud with **Agent Gateway** and **Agent Registry**. An ADK agent on **Agent Runtime** starts out able to call anything. Step by step, the presenter puts it behind an egress gateway (default deny), allows specific A2A agents and specific MCP tools by identity, puts an ingress gateway in front of the agent, and turns on **Model Armor** to screen traffic in both directions. A web UI draws every call as a line on a diagram and colors it by outcome: direct, allowed, denied (403), blocked (Model Armor) or pending.
+Once agents can call other agents, MCP servers and APIs on their own, you need a way to control who they talk to, which tools they can use and what goes in and out, without building that into every agent.
+
+That's what **Agent Gateway** does. It sits in the network path of your agents on Agent Runtime and enforces policy in one place:
+- **Agent → anywhere (egress):** default deny. An agent can only reach destinations registered in **Agent Registry** that its Agent Identity has been granted, down to individual MCP tools.
+- **Client → agent (ingress):** requests coming into the agent are screened before the agent ever sees them.
+- **Model Armor** plugs into either side to catch prompt injection, jailbreaks and sensitive data (SSNs, card numbers, etc.).
+
+**Protocols:** the gateway understands **MCP** (it sees every `tools/call` and the tool name, so policy can be per tool) and governs **A2A** and plain **HTTPS** calls to registered destinations. On ingress it covers Agent Runtime's `query` / `streamQuery`. This demo shows:
+- **A2A:** ADK agents on Cloud Run called over A2A (JSON-RPC `message/send`)
+- **MCP:** MCP servers on Cloud Run over Streamable HTTP, with read-only vs write tools
+- **Client → Agent Runtime:** `streamQuery` through the ingress gateway with Model Armor
+- **HTTPS to Google APIs:** the Gemini, session, logging and tracing calls the agent itself needs, allowlisted as registry endpoints
+
+## Why I built this
+
+Showing Agent Gateway for real is a lot of work. You need an agent on Agent Runtime, A2A agents and MCP servers on Cloud Run, all of it registered in Agent Registry, two gateways, IAP and Model Armor authz extensions and policies... and then the IAM policies themselves, which get complicated fast (agent identity principals, conditional bindings on MCP tool names, etc.). Each change takes minutes to apply, and it's hard to see what actually changed.
+
+So this repo does the heavy lifting. One config file and a small CLI build the whole environment in your own project, and a web UI lets you turn policies on and off in plain English ("Helpdesk Agent can only use the tickets MCP server's read-only tools") and watch the result on a live diagram.
+
+The goal isn't just to show off what the gateway can do. It's also to give you a look **under the hood** at how the policies are crafted and applied in different situations: every policy has an "Under the hood" view with the exact gcloud / REST calls behind it, and the gateway's own Cloud Logging entries show up next to each call.
+
+The demo starts with an ADK agent that can call anything. Step by step you put it behind the egress gateway (default deny), allow specific A2A agents and specific MCP tools, put the ingress gateway in front of it and turn on Model Armor. Every call is drawn as a line and colored by outcome: direct, allowed, denied (403), blocked (Model Armor) or pending.
 
 Use cases are pluggable **themes** (YAML only). Two ship with the repo: *IT / HR Helpdesk* and *Retail Store Operations*.
 
