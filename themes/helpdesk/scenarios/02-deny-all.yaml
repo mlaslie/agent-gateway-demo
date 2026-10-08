@@ -15,3 +15,6 @@ tests:
     prompt: "Check every agent and tool you can reach and tell me which ones worked."
     probes: [{edge: kb-agent}, {edge: hr-records-agent}, {edge: "tickets-mcp:get_ticket"},
              {edge: "tickets-mcp:delete_ticket"}, {edge: "directory-mcp:lookup_user"}, {edge: "directory-mcp:reset_password"}]
+    sample_replies:
+      "kb-agent": "Passwords need 14+ characters and are rotated every 180 days."
+      "hr-records-agent": "jdoe is Jordan Doe, Engineering."

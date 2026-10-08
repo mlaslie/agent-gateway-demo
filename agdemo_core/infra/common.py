@@ -23,14 +23,6 @@ def client(cfg: DemoConfig) -> Rest:
 
 
 # ---------------------------------------------------------------- names
-def denied_sa_id(cfg: DemoConfig) -> str:
-    return cfg.name("denied-caller")
-
-
-def allowed_sa_id(cfg: DemoConfig) -> str:
-    return cfg.name("allowed-caller")
-
-
 def ui_sa_id(cfg: DemoConfig) -> str:
     return cfg.name("ui")
 
@@ -44,20 +36,6 @@ def sa(cfg: DemoConfig, account_id: str) -> str:
     return f"{account_id}@{cfg.project}.iam.gserviceaccount.com"
 
 
-def denied_member(cfg: DemoConfig) -> str:
-    d = cfg.ingress_demo.denied_principal
-    if d and d != "auto":
-        return d
-    return f"serviceAccount:{sa(cfg, denied_sa_id(cfg))}"
-
-
-def allowed_members(cfg: DemoConfig) -> list[str]:
-    """Principals the `ingress_allow{caller: allowed}` policy grants: the configured principal plus the
-    allowed-caller SA (which the UI impersonates so the allowed call works from Cloud Run too)."""
-    out = [f"serviceAccount:{sa(cfg, allowed_sa_id(cfg))}"]
-    if cfg.ingress_demo.allowed_principal:
-        out.insert(0, cfg.ingress_demo.allowed_principal)
-    return out
 
 
 def repo_id(cfg: DemoConfig) -> str:

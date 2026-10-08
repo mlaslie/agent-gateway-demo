@@ -8,7 +8,6 @@ Shape:
     "ingress_gateway_url": "https://...",          # how clients call agents through the ingress gateway
     "model_armor_template": "projects/.../templates/agdemo-shield",
     "platform_registry_ids": {"<host>": "<registry resource name>"},
-    "denied_caller_sa": "agdemo-denied-caller@...",
     "ui_url": "https://..."
   },
   "themes": {

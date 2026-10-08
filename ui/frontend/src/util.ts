@@ -65,6 +65,7 @@ export const LOG_TAG: Record<LogEntry["kind"], string> = {
   system: "SYSTEM",
   done: "DONE",
   ge: "GE",
+  gwlog: "GATEWAY LOG",
 };
 
 /** One plain-text line per log entry: time, tag, text, edge state. */
@@ -79,6 +80,7 @@ export function logToText(log: LogEntry[]): string {
       } else {
         parts.push(e.text);
       }
+      if (e.kind === "gwlog" && e.gw) parts.push(e.gw.simulated ? "(simulated)" : e.gw.console_url ? `<${e.gw.console_url}>` : "");
       if (e.replayed && e.kind !== "edge") parts.push("(replayed)");
       return parts.join(" ");
     })

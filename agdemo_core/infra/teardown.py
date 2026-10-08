@@ -83,7 +83,8 @@ def teardown_shared(cfg: DemoConfig) -> None:
             registry.delete_service(r, cfg.registry_parent, sid)
             c.log(f"  deleted registry service {sid}")
     # service accounts
-    for acc in (c.denied_sa_id(cfg), c.allowed_sa_id(cfg), c.ui_sa_id(cfg), c.run_sa_id(cfg)):
+    # (denied-caller / allowed-caller: created by older versions of bootstrap; removed if present)
+    for acc in (cfg.name("denied-caller"), cfg.name("allowed-caller"), c.ui_sa_id(cfg), c.run_sa_id(cfg)):
         email = c.sa(cfg, acc)
         project.project_remove_member(r, cfg.project, f"serviceAccount:{email}")
         if project.delete_sa(r, cfg.project, email):

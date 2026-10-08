@@ -75,14 +75,14 @@ def run(cfg: DemoConfig, r: Rest, fix: bool = False) -> list[Check]:
     out.append(Check("APIs", not missing, "all enabled" if not missing else ", ".join(missing),
                      f"./agdemo preflight --fix  (or gcloud services enable {' '.join(missing)} --project={P})"))
 
-    # caller permissions
+    # your (the operator's) permissions
     try:
         granted = project.test_permissions(r, P, PERMS)
         lacking = [p for p in PERMS if p not in granted]
-        out.append(Check("caller permissions", not lacking, "ok" if not lacking else "missing: " + ", ".join(lacking),
+        out.append(Check("your permissions", not lacking, "ok" if not lacking else "missing: " + ", ".join(lacking),
                          "Project Owner is simplest; see docs/SETUP.md §2"))
     except GcpError as e:
-        out.append(Check("caller permissions", None, e.message[:120]))
+        out.append(Check("your permissions", None, e.message[:120]))
 
     # region support
     for label, url in [("Agent Gateway in region", f"https://networkservices.googleapis.com/v1/projects/{P}/locations/{R}/agentGateways"),

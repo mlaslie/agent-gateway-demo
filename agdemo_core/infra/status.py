@@ -25,7 +25,8 @@ def run(cfg: DemoConfig, theme_id: str | None = None) -> None:
     for p in ("egress", "ingress"):
         g = gw.get_gateway(cfg, p, r)
         t.add_row(f"{p} gateway", g["name"] if g else "[red]missing[/]")
-        for name in (gw.iap_policy_name(cfg, p), gw.ma_policy_name(cfg, p)):
+        names = ([gw.iap_policy_name(cfg, p)] if p == "egress" else []) + [gw.ma_policy_name(cfg, p)]
+        for name in names:
             pol = gw.get_policy(r, gw.gateway_project(cfg, p), cfg.region, name)
             t.add_row(f"  authz policy {name}", (pol or {}).get("policyProfile", "[dim]absent[/]"))
     ma = ma_policy.status(ctx)

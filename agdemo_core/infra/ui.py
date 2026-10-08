@@ -48,15 +48,21 @@ def deploy(cfg: DemoConfig, skip_build: bool = False) -> str:
     ui_sa = c.sa(cfg, c.ui_sa_id(cfg))
     env = {"AGDEMO_CONFIG_YAML": config_path().read_text(),
            "AGDEMO_STATE_JSON": json.dumps(load_state()),
-           "AGDEMO_RECORDINGS_DIR": "/tmp/recordings"}
+           # Recordings go to the staging bucket so they survive restarts and redeploys.
+           "AGDEMO_RECORDINGS_URI": f"gs://{c.staging_bucket(cfg)}/recordings"}
     envf = CONFIG_DIR / "generated" / "ui.env.yaml"
     envf.write_text(yaml.safe_dump(env))
     labels = ",".join(f"{k}={v}" for k, v in cfg.labels.items())
     c.log(f"  deploying Cloud Run {svc} with IAP")
     gcloud.run(["beta", "run", "deploy", svc, f"--image={image(cfg)}", f"--region={cfg.region}",
                 f"--project={cfg.project}", f"--service-account={ui_sa}", f"--env-vars-file={envf}",
-                f"--labels={labels}", "--no-allow-unauthenticated", "--iap", "--min-instances=0",
-                "--max-instances=2", "--memory=1Gi", "--timeout=900", "--quiet"], timeout=900)
+                f"--labels={labels}", "--no-allow-unauthenticated", "--iap",
+                # One always-on instance with CPU always allocated: policy changes finish in background
+                # threads after the request returns, and pending state lives in that instance's memory.
+                "--min-instances=1", "--max-instances=1", "--no-cpu-throttling", "--memory=1Gi", "--timeout=900", "--quiet"], timeout=900)
+    gcloud.run(["storage", "buckets", "add-iam-policy-binding", f"gs://{c.staging_bucket(cfg)}",
+                f"--member=serviceAccount:{ui_sa}", "--role=roles/storage.objectUser",
+                f"--project={cfg.project}", "--quiet"])
     # IAP service agent must be able to invoke the service
     num = project_number(cfg.project)
     gcloud.run(["run", "services", "add-iam-policy-binding", svc, f"--region={cfg.region}",

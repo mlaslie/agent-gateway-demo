@@ -15,8 +15,10 @@ resource prefix. `./agdemo status [theme]` shows the live state of everything li
 | A2A call to an allowed agent is denied | Agent Registry has no URL for the agent (A2A 1.0 cards keep the URL in `supportedInterfaces`) | See ARCHITECTURE.md §Registry. `deploy-theme` falls back to `no-spec` + `interfaces` |
 | Tool-level policy blocks `initialize` / `tools/list` | The condition doesn't allow an empty tool name | Conditions must include `''`. The handlers do this already |
 | Model Armor never blocks | No CONTENT_AUTHZ policy is attached (checkbox off), a service agent is missing Model Armor roles, or the engine wasn't created with `AGENT_IDENTITY` | `./agdemo status`, then re-run `bootstrap` (it grants the roles) |
-| Ingress: denied caller still gets in | The ingress gateway isn't attached to the engine (`gw-ingress` off), or the IAP extension is in DRY_RUN | `gateways.iap_enforcement: ENFORCE`, then `bootstrap` |
-| Ingress: allowed caller gets 403 | The caller isn't in the ingress IAP policy, or the policy hasn't propagated yet | Apply `ingress-allowed-caller` and wait |
+| Ingress: the injection test isn't blocked | The ingress gateway isn't attached (`gw-ingress` off or still *pending*), the Model Armor checkbox is off or still *pending*, or the `gcp-sa-aiplatform-re` service agent is missing Model Armor roles | Apply `gw-ingress`, tick Model Armor and wait until neither is pending; re-run `bootstrap` for the roles |
+| Ingress: any user can call the agent through the gateway | By design: the ingress gateway (`CLIENT_TO_AGENT`) enforces Model Armor only, not caller identity (ISSUES.md #1) | Control who may call with IAM on Agent Runtime (`roles/aiplatform.user`) |
+| Ingress: the call itself gets a non–Model Armor 403 | The backend's credentials (UI service account on Cloud Run, your ADC locally) lack `roles/aiplatform.user` | Re-run `bootstrap`, or grant the role to your account |
+| No gateway log entries for scenario 5 | The ingress gateway writes no request logs | Expected; gateway logs cover egress only |
 | `GET /healthz` on Cloud Run returns Google's 404 page | Cloud Run reserves paths that end in `z` | Use another path (for example `/health`) |
 | `deploy-theme` Cloud Run step fails with `allUsers` | Org policy (domain restricted sharing) | Set `cloud_run.public_targets: false`. The orchestrator then uses ID tokens and is granted `run.invoker` |
 

@@ -4,7 +4,7 @@ import type { Api } from "./client";
 import { evaluate } from "./simulate";
 import helpdeskJson from "./mockTheme.helpdesk.json";
 import retailJson from "./mockTheme.retail.json";
-import type { AppConfig, EdgeState, Mode, PolicyStatus, SseEvent, Theme, ThemeState } from "./types";
+import type { AppConfig, EdgeState, GatewayLogEntry, GatewayLogsResponse, Mode, PolicyStatus, SseEvent, Theme, ThemeState } from "./types";
 
 // Regenerate (repo root): uv run python -c "import json; from agdemo_core.themes import load_theme; [json.dump(load_theme(t).model_dump(mode='json'), open(f'ui/frontend/src/api/mockTheme.{t}.json','w'), indent=1) for t in ['helpdesk','retail']]"
 const QS = new URLSearchParams(location.search);
@@ -118,8 +118,6 @@ function edgeTouchedByPending(theme: Theme, s: Store, edge: string): boolean {
     const isIngress = edge.startsWith("ingress:");
     if (p.type === "gateway_attach") {
       if ((p.params.path === "ingress") === isIngress) return true;
-    } else if (p.type === "ingress_allow") {
-      if (edge === `ingress:${p.params.caller}`) return true;
     } else if (edge === p.params.target || edge.startsWith(`${p.params.target}:`)) return true;
   }
   return false;
@@ -192,24 +190,96 @@ const EXPLAIN: Record<string, (p: Theme["policies"][number]) => string[]> = {
     `  --member=principal://.../helpdesk-agent --role=roles/iap.egressor \\`,
     `  --condition='expression=request.mcp.tool.annotations.readOnlyHint == true,title=read-only-tools'`,
   ],
-  ingress_allow: () => [
-    "# Allow only the helpdesk-users principal through the ingress gateway",
-    "gcloud beta iap web add-iam-policy-binding --resource-type=reasoning-engine \\",
-    "  --member=group:helpdesk-users@example.com --role=roles/iap.httpsResourceAccessor",
-  ],
 };
 
 function fakeResult(theme: Theme, edge: string): string {
-  if (edge.startsWith("ingress:")) return `${theme.orchestrator.display_name} answered the caller.`;
+  if (edge.startsWith("ingress:")) return `${theme.orchestrator.display_name} answered the user.`;
   if (!edge.includes(":")) return `${theme.a2a_agents[edge]?.display_name ?? edge}: (simulated answer)`;
   const [srv, tool] = edge.split(":");
   return `${srv}.${tool} → 200 OK ${tool.startsWith("get") || tool.startsWith("list") || tool.startsWith("lookup") ? "(INC-1042: VPN drops every 30 minutes)" : "(change made!)"}`;
 }
 
+// ---------- gateway logs (CONTRACTS §9) ----------
+// Synthesized from governed egress edge results (tests and probes), revealed 3–8 s later to mimic
+// Cloud Logging ingestion latency. Shape mirrors ui/backend/agdemo_ui/gateway_logs.py.
+const GW_POLICY: Record<string, string> = { denied: "agdemo-egress-iap-policy", blocked: "agdemo-egress-ma-policy" };
+const GW_PROJECT = "my-demo-project";
+const GW_PROJECT_NUM = "123456789012";
+const GW_FILTER = (themeId: string) =>
+  `logName="projects/${GW_PROJECT}/logs/networkservices.googleapis.com%2Fgateway_requests" resource.type="networkservices.googleapis.com/Gateway" resource.labels.gateway_name="agdemo-egress" httpRequest.requestUrl:"agdemo-${themeId}-"`;
+const consoleQueryUrl = (filter: string) =>
+  `https://console.cloud.google.com/logs/query;query=${encodeURIComponent(filter)}?project=${GW_PROJECT}`;
+const gwBook = new Map<string, { visibleAt: number; e: GatewayLogEntry }[]>();
+const hex = (n: number) => Array.from({ length: n }, () => Math.floor(Math.random() * 36).toString(36)).join("");
+
+function synthEntry(theme: Theme, edge: string, decision: "allowed" | "denied" | "blocked", ts: number): GatewayLogEntry {
+  const [comp, tool] = edge.split(":");
+  const host = `agdemo-${theme.id}-${comp}-${GW_PROJECT_NUM}.us-east4.run.app`;
+  const status = decision === "allowed" ? 200 : 403;
+  const url = tool ? `https://${host}/mcp` : `https://${host}/`;
+  const polName = (n: string) => `projects/${GW_PROJECT_NUM}/locations/us-east4/authzPolicies/${n}`;
+  const pols = [{ name: polName(GW_POLICY.denied), result: decision === "denied" ? "DENIED" : "ALLOWED" }];
+  if (decision === "blocked") pols.push({ name: polName(GW_POLICY.blocked), result: "DENIED" });
+  const insertId = hex(14);
+  const iso = new Date(ts).toISOString();
+  const raw = {
+    httpRequest: { latency: `${(0.02 + Math.random() * 0.25).toFixed(6)}s`, protocol: "HTTP/1.1", requestMethod: "POST", requestUrl: url, status, userAgent: "python-httpx2/2.13.1" },
+    insertId,
+    jsonPayload: {
+      "@type": "type.googleapis.com/google.cloud.loadbalancing.type.LoadBalancerLogEntry",
+      agentGatewayInfo: {
+        agentRegistryResource: `projects/${GW_PROJECT_NUM}/locations/us-east4/${tool ? "mcpServers" : "agents"}/agentregistry-${theme.id}-${comp}`,
+        ...(tool ? { mcpInfo: { method: "tools/call", parameter: tool } } : {}),
+      },
+      authzPolicyInfo: { policies: pols, result: decision === "allowed" ? "ALLOWED" : "DENIED" },
+      enforcedGatewaySecurityPolicy: { hostname: host, matchedRules: [{ action: "ALLOWED", name: "default_denied" }], requestWasTlsIntercepted: true },
+    },
+    logName: `projects/${GW_PROJECT}/logs/networkservices.googleapis.com%2Fgateway_requests`,
+    resource: { labels: { gateway_name: "agdemo-egress", gateway_type: "SECURE_WEB_GATEWAY", location: "us-east4" }, type: "networkservices.googleapis.com/Gateway" },
+    severity: status === 200 ? "INFO" : "WARNING",
+    timestamp: iso,
+  };
+  const denying = GW_POLICY[decision] ?? null;
+  const what = tool ? `tools/call ${tool}` : "POST /";
+  return {
+    id: insertId,
+    timestamp: iso,
+    gateway: "agdemo-egress",
+    decision,
+    status,
+    method: "POST",
+    url,
+    host,
+    mcp_method: tool ? "tools/call" : null,
+    mcp_tool: tool ?? null,
+    edge,
+    component: comp,
+    policies: pols.map((p) => ({ name: p.name.split("/").pop()!, kind: p.name.includes("-ma-") ? "model_armor" : "iap", result: p.result })),
+    decided_by: denying,
+    summary: `${decision.toUpperCase()}${denying ? ` by ${denying}` : ""} · ${what} · ${status}`,
+    console_url: consoleQueryUrl(`insertId="${insertId}" timestamp="${iso}"`),
+    simulated: true,
+    raw,
+  };
+}
+
+/** Record gateway log entries for every governed egress edge result (allowed / denied / blocked). */
+function logEdges(theme: Theme, edges: Record<string, EdgeState>) {
+  const book = gwBook.get(theme.id) ?? [];
+  gwBook.set(theme.id, book);
+  const now = Date.now();
+  for (const [edge, st] of Object.entries(edges)) {
+    if (edge.startsWith("ingress:") || !st?.governed) continue; // the ingress gateway writes no request logs
+    if (st.state !== "allowed" && st.state !== "denied" && st.state !== "blocked") continue;
+    book.push({ visibleAt: now + 3000 + Math.random() * 5000, e: synthEntry(theme, edge, st.state, now) });
+  }
+  if (book.length > 500) book.splice(0, book.length - 500);
+}
+
 async function* runEvents(themeId: string, testId: string, scenarioId: string | undefined, mode: Mode, useLlm: boolean, signal?: AbortSignal): AsyncGenerator<SseEvent> {
   const t = getThemeOrThrow(themeId);
-  const test =
-    t.scenarios.find((s) => s.id === scenarioId)?.tests.find((x) => x.id === testId) ?? t.scenarios.flatMap((s) => s.tests).find((x) => x.id === testId);
+  const sc = t.scenarios.find((s) => s.id === scenarioId && s.tests.some((x) => x.id === testId)) ?? t.scenarios.find((s) => s.tests.some((x) => x.id === testId));
+  const test = sc?.tests.find((x) => x.id === testId);
   if (!test) throw new Error(`unknown test ${testId}`);
   const s = storeFor(mode, themeId);
   settle(s);
@@ -227,11 +297,11 @@ async function* runEvents(themeId: string, testId: string, scenarioId: string | 
     source = "simulated";
   }
   const result = evaluate(t, applied, ma, test, source);
-  const ingress = !!test.caller;
+  const ingress = sc?.flow === "ingress" || test.probes.some((p) => p.edge.startsWith("ingress:"));
   yield {
     type: "status",
     text: ingress
-      ? `Calling ${t.orchestrator.display_name} as the ${test.caller} caller…`
+      ? `Sending prompt to ${t.orchestrator.display_name} through its Agent Runtime endpoint…`
       : `Sending prompt to ${t.orchestrator.display_name} via Agent Runtime${useLlm ? " (Gemini)" : " (probe mode)"}…`,
   };
   yield { type: "message", role: "user", text: test.prompt };
@@ -246,12 +316,15 @@ async function* runEvents(themeId: string, testId: string, scenarioId: string | 
       st = { state: "pending", governed: true, source: "live", detail: "Policy change still propagating; result may change" };
     }
     done[p.edge] = st;
+    logEdges(t, { [p.edge]: st });
     yield { type: "edge", edge: p.edge, state: st };
     const text =
       st.state === "denied"
         ? `${p.edge} → ${st.http_status ?? 403} denied by Agent Gateway`
         : st.state === "blocked"
-          ? `${p.edge} → blocked by Model Armor`
+          ? p.edge.startsWith("ingress:")
+            ? `${p.edge} → ${st.http_status ?? 403} — Model Armor on the ingress gateway blocked the prompt`
+            : `${p.edge} → blocked by Model Armor`
           : st.state === "pending"
             ? `${p.edge} → policy change pending`
             : fakeResult(t, p.edge);
@@ -266,7 +339,7 @@ async function* runEvents(themeId: string, testId: string, scenarioId: string | 
       : states.includes("denied")
         ? "I completed part of the request; some agents or tools were blocked by policy."
         : ingress
-          ? "Passwords must be 14+ characters and are rotated every 180 days."
+          ? `${t.orchestrator.display_name}: (simulated answer to your request)`
           : "Done — all calls succeeded.";
   yield { type: "message", role: "agent", text: summary };
   yield { type: "done", edges: done };
@@ -323,7 +396,10 @@ export const mockApi: Api = {
     for await (const e of runEvents(id, testId, body.scenario_id, body.mode, body.use_llm, signal)) onEvent(e);
   },
   async probe(id, mode) {
-    return delay({ edges: stateFor(getThemeOrThrow(id), mode).edges }, 800);
+    const theme = getThemeOrThrow(id);
+    const edges = stateFor(theme, mode).edges;
+    logEdges(theme, edges);
+    return delay({ edges }, 800);
   },
   async reset(id, mode) {
     getThemeOrThrow(id);
@@ -335,6 +411,14 @@ export const mockApi: Api = {
       for (const pid of s.applied) s.pending.set(pid, { target: false, until: Date.now() + LIVE_DELAY_MS, at: new Date().toISOString() });
     }
     return delay({ ok: true }, 300);
+  },
+  async sync(id, mode) {
+    const theme = getThemeOrThrow(id);
+    const st = stateFor(theme, mode);
+    return delay({
+      policies: theme.policies.map((p) => ({ id: p.id, label: p.text, applied: !!st.policies[p.id]?.applied, status: st.policies[p.id]?.status ?? "removed", detail: "mock" })),
+      model_armor: { enabled: st.model_armor.enabled, status: st.model_armor.status, detail: "mock" },
+    }, 500);
   },
   async verify(id, mode) {
     const theme = getThemeOrThrow(id);
@@ -364,5 +448,18 @@ export const mockApi: Api = {
     const p = t.policies.find((x) => x.id === pid);
     if (!p) throw new Error("unknown policy");
     return delay({ lines: EXPLAIN[p.type]?.(p) ?? [] }, 250);
+  },
+  async gatewayLogs(id, _mode, q = {}): Promise<GatewayLogsResponse> {
+    getThemeOrThrow(id);
+    const now = Date.now();
+    const since = q.since ? Date.parse(q.since) : now - 15 * 60_000;
+    const limit = q.limit ?? 50;
+    const entries = (gwBook.get(id) ?? [])
+      .filter(({ visibleAt, e }) => visibleAt <= now && Date.parse(e.timestamp) >= since && (!q.denied_only || e.decision !== "allowed"))
+      .map(({ e }) => e)
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, limit);
+    const filter = GW_FILTER(id);
+    return delay({ source: "simulated", filter, console_url: consoleQueryUrl(filter), entries }, 150);
   },
 };

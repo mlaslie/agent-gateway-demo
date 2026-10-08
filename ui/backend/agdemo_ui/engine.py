@@ -15,12 +15,14 @@ from typing import Any, AsyncIterator
 
 from agdemo_core import recordings, simulate
 from agdemo_core.policies.base import PENDING_SECONDS, Ctx
-from agdemo_core.themes import MODEL_ARMOR_TYPICAL_SECONDS, Policy, ScenarioTest, Theme, edge_ids, load_theme
+from agdemo_core.runtime_client import RuntimeCallError
+from agdemo_core.themes import INGRESS_EDGE, MODEL_ARMOR_TYPICAL_SECONDS, Policy, ScenarioTest, Theme, edge_ids, load_theme
 
 from . import settings
 
 STATUS_TTL_S = 8.0
 CONFIRM_INTERVAL_S = 30.0
+MA_SETTLE_S = 15.0         # Model Armor: once both gateway policies are created/deleted, confirm after this
 _pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="agdemo-live")
 
 
@@ -93,8 +95,8 @@ class DemoStore:
 def replay_or_simulate(theme: Theme, scenario: Any, test: ScenarioTest, applied: set[str],
                        model_armor: bool) -> list[dict[str, Any]]:
     """§8: replay a matching recording, else synthesize from simulate.evaluate."""
-    sig = simulate.signature(applied, model_armor)
-    rec = recordings.load(theme.id, test.id, sig)
+    rec = (recordings.load(theme.id, test.id, simulate.test_signature(theme, scenario, test, applied, model_armor))
+           or recordings.load(theme.id, test.id, simulate.signature(applied, model_armor)))   # older recordings
     if rec is not None:
         return [ev(e, d) for d, e in recordings.replay(rec)]
     return [ev(e, d) for d, e in simulate.synth_events(theme, scenario, test, applied, model_armor)]
@@ -109,13 +111,21 @@ def policy_edges(theme: Theme, policy: Policy) -> list[str]:
         if prm.get("path", "egress") == "ingress":
             return list(simulate.INGRESS_EDGES)
         return simulate.egress_edge_ids(theme)
-    if t == "ingress_allow":
-        return [f"ingress:{prm.get('caller')}"]
     if t == "a2a_allow":
         return [prm.get("target")]
     if t in ("mcp_server_allow", "mcp_tool_allow"):
         return [e for e in all_e if e.startswith(f"{prm.get('target')}:")]
     return []
+
+
+# A background policy change older than this is treated as stalled; GCP's actual state wins on sync.
+STALE_OP_SECONDS = 900
+
+
+def is_model_armor_block(text: str) -> bool:
+    """A 403 whose body says Model Armor blocked it (ingress: "Model Armor: Prompt violates ...")."""
+    low = text.lower()
+    return "403" in low and ("model armor" in low or "agdemo-model-armor-block" in low)
 
 
 class Op:
@@ -231,6 +241,12 @@ class LiveEngine:
             return {"enabled": bool(self.ma_target), "status": "pending", "detail": "Updating gateways...", **timing}
         if op and op.error:
             return {**base, "status": "error", "detail": op.error}
+        # Confirm as soon as GCP shows the target state on both gateways (after a short settle time).
+        # Probes can't confirm Model Armor, so without this the UI would wait out PENDING_SECONDS.
+        target = "applied" if self.ma_target else "removed"
+        if op and op.done_at and not op.confirmed and base.get("status") == target \
+                and time.time() - op.done_at >= MA_SETTLE_S:
+            op.confirmed = True
         if op and op.done_at and time.time() - op.done_at < PENDING_SECONDS and base.get("status") != "error" \
                 and not op.confirmed:
             return {**base, "enabled": bool(self.ma_target), "status": "pending",
@@ -392,6 +408,37 @@ class LiveEngine:
         if not err:
             await asyncio.gather(*(self._confirm_loop(theme, p, ops[p.id]) for p in policies))
 
+    async def sync(self, theme: Theme) -> dict[str, Any]:
+        """Re-read every policy and Model Armor straight from GCP (no caches) and clear pending states
+        that GCP shows are already done. Returns what's in place."""
+        self.check_available(theme)
+        lt = self.lt(theme.id)
+        bases = await asyncio.gather(*(self._handler_status(theme, p, force=True) for p in theme.policies))
+        ma = await self.model_armor_status(force=True)
+        now = time.time()
+        for p, b in zip(theme.policies, bases):
+            op = lt.ops.get(p.id)
+            if not op or op.confirmed:
+                continue
+            reached = b.get("status") == ("applied" if op.action == "apply" else "removed")
+            stale = op.running and now - op.started > STALE_OP_SECONDS
+            if reached and (not op.running or stale):
+                op.running, op.confirmed, op.done_at = False, True, op.done_at or now
+        mop = self.ma_op
+        if mop and not mop.confirmed and bool(ma.get("enabled")) == bool(self.ma_target):
+            if not mop.running or now - mop.started > STALE_OP_SECONDS:
+                mop.running, mop.confirmed, mop.done_at = False, True, mop.done_at or now
+                self.ma_cache = None
+                ma = await self.model_armor_status(force=True)
+        statuses = await self.policy_statuses(theme)
+        return {
+            "policies": [{"id": p.id, "label": p.text, "applied": bool(statuses[p.id].get("applied")),
+                          "status": statuses[p.id].get("status"), "detail": statuses[p.id].get("detail", "")}
+                         for p in theme.policies],
+            "model_armor": {"enabled": bool(ma.get("enabled")), "status": ma.get("status"),
+                            "detail": ma.get("detail", "")},
+        }
+
     async def verify_start_state(self, theme: Theme) -> dict[str, Any]:
         """Check (fresh from GCP, no caches) that the theme is back at step 1: no policies, no gateways,
         Model Armor off, and every connection reachable directly."""
@@ -430,16 +477,16 @@ class LiveEngine:
             raise LiveUnavailable(f"no orchestrator engine for theme {theme.id} in state.json")
         return RuntimeClient(engine, timeout_s=settings.live_timeout())
 
-    async def _ingress_call(self, theme: Theme, caller: str, message: str) -> dict[str, Any]:
+    async def _ingress_call(self, theme: Theme, message: str) -> dict[str, Any]:
         try:
             from agdemo_core.gcp.ingress_client import invoke_via_ingress
         except Exception as e:
             raise LiveUnavailable(f"ingress client unavailable: {e}") from e
         ctx = self.ctx()
         if inspect.iscoroutinefunction(invoke_via_ingress):
-            res = await invoke_via_ingress(ctx, theme, caller, message)
+            res = await invoke_via_ingress(ctx, theme, message)
         else:
-            res = await self._thread(invoke_via_ingress, ctx, theme, caller, message)
+            res = await self._thread(invoke_via_ingress, ctx, theme, message)
         return res if isinstance(res, dict) else {"outcome": "error", "detail": f"unexpected result {res!r}"}
 
     def _record_results(self, theme: Theme, results: dict[str, dict[str, Any]], expected: dict[str, Any]) -> None:
@@ -480,15 +527,14 @@ class LiveEngine:
                     results[r["edge"]] = tool_result_to_edge_state(r, egress_on)
 
         async def do_ingress(e: str):
-            caller = e.split(":", 1)[1]
             try:
-                r = await asyncio.wait_for(self._ingress_call(theme, caller, build_probe_message([], malicious)),
+                r = await asyncio.wait_for(self._ingress_call(theme, build_probe_message([], malicious)),
                                            settings.live_timeout())
                 results[e] = tool_result_to_edge_state(r, ingress_on)
             except LiveUnavailable as ex:   # ingress client missing: leave the edge untested
                 results[e] = {"state": "unknown", "governed": ingress_on, "source": "live",
                               "detail": str(ex), "http_status": None}
-            except Exception as ex:  # noqa: BLE001 - one failed caller shouldn't fail the whole probe
+            except Exception as ex:  # noqa: BLE001 - a failed ingress call shouldn't fail the whole probe
                 results[e] = {"state": "error", "governed": ingress_on, "source": "live",
                               "detail": f"{type(ex).__name__}: {ex}", "http_status": None}
 
@@ -518,13 +564,14 @@ class LiveEngine:
         agent = theme.orchestrator.display_name
 
         if simulate.test_is_ingress(scenario, test):
-            caller = test.caller or "allowed"
             ingress_on = simulate.gateway_applied(theme, applied, "ingress")
-            yield ev({"type": "status", "text": f"Calling {agent} through the ingress path as the {caller} caller..."})
+            yield ev({"type": "status", "text": f"Calling {agent} through the ingress path..."})
             yield ev({"type": "message", "role": "user", "text": test.prompt})
-            msg = test.prompt if use_llm else build_probe_message([], test.malicious)
-            r = await self._ingress_call(theme, caller, msg)
-            e = r.get("edge") or f"ingress:{caller}"
+            # Without Gemini, a probe envelope that still carries the prompt text, so Model Armor on the
+            # ingress gateway screens exactly what the user typed (the agent answers without an LLM call).
+            msg = test.prompt if use_llm else build_probe_message([], test.malicious, prompt=test.prompt)
+            r = await self._ingress_call(theme, msg)
+            e = INGRESS_EDGE
             st = tool_result_to_edge_state(r, ingress_on)
             if st["state"] == "error":
                 raise RuntimeError(f"ingress call failed: {st['detail']}")
@@ -535,35 +582,57 @@ class LiveEngine:
                 text = simulate.synth_message(theme, scenario, test, results)
             yield ev({"type": "message", "role": "agent", "text": text}, 0.2)
         else:
-            egress_on = simulate.gateway_applied(theme, applied, "egress")
-            client = self._client(theme)
-            yield ev({"type": "status", "text": f"Calling {theme.orchestrator.id} via Agent Runtime..."})
-            yield ev({"type": "message", "role": "user", "text": test.prompt})
-            if use_llm:
-                prompt = test.prompt
-                if test.malicious and theme.orchestrator.malicious_payload not in prompt:
-                    prompt = f"{prompt}\n\n{theme.orchestrator.malicious_payload}"
-                async for e in client.chat(prompt, egress_on):
-                    if e["type"] == "edge":
-                        results[e["edge"]] = e["state"]
-                    yield ev(e)
-            remaining = [e for e in edges_wanted if e not in results]
-            if remaining:
-                yield ev({"type": "status", "text": f"Probing {len(remaining)} connection(s) (deterministic, no LLM)..."})
-                probe = await client.run_probes(probe_requests(test, remaining), test.malicious)
-                got = {r["edge"]: tool_result_to_edge_state(r, egress_on) for r in probe if r.get("edge")}
-                errs = [f"{k}: {v['detail']}" for k, v in got.items() if v["state"] == "error"]
-                if errs:
-                    raise RuntimeError("probe error on " + "; ".join(errs))
-                for i, e in enumerate(remaining):
-                    if e in got:
-                        results[e] = got[e]
-                        yield ev({"type": "edge", "edge": e, "state": got[e]}, 0.0 if i == 0 else 0.25)
-                if not use_llm:
-                    text = simulate.synth_message(theme, scenario, test, results)
-                    replies = reply_lines(theme, [r for r in probe if r.get("edge") in remaining])
-                    yield ev({"type": "message", "role": "agent",
-                              "text": "\n\n".join([text, *replies])}, 0.2)
+            async def egress_steps():
+                egress_on = simulate.gateway_applied(theme, applied, "egress")
+                client = self._client(theme)
+                yield ev({"type": "status", "text": f"Calling {theme.orchestrator.id} via Agent Runtime..."})
+                yield ev({"type": "message", "role": "user", "text": test.prompt})
+                if use_llm:
+                    prompt = test.prompt
+                    if test.malicious and theme.orchestrator.malicious_payload not in prompt:
+                        prompt = f"{prompt}\n\n{theme.orchestrator.malicious_payload}"
+                    async for e in client.chat(prompt, egress_on):
+                        if e["type"] == "edge":
+                            results[e["edge"]] = e["state"]
+                        yield ev(e)
+                remaining = [e for e in edges_wanted if e not in results]
+                if remaining:
+                    yield ev({"type": "status", "text": f"Probing {len(remaining)} connection(s) (deterministic, no LLM)..."})
+                    probe = await client.run_probes(probe_requests(test, remaining), test.malicious)
+                    got = {r["edge"]: tool_result_to_edge_state(r, egress_on) for r in probe if r.get("edge")}
+                    errs = [f"{k}: {v['detail']}" for k, v in got.items() if v["state"] == "error"]
+                    if errs:
+                        raise RuntimeError("probe error on " + "; ".join(errs))
+                    for i, e in enumerate(remaining):
+                        if e in got:
+                            results[e] = got[e]
+                            yield ev({"type": "edge", "edge": e, "state": got[e]}, 0.0 if i == 0 else 0.25)
+                    if not use_llm:
+                        text = simulate.synth_message(theme, scenario, test, results)
+                        replies = reply_lines(theme, [r for r in probe if r.get("edge") in remaining])
+                        yield ev({"type": "message", "role": "agent",
+                                  "text": "\n\n".join([text, *replies])}, 0.2)
+
+            try:
+                async for x in egress_steps():
+                    yield x
+            except RuntimeCallError as ex:
+                # The call into the agent itself was screened: with the ingress gateway attached and
+                # Model Armor on, a malicious prompt is blocked before Helpdesk Agent ever sees it.
+                if not is_model_armor_block(str(ex)):
+                    raise
+                detail = (f"Not attempted: Model Armor on the ingress gateway blocked the prompt before it "
+                          f"reached {agent} (403)")
+                yield ev({"type": "status", "text": "Blocked at the ingress gateway by Model Armor (403)"})
+                for i, e in enumerate(x for x in edges_wanted if x not in results):
+                    results[e] = {"state": "blocked", "governed": True, "source": "live", "http_status": 403,
+                                  "detail": detail}
+                    yield ev({"type": "edge", "edge": e, "state": results[e]}, 0.0 if i == 0 else 0.15)
+                yield ev({"type": "message", "role": "agent",
+                          "text": f"Model Armor on the ingress gateway blocked this prompt (403 \"Prompt violates "
+                                  f"content security configurations\") before it reached {agent}, so no tools "
+                                  "were called. To show the egress gateway's Model Armor screening tool calls, "
+                                  "detach the ingress gateway (step 5) first."}, 0.2)
         ma = await self.model_armor_status()
         self._record_results(theme, results, simulate.evaluate(theme, applied, bool(ma.get("enabled")), test))
         yield ev({"type": "done", "edges": results})

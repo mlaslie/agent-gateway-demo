@@ -133,6 +133,17 @@ export function Header({ d }: { d: Demo }) {
 
       <button
         className="btn btn-outline"
+        disabled={!d.theme || !!d.busy}
+        title="Re-read every policy and Model Armor from GCP and clear any stuck pending state"
+        aria-label="Sync with GCP"
+        onClick={() => d.sync()}
+      >
+        <RefreshIcon size={16} />
+        {d.busy === "sync" ? "Syncing…" : "Sync"}
+      </button>
+
+      <button
+        className="btn btn-outline"
         disabled={!d.theme || d.busy === "verify" || d.busy === "reset"}
         title="Check that this theme is back at step 1: no policies, no gateways, Model Armor off, every connection direct"
         aria-label="Verify the start state"

@@ -50,11 +50,6 @@ class UI(BaseModel):
     admin_access: list[str] = Field(default_factory=list)
 
 
-class IngressDemo(BaseModel):
-    allowed_principal: str = ""
-    denied_principal: str = "auto"
-
-
 class GeminiEnterprise(BaseModel):
     """Optional: a Gemini Enterprise app the theme orchestrators are published to (GE Demo mode)."""
     app_id: str = ""                 # Discovery Engine engine id, e.g. my-ge-app_1234567890123
@@ -74,7 +69,6 @@ class DemoConfig(BaseModel):
     model_armor: ModelArmor = ModelArmor()
     cloud_run: CloudRun = CloudRun()
     ui: UI = UI()
-    ingress_demo: IngressDemo = IngressDemo()
     themes: ThemesCfg = ThemesCfg()
     gemini_enterprise: GeminiEnterprise = GeminiEnterprise()
     default_mode: Mode = "live_with_fallback"

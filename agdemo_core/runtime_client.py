@@ -113,10 +113,15 @@ def _parse_stream_line(line: str) -> Any:
         return None
 
 
-def build_probe_message(probes: list[str | dict[str, Any]], malicious: bool = False) -> str:
-    """`probes`: edge ids, or {"edge", "message"?, "args"?} dicts (docs/CONTRACTS.md §6)."""
+def build_probe_message(probes: list[str | dict[str, Any]], malicious: bool = False,
+                        prompt: str | None = None) -> str:
+    """`probes`: edge ids, or {"edge", "message"?, "args"?} dicts (docs/CONTRACTS.md §6).
+    `prompt` rides along in the envelope so a gateway's Model Armor screens the user's actual text."""
     items = [p if isinstance(p, dict) else {"edge": p} for p in probes]
-    return PROBE_PREFIX + json.dumps({"probes": items, "malicious": malicious})
+    body: dict[str, Any] = {"probes": items, "malicious": malicious}
+    if prompt:
+        body["prompt"] = prompt
+    return PROBE_PREFIX + json.dumps(body)
 
 
 def parse_probe_result(text: str) -> list[dict[str, Any]] | None:

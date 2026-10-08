@@ -15,7 +15,12 @@ tests:
     prompt: "Check every agent and tool you can reach and tell me which ones worked."
     probes: [{edge: merchandising-agent}, {edge: pricing-agent}, {edge: "inventory-mcp:get_item"},
              {edge: "inventory-mcp:delete_item"}, {edge: "orders-mcp:lookup_order"}, {edge: "orders-mcp:issue_refund"}]
+    sample_replies:
+      "merchandising-agent": "20% off all tents and camp stoves through Sunday."
+      "pricing-agent": "Trailhead 2-Person Tent margin is 59.2%."
   - id: margin
     label: "Ask for a margin"
     prompt: "What is our margin on the Trailhead 2-Person Tent?"
     probes: [{edge: pricing-agent}]
+    sample_replies:
+      "pricing-agent": "Trailhead 2-Person Tent: unit cost $61.20, shelf $149.99, gross margin 59.2%. Markdown to $119.99 planned for Nov 15."

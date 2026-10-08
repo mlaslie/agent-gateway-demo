@@ -5,7 +5,8 @@ import type { Demo, LogEntry } from "../useDemo";
 import { fmtTime, logToText } from "../util";
 import { CodeFull, CodeInline } from "./CodeView";
 import { CopyButton, GlassModal } from "./Glass";
-import { ChevronIcon, ClockIcon, CloseIcon, CopyIcon, ExpandIcon, EyeIcon, OpenInNewIcon, PlayIcon, RefreshIcon, ShieldIcon, SparkIcon, WarnIcon } from "./Icons";
+import { GatewayLogsSheet } from "./GatewayLogs";
+import { ChevronIcon, ClockIcon, CloseIcon, CopyIcon, ExpandIcon, EyeIcon, LogIcon, OpenInNewIcon, PlayIcon, RefreshIcon, ShieldIcon, SparkIcon, WarnIcon } from "./Icons";
 import { PendingProgress, SettledPop, useSettled } from "./Progress";
 
 const STATUS_TEXT: Record<string, string> = {
@@ -74,11 +75,6 @@ function PolicyCard({ d, api, policy }: { d: Demo; api: Api; policy: Policy }) {
         />
         <div className="policy-text">
           {policy.text}
-          {policy.enforced === false && (
-            <div className="policy-preview" title={policy.note}>
-              <span className="pill pill-preview">Preview</span> {policy.note || "Not enforced by GCP yet"}
-            </div>
-          )}
         </div>
         <Pill st={st} settled={!!settled} />
       </div>
@@ -142,7 +138,7 @@ function PolicyCard({ d, api, policy }: { d: Demo; api: Api; policy: Policy }) {
   );
 }
 
-function LogLine({ e }: { e: LogEntry }) {
+function LogLine({ e, onOpenLog }: { e: LogEntry; onOpenLog?: (g: NonNullable<LogEntry["gw"]>) => void }) {
   const s = e.edgeState?.state;
   return (
     <div className={`log-line log-${e.kind}`}>
@@ -154,6 +150,12 @@ function LogLine({ e }: { e: LogEntry }) {
         {e.kind === "fallback" && <span className="log-role role-fallback">Fallback</span>}
         {e.kind === "error" && <span className="log-role role-error">Error</span>}
         {e.kind === "ge" && <span className="log-role role-ge">GE</span>}
+        {e.kind === "gwlog" && e.gw && (
+          <span className={`log-role role-gwlog gwl-${e.gw.decision}`} title="Agent Gateway request log (Cloud Logging)">
+            <LogIcon size={11} /> Gateway log
+          </span>
+        )}
+        {e.kind === "gwlog" && e.edge && <span className="mono log-edge">{e.edge}</span>}
         {e.kind === "edge" && (
           <>
             <span className="mono log-edge">{e.edge}</span>
@@ -165,7 +167,22 @@ function LogLine({ e }: { e: LogEntry }) {
           </>
         )}
         {e.replayed && <span className="replayed">replayed</span>}
-        <span className="log-text">{e.text}</span>
+        {e.kind === "gwlog" && e.gw && onOpenLog ? (
+          <button type="button" className="log-text gw-open" onClick={() => onOpenLog(e.gw!)} aria-label={`View the raw log entry: ${e.text}`} title="View the raw log entry">
+            {e.text}
+          </button>
+        ) : (
+          <span className="log-text">{e.text}</span>
+        )}
+        {e.kind === "gwlog" && e.gw && (
+          e.gw.simulated ? (
+            <span className="gw-sim-note">simulated</span>
+          ) : e.gw.console_url ? (
+            <a className="gw-cl-link" href={e.gw.console_url} target="_blank" rel="noopener noreferrer" aria-label="Open this log entry in Cloud Logging (new tab)">
+              Open in Cloud Logging ↗
+            </a>
+          ) : null
+        )}
       </div>
     </div>
   );
@@ -191,13 +208,13 @@ function useStickyBottom(dep: unknown) {
   return ref;
 }
 
-function LogList({ log, big }: { log: LogEntry[]; big?: boolean }) {
+function LogList({ log, big, onOpenLog }: { log: LogEntry[]; big?: boolean; onOpenLog?: (g: NonNullable<LogEntry["gw"]>) => void }) {
   const ref = useStickyBottom(log);
   return (
     <div className={`log ${big ? "log-big" : ""}`} ref={ref} aria-live={big ? "off" : "polite"} tabIndex={big ? 0 : undefined} aria-label={big ? "Activity log" : undefined}>
       {log.length === 0 && <div className="muted log-empty">Run a test to see the agent's calls stream in here.</div>}
       {log.map((e) => (
-        <LogLine key={e.id} e={e} />
+        <LogLine key={e.id} e={e} onOpenLog={onOpenLog} />
       ))}
     </div>
   );
@@ -208,6 +225,7 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
   const theme = d.theme;
   const scrollRef = useRef<HTMLDivElement>(null);
   const [logExpanded, setLogExpanded] = useState(false);
+  const [gwOpen, setGwOpen] = useState(false);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
   }, [sc?.id]);
@@ -218,7 +236,9 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
   const isDemo = d.mode === "demo";
   const ge = d.geDemo;
   const geUrl = d.config?.gemini_enterprise?.app_url || "";
-  const hasIngressTests = sc.flow === "ingress" || sc.tests.some((t) => !!t.caller);
+  const isIngress = sc.flow === "ingress" || sc.tests.some((t) => t.probes.some((p) => p.edge.startsWith("ingress:")));
+  // Ingress (CLIENT_TO_AGENT) only screens content with Model Armor: nudge the presenter to turn it on.
+  const maOff = !!d.state && !d.state.model_armor.enabled;
   // Recording always runs against Live GCP (backend: Live only, admin only). Hidden in GE Demo.
   const showRecord = !ge && !isDemo && d.canAdmin && !!d.config?.live_available;
   return (
@@ -269,6 +289,23 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
           ))}
         </section>
 
+        {isIngress && maOff && (
+          <section className="card ma-callout" role="note">
+            <ShieldIcon size={18} />
+            <div>
+              <div>Turn on Model Armor (top right) to screen prompts at the ingress gateway.</div>
+              <button
+                className="btn btn-sm ma-callout-btn"
+                disabled={!d.canAdmin}
+                title={d.canAdmin ? "Enable Model Armor on the gateways (all themes)" : "Read-only viewer"}
+                onClick={() => d.setModelArmor(true)}
+              >
+                Turn on Model Armor
+              </button>
+            </div>
+          </section>
+        )}
+
         <section className={`card ${ge ? "tests-ge" : ""}`}>
           <div className="card-head">
             <h3>Tests</h3>
@@ -292,7 +329,7 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
               <CopyIcon size={14} />
               <div>
                 <b>GE Demo:</b> clicking a test copies its prompt. Paste it into Gemini Enterprise and send it there. Policy toggles still apply here; use <i>Show what happened</i> to light up the connections that prompt uses.
-                {hasIngressTests && <div className="ge-hint-ingress">Ingress tests: Gemini Enterprise calls the agent through its own path, so the allowed/denied caller shown here doesn't apply to it.</div>}
+                {isIngress && <div className="ge-hint-ingress">Ingress tests: Gemini Enterprise calls the agent through its own path, so it may not pass through the ingress gateway shown here.</div>}
                 {!geUrl && <div className="ge-hint-ingress">No Gemini Enterprise app URL is configured (gemini_enterprise.app_url).</div>}
               </div>
             </div>
@@ -316,7 +353,6 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
                       <span className="test-label">
                         {t.label}
                         {t.malicious && <span className="tag tag-orange">malicious</span>}
-                        {t.caller && <span className={`tag ${t.caller === "allowed" ? "tag-green" : "tag-red"}`}>{t.caller} caller</span>}
                       </span>
                       <span className="test-prompt">“{t.prompt}”</span>
                     </span>
@@ -360,6 +396,9 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
         <div className="card-head">
           <h3>Activity</h3>
           <div className="log-tools" role="toolbar" aria-label="Activity actions">
+            <button className="mini-btn" onClick={() => setGwOpen(true)} aria-label="Open the gateway logs from Cloud Logging" title="Agent Gateway decisions from Cloud Logging">
+              <LogIcon size={13} /> Gateway logs
+            </button>
             <button className="mini-btn" onClick={() => setLogExpanded(true)} aria-label="Expand the activity log" title="Expand">
               <ExpandIcon size={13} /> Expand
             </button>
@@ -369,7 +408,7 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
             </button>
           </div>
         </div>
-        <LogList log={d.log} />
+        <LogList log={d.log} onOpenLog={d.openLog} />
       </section>
       {logExpanded && (
         <GlassModal
@@ -385,9 +424,10 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
           actions={<CopyButton ariaLabel="Copy the activity log as plain text" getText={() => logToText(d.log)} />}
           onClose={() => setLogExpanded(false)}
         >
-          <LogList log={d.log} big />
+          <LogList log={d.log} big onOpenLog={d.openLog} />
         </GlassModal>
       )}
+      {gwOpen && <GatewayLogsSheet d={d} api={api} onClose={() => setGwOpen(false)} />}
     </aside>
   );
 }

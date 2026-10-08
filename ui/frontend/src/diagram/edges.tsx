@@ -1,7 +1,7 @@
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, getSmoothStepPath, type EdgeProps } from "@xyflow/react";
 import { memo } from "react";
 import type { DEdge } from "./build";
-import { ClockIcon, CloseIcon, ShieldIcon } from "../components/Icons";
+import { ClockIcon, CloseIcon, LogIcon, ShieldIcon } from "../components/Icons";
 
 export const STATE_LABEL: Record<string, string> = {
   direct: "Direct (no gateway)",
@@ -69,6 +69,20 @@ function StateEdgeImpl({ id, sourceX, sourceY, targetX, targetY, sourcePosition,
         <EdgeLabelRenderer>
           <div className="edge-badge-wrap nodrag nopan" style={{ transform: `translate(-50%, -50%) translate(${bx}px, ${by}px)` }} title={title}>
             {badge}
+            {data?.log && (
+              <button
+                type="button"
+                className={`edge-log-badge elb-${state}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  data.log?.open();
+                }}
+                aria-label={`Open the gateway log entry: ${data.log.summary}`}
+                title={`Gateway log: ${data.log.summary}`}
+              >
+                <LogIcon size={11} />
+              </button>
+            )}
           </div>
         </EdgeLabelRenderer>
       )}

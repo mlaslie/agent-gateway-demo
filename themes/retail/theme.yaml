@@ -35,7 +35,7 @@ policies:
     params: {path: egress}
     explain: Binds the Agent Runtime engine to the egress gateway. Unregistered or unauthorized destinations get 403.
   - id: gw-ingress
-    text: "All calls to Store Ops Agent must come in through Agent Gateway (default: deny everyone)."
+    text: "All calls to Store Ops Agent come in through Agent Gateway, which screens them with Model Armor when it is on."
     type: gateway_attach
     params: {path: ingress}
     explain: Binds the Agent Runtime engine to the ingress gateway. Callers without an explicit grant get 403.
@@ -67,9 +67,3 @@ policies:
     text: "Store Ops Agent can use the whole Orders MCP server, including refunds."
     type: mcp_server_allow
     params: {target: orders-mcp}
-  - id: ingress-allowed-caller
-    text: "Only the store-managers principal can call Store Ops Agent."
-    type: ingress_allow
-    params: {caller: allowed}
-    enforced: false
-    note: "Not enforced by GCP yet: the ingress gateway doesn't check caller identity (docs/ISSUES.md #1)."

@@ -24,7 +24,7 @@ A presenter runbook for the `helpdesk` theme. The full version takes **10–15 m
 IAM and gateway changes take about 1–7 minutes to take effect, so stage the "after" state of the middle scenarios now. Then the Live calls during the demo show real results instead of `pending`.
 - [ ] Set **Mode** to **Live with fallback**.
 - [ ] Apply `gw-egress`, `allow-kb`, `tickets-readonly` (leave `allow-hr`, `tickets-all` and `allow-directory` off).
-- [ ] Apply `gw-ingress` and `ingress-allowed-caller`.
+- [ ] Apply `gw-ingress` (the ingress gateway for scenario 5).
 - [ ] Leave the **Model Armor** checkbox **off** (also a gateway change, so either pre-test it now and turn it off again, or rely on fallback for that one).
 - [ ] Wait until nothing shows *pending*, then click **Probe** once on the Model Armor tab to confirm green edges.
 
@@ -89,16 +89,18 @@ After the salary test:
 
 ## Scenario 5: Users → agent (about 2 min)
 
-**Click:** the *Users → agent* tab. `gw-ingress` and `ingress-allowed-caller` are on. Run **Call as allowed user**, then **Call as denied user**.
+**Click:** the *Users → agent* tab. `gw-ingress` is on, so the ingress gateway sits in front of the agent. Run **Normal request** ("What is the password policy?"). Then tick the **Model Armor** checkbox in the header and run **Prompt injection + PII** (a jailbreak attempt plus an SSN).
 
 **Say:**
-> "Same gateway product, other direction. The ingress gateway sits in front of the agent. The denied caller has `aiplatform.user`, so before the ingress gateway it could call the agent directly. Now the gateway decides who gets in, and only the allowed principal does."
+> "Same gateway product, other direction. Every call into the agent now passes through the ingress gateway, so it's governed. Who is allowed to call the agent at all is ordinary IAM on Agent Runtime. What the ingress gateway adds is content screening. With Model Armor on, this request tries a prompt injection and includes personal data, and the gateway rejects it with a 403 before it ever reaches the agent."
 
-**Audience sees:** `ingress:allowed` green with an answer; `ingress:denied` red (403).
+**Audience sees:** `ingress:user` green (governed) with an answer for the normal request; with Model Armor on, `ingress:user` turns orange with a shield (`blocked`), and the response is "Model Armor: Prompt violates content security configurations".
+
+**Recovery:** turning Model Armor on is a gateway change and can stay `pending` for about 4 minutes. Live with fallback replays the recording. If someone asks "can the gateway decide *who* calls the agent?": no, the ingress gateway enforces content (Model Armor) only; caller access is `roles/aiplatform.user` on Agent Runtime. The ingress gateway also doesn't write request logs.
 
 ## Scenario 6: Model Armor (about 2 min)
 
-**Click:** the *Model Armor* tab. Run **Normal request** (green). Tick the **Model Armor** checkbox in the header, then run **Prompt injection + PII**.
+**Click:** the *Model Armor* tab. Untick the **Model Armor** checkbox if it's still on from scenario 5, run **Normal request** (green), tick it again, then run **Prompt injection + PII**. (Or leave it on and say "same checkbox, now on the egress side".)
 
 **Say:**
 > "Policy says *who* can talk to *whom*. Model Armor looks at *what* is being said. With it on, the gateway screens traffic with a Model Armor template. This prompt tries a jailbreak and includes an SSN. It's blocked even on a path policy allows."
@@ -109,7 +111,7 @@ After the salary test:
 
 ## Wrap-up (about 1 min)
 
-> "To recap: one agent on Agent Runtime. Agent Gateway enforces egress and ingress, Agent Registry is the source of identities and endpoints, IAM is the policy language, per agent and per MCP tool, and Model Armor inspects content. None of the agents or MCP servers changed. Everything you saw is configuration."
+> "To recap: one agent on Agent Runtime. Agent Gateway governs egress and ingress, Agent Registry is the source of identities and endpoints, IAM is the egress policy language, per agent and per MCP tool, and Model Armor inspects content in both directions. None of the agents or MCP servers changed. Everything you saw is configuration."
 
 Optionally switch the **Theme** to *Retail Store Operations* to show it's a pluggable use case. Then click **Reset** after the session.
 
@@ -127,7 +129,7 @@ Pre-apply everything as in the checklist, and use **Live with fallback**.
 | 3:30 | Model Armor | Tick Model Armor, then Prompt injection + PII | "Content screening on allowed paths too." |
 | 4:30 | | Wrap-up line | "No agent code changed. It's all gateway, registry and IAM configuration." |
 
-Skip ingress, or mention it in one sentence: "The same gateway does ingress: who may call the agent."
+Skip ingress, or mention it in one sentence: "The same gateway does ingress too: every call into the agent is governed, and Model Armor screens it before it reaches the agent."
 
 ---
 
@@ -139,6 +141,16 @@ Use this when the audience knows Gemini Enterprise. It needs `./agdemo publish-g
 3. Run scenarios 1–4 and 6 as usual. Change policies in the demo UI, ask again in Gemini Enterprise, and the agent's answer changes from the real data to "blocked by policy". Click **Show what happened** to light up the diagram.
 4. Talk track: "Same agent, same Gemini Enterprise experience. The difference is the gateway policy, set centrally and enforced on every outbound call."
 5. Skip scenario 5 in Gemini Enterprise: it supports the egress gateway only.
+
+## Recording real answers for Demo / fallback mode
+
+Recordings replay only when the policies that matter for that test match. So record each test **in the state you'll present it in**: for step 1, Reset (and Verify) in Live, then click **● Record** on "Ask for a salary"; for step 3, apply the gateway + "allow KB" first, and so on. Model Armor only matters for the prompt-injection tests. Recordings are stored in the project's GCS staging bucket, so they survive UI restarts. Without a matching recording, Demo mode still shows sample answers from the theme files, labeled as simulated.
+
+## Showing the gateway's own logs
+
+Every egress decision the gateway makes is written to Cloud Logging (`networkservices.googleapis.com/gateway_requests`). After a test run, the UI picks up the matching entries (usually within a minute) and adds them to the activity log tagged **GATEWAY LOG**, for example *"DENIED by agdemo-egress-iap-policy · tools/call delete_ticket · 403"*, each with a link to that entry in Cloud Logging. Denied connections on the diagram get a log badge; click it to see the raw entry. **Gateway logs** in the Activity card opens a live feed of recent decisions, which also catches calls made from Gemini Enterprise in GE Demo mode.
+
+Talk track: "This isn't the UI's opinion: it's the gateway's own audit trail, with the exact MCP tool and the policy that denied it." The ingress gateway doesn't write request logs, so there's nothing to show for scenario 5. In Demo mode the entries are simulated and labeled as such.
 
 ## Resetting between runs
 
@@ -164,3 +176,4 @@ Use this when the audience knows Gemini Enterprise. It needs `./agdemo publish-g
 | Tickets MCP: `list_tickets`, `get_ticket` / `close_ticket`, `delete_ticket` | Inventory MCP: `list_stock`, `get_item` / `adjust_stock`, `delete_item` |
 | Directory MCP: `lookup_user` / `reset_password` | Orders MCP: `lookup_order` / `issue_refund` (`orders-lookup` allows only the lookup) |
 | Pre-apply: `allow-kb`, `tickets-readonly` | Pre-apply: `allow-merch`, `inventory-readonly`, `orders-lookup` |
+| Users → agent: `gw-ingress`; Normal request "What is the password policy?" / Prompt injection + PII (SSN) | Users → agent: `gw-ingress`; Normal request "What promotions are running this week?" / Prompt injection + PII (refund-everything injection plus a card number) |

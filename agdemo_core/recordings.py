@@ -19,6 +19,48 @@ from .themes import THEMES_DIR
 MAX_GAP_S = 1.5
 
 
+# --- optional GCS store: AGDEMO_RECORDINGS_URI=gs://bucket/prefix (Cloud Run: survives restarts/redeploys)
+def _gcs() -> tuple[str, str] | None:
+    uri = os.environ.get("AGDEMO_RECORDINGS_URI", "")
+    if not uri.startswith("gs://"):
+        return None
+    bucket, _, prefix = uri[5:].partition("/")
+    return bucket, prefix.strip("/")
+
+
+def _gcs_session():
+    import google.auth
+    from google.auth.transport.requests import AuthorizedSession
+
+    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/devstorage.read_write"])
+    return AuthorizedSession(creds)
+
+
+def _gcs_name(prefix: str, theme_id: str, test_id: str, sig: str) -> str:
+    return "/".join(x for x in (prefix, theme_id, test_id, f"{sig}.json") if x)
+
+
+def _gcs_load(theme_id: str, test_id: str, sig: str) -> dict[str, Any] | None:
+    from urllib.parse import quote
+    bucket, prefix = _gcs()  # type: ignore[misc]
+    name = quote(_gcs_name(prefix, theme_id, test_id, sig), safe="")
+    try:
+        r = _gcs_session().get(f"https://storage.googleapis.com/storage/v1/b/{bucket}/o/{name}?alt=media", timeout=10)
+        return r.json() if r.status_code == 200 else None
+    except Exception:  # noqa: BLE001 - a missing/unreadable recording just means "simulate"
+        return None
+
+
+def _gcs_save(theme_id: str, test_id: str, sig: str, rec: dict[str, Any]) -> str:
+    bucket, prefix = _gcs()  # type: ignore[misc]
+    name = _gcs_name(prefix, theme_id, test_id, sig)
+    r = _gcs_session().post(f"https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o",
+                            params={"uploadType": "media", "name": name}, data=json.dumps(rec, indent=2),
+                            headers={"Content-Type": "application/json"}, timeout=20)
+    r.raise_for_status()
+    return f"gs://{bucket}/{name}"
+
+
 def recordings_dir(theme_id: str, themes_dir: Path | None = None) -> Path:
     """themes/<id>/recordings, or $AGDEMO_RECORDINGS_DIR/<id> when set (e.g. a writable volume on Cloud Run)."""
     override = os.environ.get("AGDEMO_RECORDINGS_DIR")
@@ -32,6 +74,10 @@ def recording_path(theme_id: str, test_id: str, sig: str, themes_dir: Path | Non
 
 
 def load(theme_id: str, test_id: str, sig: str, themes_dir: Path | None = None) -> dict[str, Any] | None:
+    if _gcs() and themes_dir is None:
+        rec = _gcs_load(theme_id, test_id, sig)
+        if rec is not None and isinstance(rec.get("events"), list):
+            return rec
     candidates = [recording_path(theme_id, test_id, sig, themes_dir),
                   (themes_dir or THEMES_DIR) / theme_id / "recordings" / test_id / f"{sig}.json"]
     p = next((c for c in candidates if c.exists()), None)
@@ -45,11 +91,13 @@ def load(theme_id: str, test_id: str, sig: str, themes_dir: Path | None = None) 
 
 
 def save(theme_id: str, test_id: str, sig: str, events: list[dict[str, Any]],
-         themes_dir: Path | None = None) -> Path:
-    p = recording_path(theme_id, test_id, sig, themes_dir)
-    p.parent.mkdir(parents=True, exist_ok=True)
+         themes_dir: Path | None = None) -> Path | str:
     rec = {"theme": theme_id, "test": test_id, "signature": sig,
            "recorded_at": datetime.now(timezone.utc).isoformat(), "events": events}
+    if _gcs() and themes_dir is None:
+        return _gcs_save(theme_id, test_id, sig, rec)
+    p = recording_path(theme_id, test_id, sig, themes_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(rec, indent=2))
     tmp.replace(p)

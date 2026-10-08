@@ -11,10 +11,10 @@ The code derives every name from `config/demo.yaml` (`DemoConfig.name()` plus `a
                            │ mcpServers/… (tool spec)   endpoints/… (Google APIs)│
                            └───────────────▲──────────────────────────▲──────────┘
                                            │ discovers / allowlist     │ IAP IAM policy per entry
-caller ──streamQuery──▶ [agdemo-ingress]──▶ Agent Runtime engine ──▶ [agdemo-egress] ──▶ Cloud Run A2A / MCP
- (allowed / denied SA)   CLIENT_TO_AGENT     (AGENT_IDENTITY)         AGENT_TO_ANYWHERE      + Google APIs
-                         IAP REQUEST_AUTHZ                            IAP REQUEST_AUTHZ (roles/iap.egressor)
-                         MA CONTENT_AUTHZ*                            MA CONTENT_AUTHZ*      (* checkbox)
+user ───streamQuery──▶ [agdemo-ingress]──▶ Agent Runtime engine ──▶ [agdemo-egress] ──▶ Cloud Run A2A / MCP
+ (backend credentials)   CLIENT_TO_AGENT     (AGENT_IDENTITY)         AGENT_TO_ANYWHERE      + Google APIs
+                         MA CONTENT_AUTHZ*                            IAP REQUEST_AUTHZ (roles/iap.egressor)
+                         (no caller authz)                            MA CONTENT_AUTHZ*      (* checkbox)
 ```
 
 ## 1. Resources
@@ -23,13 +23,13 @@ caller ──streamQuery──▶ [agdemo-ingress]──▶ Agent Runtime engine
 |---|---|---|
 | Egress gateway | `agentGateways/agdemo-egress` (`AGENT_TO_ANYWHERE`, registry `//agentregistry.googleapis.com/projects/P/locations/R`) | bootstrap |
 | Ingress gateway | `agentGateways/agdemo-ingress` (`CLIENT_TO_AGENT`) | bootstrap |
-| IAP authz extensions | `authzExtensions/agdemo-egress-iap-authz`, `agdemo-ingress-iap-authz` (`service: iap.googleapis.com`, `iapPolicyVersion: V1`) | bootstrap |
-| IAP authz policies | `authzPolicies/agdemo-egress-iap-policy`, `agdemo-ingress-iap-policy` (`REQUEST_AUTHZ`, `CUSTOM`) | bootstrap |
+| IAP authz extension | `authzExtensions/agdemo-egress-iap-authz` (`service: iap.googleapis.com`, `iapPolicyVersion: V1`) | bootstrap (egress only) |
+| IAP authz policy | `authzPolicies/agdemo-egress-iap-policy` (`REQUEST_AUTHZ`, `CUSTOM`). The ingress gateway gets no IAP policy: it enforces Model Armor only (§10). Older versions also created `agdemo-ingress-iap-authz` / `-policy`; `teardown` removes them if present | bootstrap (egress only) |
 | Model Armor template | `templates/agdemo-shield` (PI + jailbreak, SDP basic) | bootstrap |
 | Model Armor authz extension | `authzExtensions/agdemo-ma-authz` (`service: modelarmor.R.rep.googleapis.com`) | bootstrap |
 | Model Armor authz policies | `authzPolicies/agdemo-{egress,ingress}-ma-policy` (`CONTENT_AUTHZ`) | **the UI checkbox only** |
 | Platform allowlist | 25 registry `services/agdemo-plat-*` (endpoints) + `roles/iap.egressor` for every Runtime agent in the project | bootstrap |
-| Service accounts | `agdemo-denied-caller`, `agdemo-allowed-caller`, `agdemo-ui`, `agdemo-targets` | bootstrap |
+| Service accounts | `agdemo-ui`, `agdemo-targets` | bootstrap |
 | Artifact Registry / staging | `R-docker.pkg.dev/P/agdemo`, `gs://P-agdemo-staging` | bootstrap |
 | Per theme | Cloud Run `agdemo-<theme>-<component>`, registry `services/agdemo-<theme>-<component>`, engine `agdemo-<theme>-orchestrator` | deploy-theme |
 
@@ -273,34 +273,29 @@ curl -X PATCH -H "Authorization: Bearer $(gcloud auth print-access-token)" -H 'C
 There is no separate gateway hostname. This is confirmed: with the ingress MA policy on, a prompt-injection `streamQuery` returned the
 403 in §6 before reaching the agent.
 
-`agdemo_core/gcp/ingress_client.invoke_via_ingress()` impersonates `agdemo-allowed-caller` or `agdemo-denied-caller`. Both have
-`roles/aiplatform.user`, so both get in while the gateway isn't attached. Impersonation needs
-`roles/iam.serviceAccountTokenCreator` on those SAs for the operator and for `agdemo-ui` (bootstrap grants both).
+**What the ingress gateway enforces:** in `CLIENT_TO_AGENT` mode Agent Gateway supports **Model Armor (`CONTENT_AUTHZ`)
+policy enforcement only**. With the ingress MA policy on, a prompt-injection / PII `streamQuery` is rejected before it
+reaches the agent with (verified):
 
-**Caller authorization: NOT enforced in this environment (open issue).**
-
-What the demo implements (`ingress_allow`): the ingress gateway has an IAP `REQUEST_AUTHZ` policy (fail-closed, ENFORCE).
-The allowed principals get `roles/iap.httpsResourceAccessor` in the IAP IAM policy of the orchestrator's
-**auto-registered Agent Registry entry**. The binding is accepted:
-
-```bash
-gcloud iap web add-iam-policy-binding --resource-type=agent-registry --agent=<orchestrator registry id> \
-  --region=R --member=serviceAccount:agdemo-allowed-caller@P.iam.gserviceaccount.com --role=roles/iap.httpsResourceAccessor
+```json
+{"error":{"code":403,"message":"Model Armor: Prompt violates content security configurations","status":"PERMISSION_DENIED"}}
 ```
 
-What was observed: with `clientToAgentConfig` attached, **both** callers got `200` for 22+ minutes, with `iapPolicyVersion` V1 and,
-as an experiment, V2. No IAP `AuthorizeUser` audit entry was ever written for an ingress caller. Egress checks are
-logged on every call, so IAP is never consulted on the Runtime ingress path. CONTENT_AUTHZ (Model Armor) **is** applied on
-that same path. Public docs don't describe how ingress callers are authorized for Agent Runtime. One public reference
-architecture (GCP-Architecture-Guides/Agent-Gateway-Foundation) says the ingress IAP extension "validates caller has
-roles/iap.egressor" but doesn't say on which resource.
+A benign request with the gateway attached goes through normally (governed). The ingress gateway writes **no request
+logs** to Cloud Logging; the gateway-log feature (§9 of CONTRACTS.md) covers egress only.
 
-Consequences for the demo:
-- Decision: the `ingress_allow` policy is marked `enforced: false` and shown as **Preview** in the UI. The simulator ignores it, so Demo and Live agree that both callers get through the ingress gateway (see ISSUES.md #1).
-- Fallbacks that would make "denied caller → 403" real, both needing a decision from the project owner:
-  1. An **IAM deny policy** on the project that denies `aiplatform.googleapis.com/reasoningEngines.{query,streamQuery}` to the denied-caller SA. This needs `roles/iam.denyAdmin`, which project Owner does **not** have (verified: `iam.googleapis.com/denypolicies.create denied`).
-  2. Make the demo callers' `roles/aiplatform.user` **conditional** (exclude governed engines by `resource.name`). Not attempted: changing caller IAM is outside what was approved for automation.
-- Things to retry: grant `roles/iap.egressor` instead of `httpsResourceAccessor`, or bind at registry level (`--resource-type=agent-registry` without `--agent`). Check the `AuthorizeUser` logs first. If IAP is never called, the role doesn't matter.
+**Caller identity is not enforced by the gateway.** Who may call the agent is decided by IAM on Agent Runtime
+(`roles/aiplatform.user`, i.e. `reasoningEngines.query/streamQuery`), with or without an ingress gateway. Verified
+history, kept brief: an IAP `REQUEST_AUTHZ` policy on the ingress gateway plus a `roles/iap.httpsResourceAccessor`
+grant on the orchestrator's auto-registered registry entry had no effect. An ungranted service account still got `200`
+for 22+ minutes (`iapPolicyVersion` V1 and V2), and no IAP `AuthorizeUser` audit entry was ever written for an ingress
+call, while CONTENT_AUTHZ was applied on the same path. This is by design for `CLIENT_TO_AGENT` (ISSUES.md #1).
+
+**How the demo calls ingress:** `agdemo_core/gcp/ingress_client.invoke_via_ingress(ctx, theme, message)` sends the
+`streamQuery` above with the **backend's own credentials**: the `agdemo-ui` service account on Cloud Run, or the
+operator's ADC when the UI runs locally. There is no impersonation and there are no demo caller service accounts.
+Scenario 5 has one `user` node and one edge, `ingress:user`. Simulation: no ingress gateway → `direct`; attached →
+`allowed` (governed); attached + Model Armor on + a `malicious` test → `blocked`. Never `denied`.
 
 ## 11. Verification log
 
@@ -313,7 +308,7 @@ Consequences for the demo:
 | egress attached + allow-kb + tickets-readonly | kb ok · hr 403 · get/list_ticket ok · close/delete 403 · directory 403 (after 1 transient TLS failure) |
 | Model Armor on, malicious probe | MCP get_ticket **403 blocked** (body above); A2A kb-agent **not blocked** |
 | ingress attached, MA on, malicious streamQuery | **403 Model Armor** (body above) |
-| ingress attached, benign streamQuery | both callers 200, **IAP not consulted** (see §10) |
+| ingress attached, benign streamQuery | 200 (governed); caller identity not checked by the gateway (see §10) |
 | egress detached (ingress kept), then ingress detached (`{}`) | each about 2.5 min; probes direct again immediately |
 | Model Armor off | CONTENT_AUTHZ policies deleted (224 s) |
 | `./agdemo reset helpdesk` | all policies removed; theme back to wide open |
@@ -322,24 +317,23 @@ Consequences for the demo:
 
 - Cloud Build runs from the repo root with `-f ui/Dockerfile` (the config is generated at `config/generated/ui-cloudbuild.yaml`). The image is pushed to `R-docker.pkg.dev/P/agdemo/ui:latest`.
 - `gcloud beta run deploy agdemo-ui --iap --no-allow-unauthenticated --service-account=agdemo-ui@…` sets `AGDEMO_CONFIG_YAML`, `AGDEMO_STATE_JSON` and `AGDEMO_RECORDINGS_DIR=/tmp/recordings` from `config/generated/ui.env.yaml`. Re-run `ui deploy --skip-build` after `deploy-theme`, so the UI picks up new state.
-- The IAP service agent `service-<NUM>@gcp-sa-iap.iam.gserviceaccount.com` gets `roles/run.invoker`. Each member of `ui.iap_access` and `ui.admin_access` gets `roles/iap.httpsResourceAccessor` (`gcloud beta iap web add-iam-policy-binding --resource-type=cloud-run --service=agdemo-ui`).
+- The IAP service agent `service-<NUM>@gcp-sa-iap.iam.gserviceaccount.com` gets `roles/run.invoker`. Each member of `ui.iap_access` and `ui.admin_access` gets `roles/iap.httpsResourceAccessor` (`gcloud beta iap web add-iam-policy-binding --resource-type=cloud-run --service=agdemo-ui`). Bootstrap also grants each `ui.admin_access` member `roles/aiplatform.user` on the project, so presenters can call the agent from Gemini Enterprise.
 
 Project roles for `agdemo-ui` (from bootstrap), and why each is needed:
 
 | Role | Needed for |
 |---|---|
-| `roles/aiplatform.user` | `reasoningEngines.get/update` (gateway PATCH), `query/streamQuery` (tests, probes) |
-| `roles/iap.admin` | get/set IAP IAM policy on registry entries (egress allows, ingress allow) |
+| `roles/aiplatform.user` | `reasoningEngines.get/update` (gateway PATCH), `query/streamQuery` (tests, probes, ingress calls) |
+| `roles/iap.admin` | get/set IAP IAM policy on registry entries (egress allows) |
 | `roles/agentregistry.viewer` | resolve registry entries |
 | `roles/networksecurity.editor` | create/delete the Model Armor CONTENT_AUTHZ policies |
 | `roles/networkservices.serviceExtensionsAdmin` | `authzExtensions.use` when attaching the MA extension |
 | `roles/networkservices.viewer` | read gateways |
 | `roles/modelarmor.viewer`, `roles/logging.viewer`, `roles/serviceusage.serviceUsageConsumer` | status / logs / quota |
-| `roles/iam.serviceAccountTokenCreator` **on** `agdemo-allowed-caller` and `agdemo-denied-caller` | ingress demo (impersonation) |
 
 ## 13. Notes for the other components
 
 - **Orchestrator classifier (runtimes):** egress deny = `403` with body `Egress request is not authorized.`. Egress Model Armor (MCP) = `403` with a JSON-RPC body whose text contains `agdemo-model-armor-block`. Ingress Model Armor = `403` with `"message": "Model Armor: Prompt violates content security configurations"`. `ssl/tls alert handshake failure` right after attach or registration is transient.
-- **Simulator (backend):** in Live mode, egress Model Armor does **not** block A2A edges, only MCP edges. `ingress:denied` isn't denied in Live (see §10).
+- **Simulator (backend):** in Live mode, egress Model Armor does **not** block A2A edges, only MCP edges. Ingress (`ingress:user`) is never `denied`: only `direct`, `allowed` or `blocked` (see §10).
 - **Cloud Run reserves paths ending in `z`**: `GET /healthz` on the deployed targets returns Google's 404 page. Use `/health` if you need it externally.
 - The A2A agent card (a2a 1.0, URL in `supportedInterfaces`) registers as `A2A_AGENT_CARD` and is governed correctly.

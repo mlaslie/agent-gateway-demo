@@ -1,8 +1,8 @@
 // Builds React Flow nodes + edges from the theme, the current scenario and the edge states.
 import type { Edge, Node } from "@xyflow/react";
-import type { EdgeState, EdgeStateName, Scenario, Theme, ThemeState } from "../api/types";
+import type { EdgeState, EdgeStateName, GatewayLogEntry, Scenario, Theme, ThemeState } from "../api/types";
 
-export type NodeKind = "caller" | "gateway" | "orchestrator" | "registry" | "a2a" | "mcp";
+export type NodeKind = "user" | "gateway" | "orchestrator" | "registry" | "a2a" | "mcp";
 
 export interface ToolRow {
   name: string;
@@ -21,7 +21,7 @@ export interface DiagramNodeData extends Record<string, unknown> {
   shield?: boolean;
   skills?: string[];
   tools?: ToolRow[];
-  state?: EdgeStateName; // for single-edge targets (A2A agents, callers)
+  state?: EdgeStateName; // for single-edge targets (A2A agents, the ingress user)
   inFlight?: boolean;
   direction?: "egress" | "ingress";
 }
@@ -35,12 +35,14 @@ export interface DiagramEdgeData extends Record<string, unknown> {
   expected?: EdgeStateName;
   replayed?: boolean;
   bus?: { x: number; y: number };
+  /** Denied/blocked edge with an Agent Gateway log entry: click opens it. */
+  log?: { summary: string; open: () => void };
 }
 
 export type DNode = Node<DiagramNodeData>;
 export type DEdge = Edge<DiagramEdgeData>;
 
-const W: Record<NodeKind, number> = { caller: 200, gateway: 220, orchestrator: 240, registry: 220, a2a: 270, mcp: 290 };
+const W: Record<NodeKind, number> = { user: 200, gateway: 220, orchestrator: 240, registry: 220, a2a: 270, mcp: 290 };
 
 export function nodeHeight(d: DiagramNodeData): number {
   switch (d.kind) {
@@ -57,11 +59,14 @@ export function nodeHeight(d: DiagramNodeData): number {
   }
 }
 
+/** The single ingress edge: user → (ingress gateway →) orchestrator. */
+export const INGRESS_EDGE = "ingress:user";
+
 export const EGRESS_DEFAULT = ["orchestrator", "egress_gateway", "registry"];
 
 export function visibleNodeIds(theme: Theme, sc: Scenario): string[] {
   if (sc.nodes.length) return sc.nodes;
-  if (sc.flow === "ingress") return ["caller:allowed", "caller:denied", "ingress_gateway", "orchestrator"];
+  if (sc.flow === "ingress") return ["user", "ingress_gateway", "orchestrator"];
   return [...EGRESS_DEFAULT, ...theme.components.map((c) => c.id)];
 }
 
@@ -75,9 +80,12 @@ interface BuildArgs {
   state: ThemeState | null;
   edgeStates: Record<string, EdgeState>;
   inFlight: Set<string>;
+  /** Newest gateway log entry per edge id (CONTRACTS §9). */
+  edgeLogs?: Record<string, GatewayLogEntry>;
+  onOpenLog?: (e: GatewayLogEntry) => void;
 }
 
-export function buildDiagram({ theme, scenario, state, edgeStates, inFlight }: BuildArgs): { nodes: DNode[]; edges: DEdge[] } {
+export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog }: BuildArgs): { nodes: DNode[]; edges: DEdge[] } {
   const vis = new Set(visibleNodeIds(theme, scenario));
   const egressAttached = !!state?.gateways.egress.attached;
   const ingressAttached = !!state?.gateways.ingress.attached;
@@ -85,7 +93,7 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight }: B
   const ingressPending = /pending/.test(state?.gateways.ingress.status ?? "");
   const ma = !!state?.model_armor.enabled;
   const comps = theme.components.filter((c) => vis.has(c.id));
-  const callers = (["user", "caller:allowed", "caller:denied"] as const).filter((c) => vis.has(c));
+  const hasUser = vis.has("user");
 
   const nodes: DNode[] = [];
   const edges: DEdge[] = [];
@@ -129,7 +137,7 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight }: B
   // ---------- columns ----------
   const GAP_X = 110;
   const cols: { key: string; w: number }[] = [];
-  if (callers.length) cols.push({ key: "callers", w: W.caller });
+  if (hasUser) cols.push({ key: "user", w: W.user });
   if (vis.has("ingress_gateway")) cols.push({ key: "ingress_gateway", w: W.gateway });
   if (vis.has("orchestrator")) cols.push({ key: "orchestrator", w: W.orchestrator });
   if (vis.has("egress_gateway")) cols.push({ key: "egress_gateway", w: W.gateway });
@@ -175,7 +183,8 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight }: B
     const egress = id === "egress_gateway";
     const chips: DiagramNodeData["chips"] = [];
     if (pending) chips.push({ text: attached ? "Attaching…" : "Detaching…", tone: "amber" });
-    else if (attached) chips.push({ text: "Default deny", tone: "red" });
+    // Egress denies by default (IAP egressor); ingress only screens content (Model Armor), no identity checks.
+    else if (attached) chips.push(egress ? { text: "Default deny", tone: "red" } : { text: "In the path", tone: "blue" });
     else chips.push({ text: "Not attached", tone: "neutral" });
     if (attached && ma) chips.push({ text: "Model Armor", tone: "orange" });
     const d: DiagramNodeData = {
@@ -197,22 +206,16 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight }: B
   if (vis.has("egress_gateway")) gw("egress_gateway", egressAttached, egressPending);
   if (vis.has("ingress_gateway")) gw("ingress_gateway", ingressAttached, ingressPending);
 
-  // ---------- callers ----------
-  if (callers.length) {
-    const ch = 76;
-    const gap = 60;
-    const total = callers.length * ch + (callers.length - 1) * gap;
-    callers.forEach((c, i) => {
-      const edgeId = c === "user" ? null : `ingress:${c.split(":")[1]}`;
-      const d: DiagramNodeData = {
-        kind: "caller",
-        label: c === "user" ? "Presenter" : c === "caller:allowed" ? "Allowed caller" : "Denied caller",
-        sublabel: c === "user" ? "Human user" : c === "caller:allowed" ? "authorized principal" : "demo SA · no access",
-        state: edgeId ? st(edgeId).state : undefined,
-        inFlight: edgeId ? inFlight.has(edgeId) : false,
-      };
-      nodes.push({ id: c, type: "caller", position: pos(c, colX.callers, centerY - total / 2 + i * (ch + gap)), data: d, draggable: false });
-    });
+  // ---------- user (single ingress caller) ----------
+  if (hasUser) {
+    const d: DiagramNodeData = {
+      kind: "user",
+      label: "User",
+      sublabel: "Presenter / client app",
+      state: st(INGRESS_EDGE).state,
+      inFlight: inFlight.has(INGRESS_EDGE),
+    };
+    nodes.push({ id: "user", type: "user", position: pos("user", colX.user, centerY - nodeHeight(d) / 2), data: d, draggable: false });
   }
 
   // ---------- registry ----------
@@ -241,6 +244,9 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight }: B
   const egressEdgeIds: string[] = [];
   const mkEdge = (edgeId: string, source: string, sourceHandle: string | undefined, target: string, targetHandle: string | undefined): DEdge => {
     const s = st(edgeId);
+    // A fully denied MCP server is logged at the session handshake (component-level entry), not per tool.
+    const le = edgeLogs?.[edgeId] ?? (edgeId.includes(":") ? edgeLogs?.[edgeId.split(":")[0]] : undefined);
+    const logged = (s.state === "denied" || s.state === "blocked") && le && le.decision !== "allowed" && onOpenLog ? le : undefined;
     return {
       id: `e:${edgeId}`,
       source,
@@ -256,6 +262,7 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight }: B
         inFlight: inFlight.has(edgeId),
         expected: s.state === "pending" ? expected(edgeId) : undefined,
         replayed: s.source === "replayed",
+        log: logged ? { summary: logged.summary, open: () => onOpenLog!(logged) } : undefined,
       },
     };
   };
@@ -281,29 +288,12 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight }: B
       });
   }
 
-  // ---------- ingress call edges ----------
+  // ---------- ingress call edge ----------
+  // CLIENT_TO_AGENT only screens content (Model Armor); it does not check caller identity.
   const throughIngress = vis.has("ingress_gateway") && (ingressAttached || ingressPending);
-  if (vis.has("orchestrator")) {
-    const ingIds: string[] = [];
-    for (const c of callers) {
-      if (c === "user") {
-        edges.push({
-          id: "e:user",
-          source: "user",
-          sourceHandle: "out",
-          target: throughIngress ? "ingress_gateway" : "orchestrator",
-          targetHandle: "in",
-          type: "state",
-          data: { state: "neutral" },
-        });
-        continue;
-      }
-      const eid = `ingress:${c.split(":")[1]}`;
-      ingIds.push(eid);
-      edges.push(throughIngress ? mkEdge(eid, c, "out", "ingress_gateway", "in") : mkEdge(eid, c, "out", "orchestrator", "in"));
-    }
-    if (throughIngress && callers.length) {
-      const anyAllowed = ingIds.some((e) => st(e).state === "allowed");
+  if (vis.has("orchestrator") && hasUser) {
+    edges.push(throughIngress ? mkEdge(INGRESS_EDGE, "user", "out", "ingress_gateway", "in") : mkEdge(INGRESS_EDGE, "user", "out", "orchestrator", "in"));
+    if (throughIngress)
       edges.push({
         id: "seg:ingress-orch",
         source: "ingress_gateway",
@@ -312,9 +302,8 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight }: B
         targetHandle: "in",
         type: "state",
         zIndex: 1,
-        data: { state: anyAllowed ? "allowed" : "neutral", inFlight: ingIds.some((e) => inFlight.has(e)) },
+        data: { state: st(INGRESS_EDGE).state === "allowed" ? "allowed" : "neutral", inFlight: inFlight.has(INGRESS_EDGE) },
       });
-    }
   }
 
   return { nodes, edges };

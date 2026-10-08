@@ -1,5 +1,5 @@
 // HTTP client for the FastAPI backend (CONTRACTS §7).
-import type { AppConfig, Mode, PolicyStatus, ProbeResult, RecordResult, SseEvent, ThemeResponse, ThemeState, VerifyResult } from "./types";
+import type { AppConfig, GatewayLogsQuery, GatewayLogsResponse, Mode, PolicyStatus, ProbeResult, RecordResult, SseEvent, ThemeResponse, ThemeState, VerifyResult, SyncResult } from "./types";
 
 export interface Api {
   getConfig(): Promise<AppConfig>;
@@ -18,7 +18,10 @@ export interface Api {
   record(id: string, testId: string, body: { use_llm: boolean; scenario_id?: string }): Promise<RecordResult>;
   reset(id: string, mode: Mode): Promise<unknown>;
   verify(id: string, mode: Mode): Promise<VerifyResult>;
+  sync(id: string, mode: Mode): Promise<SyncResult>;
   explain(id: string, pid: string): Promise<{ lines: string[] }>;
+  /** CONTRACTS §9: Agent Gateway request log entries for the theme, newest first. */
+  gatewayLogs(id: string, mode: Mode, q?: GatewayLogsQuery): Promise<GatewayLogsResponse>;
   readonly isMock: boolean;
 }
 
@@ -91,8 +94,16 @@ export const httpApi: Api = {
   probe: (id, mode) => req("POST", `/api/themes/${enc(id)}/probe`, { mode }),
   reset: (id, mode) => req("POST", `/api/themes/${enc(id)}/reset`, { mode }),
   verify: (id, mode) => req("POST", `/api/themes/${enc(id)}/verify`, { mode }),
+  sync: (id, mode) => req("POST", `/api/themes/${enc(id)}/sync`, { mode }),
   record: (id, testId, body) => req("POST", `/api/themes/${enc(id)}/tests/${enc(testId)}/record`, body),
   explain: (id, pid) => req("GET", `/api/themes/${enc(id)}/policies/${enc(pid)}/explain`),
+  gatewayLogs: (id, mode, q = {}) => {
+    const qs = new URLSearchParams({ mode });
+    if (q.since) qs.set("since", q.since);
+    if (q.denied_only !== undefined) qs.set("denied_only", String(q.denied_only));
+    if (q.limit !== undefined) qs.set("limit", String(q.limit));
+    return req("GET", `/api/themes/${enc(id)}/gateway-logs?${qs}`);
+  },
   async runTest(id, testId, body, onEvent, signal) {
     const r = await fetch(`/api/themes/${enc(id)}/tests/${enc(testId)}/run`, {
       method: "POST",

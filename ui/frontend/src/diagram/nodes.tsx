@@ -21,8 +21,8 @@ function Chips({ chips }: { chips?: DNode["data"]["chips"] }) {
   );
 }
 
-const CallerNode = memo(({ data }: NodeProps<DNode>) => (
-  <div className={`node node-caller ${data.state ? `ring-${data.state}` : ""} ${data.inFlight ? "in-flight" : ""}`}>
+const UserNode = memo(({ data }: NodeProps<DNode>) => (
+  <div className={`node node-user ${data.state ? `ring-${data.state}` : ""} ${data.inFlight ? "in-flight" : ""}`}>
     <div className="node-head">
       <span className="node-icon icon-person">
         <PersonIcon size={20} />
@@ -154,7 +154,7 @@ const McpNode = memo(({ data }: NodeProps<DNode>) => (
 ));
 
 export const nodeTypes = {
-  caller: CallerNode,
+  user: UserNode,
   gateway: GatewayNode,
   orchestrator: OrchestratorNode,
   registry: RegistryNode,

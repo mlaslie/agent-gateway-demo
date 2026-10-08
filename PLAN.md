@@ -34,10 +34,7 @@ model_armor:
 ui:
   deploy: cloud_run                 # cloud_run | local
   iap_access: ["group:demo-viewers@example.com"]   # who can open the UI
-  admin_access: ["user:presenter@example.com"]     # who can toggle Live policies
-ingress_demo:
-  allowed_principal: "user:presenter@example.com"
-  denied_principal: auto            # auto = a demo SA created with no access
+  admin_access: ["user:presenter@example.com"]     # who can toggle Live policies (bootstrap grants them roles/aiplatform.user)
 themes:
   enabled: [helpdesk, retail]
   default: helpdesk
@@ -72,7 +69,7 @@ themes/
 
 - **Generic runtimes:** one ADK A2A agent image and one MCP server image, both configured from the theme files. A new theme deploys new Cloud Run services from the same images with different config.
 - **Generic Agent Runtime agent:** one orchestrator package, with its instructions and registry discovery filter set per theme.
-- **Typed policies:** each policy in a scenario file names a policy type (`gateway_attach`, `a2a_allow`, `mcp_tool_allow`, `mcp_server_allow`, `ingress_allow`, `model_armor`). Each type has one apply/remove/status handler in the backend that turns it into the real GCP calls. A new kind of policy is the only thing that needs new code: one handler plus a diagram rendering rule.
+- **Typed policies:** each policy in a scenario file names a policy type (`gateway_attach`, `a2a_allow`, `mcp_tool_allow`, `mcp_server_allow`, `model_armor`). Each type has one apply/remove/status handler in the backend that turns it into the real GCP calls. A new kind of policy is the only thing that needs new code: one handler plus a diagram rendering rule.
 - **Resource naming:** every resource is named `<resource_prefix>-<theme>-<component>` (e.g. `agdemo-helpdesk-tickets-mcp`). Themes can be deployed side by side, and `./agdemo deploy-theme <t>` / `teardown <t>` work on one theme at a time.
 - **Shared across themes:** the gateways are shared, because the region allows only one egress and one ingress gateway per project. The UI's Reset and the policy handlers only touch resources belonging to the selected theme.
 
@@ -100,7 +97,7 @@ Demo mode needs no GCP access, so it works offline and for themes that haven't b
 1. **Gateway attached = default deny** — PATCH `agentGatewayConfig` (egress). Only platform endpoints (model, logging, trace, sessions) allowlisted. Every agent and MCP edge goes red (403).
 2. **Agent A → Gateway → A2A on Cloud Run** — "Helpdesk agent can talk to KB agent over A2A, but not HR-records agent." (`roles/iap.egressor` on C's registry endpoint only)
 3. **Agent A → Gateway → MCP** — "Helpdesk agent can only use the tickets MCP server's read-only tools." (Conditional egressor binding on the MCP tool; fallback: split read/write into separate registry endpoints.)
-4. **User → Ingress gateway → Agent A** — "Only members of helpdesk-users can call the helpdesk agent." Demo with an allowed and a denied caller.
+4. **User → Ingress gateway → Agent A** — "Every call into the helpdesk agent goes through the gateway, and Model Armor screens it." One user: a normal request is allowed (governed); with Model Armor on, a prompt injection / PII request is blocked with a 403 before it reaches the agent. The ingress gateway (`CLIENT_TO_AGENT`) enforces Model Armor only, not caller identity; who may call is IAM on Agent Runtime (`roles/aiplatform.user`).
 5. **Model Armor checkbox (all scenarios)** — Turns a Model Armor authz extension on the gateways on or off. Prompt-injection and PII prompts get blocked, shown as a shield on the gateway node.
 
 ## Web UI

@@ -49,8 +49,7 @@ Edit `config/demo.yaml`. At minimum, set:
 | `environment.project_id` | Your project |
 | `environment.region` | A supported region (see prerequisites) |
 | `environment.resource_prefix` | A short unique prefix (lowercase, 10 characters or fewer), so several copies can share a project |
-| `ui.iap_access` / `ui.admin_access` | Who can view the UI / who can change Live policy |
-| `ingress_demo.allowed_principal` | Usually the presenter's account |
+| `ui.iap_access` / `ui.admin_access` | Who can view the UI / who can change Live policy (bootstrap also grants `ui.admin_access` members `roles/aiplatform.user`, see §7) |
 
 Optional: `gateway_project_id` (egress gateway in another project), `gateways.create: false` (reuse existing gateways), `themes.enabled` / `themes.default`, `default_mode`, `models.default`, `model_armor.filters`, `cloud_run.public_targets` (whether the mock Cloud Run targets allow unauthenticated invocation; enforcement happens at the gateway either way).
 
@@ -107,6 +106,8 @@ The presenter checklist and talk track are in `docs/DEMO_SCRIPT.md`.
 
 ## 7. Optional: Gemini Enterprise (GE Demo mode)
 
+> Agents are **not** added to Gemini Enterprise automatically, and ticking **GE Demo** doesn't register them. Run `./agdemo publish-ge <theme>` once per theme. The agents appear in the app as **"Helpdesk Agent (Agent Gateway demo)"** and **"Store Ops Agent (Agent Gateway demo)"** (your own themes: "&lt;orchestrator display name&gt; (Agent Gateway demo)").
+
 GE Demo mode shows the agent-to-anywhere policies from the Gemini Enterprise UI: you chat with the theme's agent in Gemini Enterprise, while this UI shows and changes the policies.
 
 1. In `config/demo.yaml`, set `gemini_enterprise.app_id` (the engine id of an existing Gemini Enterprise app), `location` (`global`, `us` or `eu`) and `app_url` (the app's web URL, linked from the UI).
@@ -117,11 +118,11 @@ GE Demo mode shows the agent-to-anywhere policies from the Gemini Enterprise UI:
 ```
 
 3. Run `./agdemo ui deploy` so the Cloud Run UI picks up the config.
-4. In the UI, tick **GE Demo**. Clicking a test now copies its prompt to the clipboard instead of running it. Paste the prompt into Gemini Enterprise and pick the agent "<Agent> (Agent Gateway demo)". **Show what happened** probes the connections so the diagram reflects the current policy.
+4. In the UI, tick **GE Demo**. Clicking a test now copies its prompt to the clipboard instead of running it. Paste the prompt into Gemini Enterprise and pick the agent ("Helpdesk Agent (Agent Gateway demo)" or "Store Ops Agent (Agent Gateway demo)"). **Show what happened** probes the connections so the diagram reflects the current policy.
 
 Notes:
-- Gemini Enterprise calls the agent with the signed-in user's credentials, so presenters need `roles/aiplatform.user` on the project (bootstrap grants it to `ingress_demo.allowed_principal`).
-- Gemini Enterprise supports the egress gateway only. Use GE Demo for the egress scenarios (1–4 and 6) and detach the ingress gateway first; whether Gemini Enterprise calls succeed with an ingress gateway attached hasn't been tested.
+- Gemini Enterprise calls the agent with the signed-in user's credentials, so presenters need `roles/aiplatform.user` on the project (bootstrap grants it to every `ui.admin_access` member).
+- Gemini Enterprise supports the egress gateway only. Use GE Demo for the egress scenarios (1–4 and 6) and detach the ingress gateway first (scenario 5, Model Armor on ingress, runs from the demo UI); whether Gemini Enterprise calls succeed with an ingress gateway attached hasn't been tested.
 
 ## 8. Adding themes and scenarios
 

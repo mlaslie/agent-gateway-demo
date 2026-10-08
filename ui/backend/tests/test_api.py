@@ -43,7 +43,7 @@ def test_config(client):
 def test_theme_graph(client):
     r = client.get("/api/themes/helpdesk").json()
     ids = {n["id"] for n in r["nodes"]}
-    assert {"user", "caller:allowed", "caller:denied", "ingress_gateway", "orchestrator",
+    assert {"user", "ingress_gateway", "orchestrator",
             "egress_gateway", "registry", "kb-agent", "tickets-mcp"} <= ids
     tickets = next(n for n in r["nodes"] if n["id"] == "tickets-mcp")
     assert {"name": "delete_ticket", "read_only": False} .items() <= next(
@@ -52,7 +52,8 @@ def test_theme_graph(client):
     assert kb["skills"][0]["id"] == "search_kb"
     edges = {e["id"]: e for e in r["edges"]}
     assert edges["tickets-mcp:get_ticket"]["tool"] == "get_ticket"
-    assert edges["ingress:denied"]["source"] == "caller:denied"
+    assert edges["ingress:user"]["source"] == "user"
+    assert not any(n["id"].startswith("caller:") for n in r["nodes"])
     assert r["theme"]["id"] == "helpdesk"
     assert client.get("/api/themes/nope").status_code == 404
 
@@ -110,10 +111,15 @@ def test_demo_run_uses_recording(client, tmp_path):
 
 def test_ingress_demo_run(client):
     client.post("/api/themes/helpdesk/policies/gw-ingress", json={"action": "apply", "mode": "demo"})
-    evs = sse_events(client.post("/api/themes/helpdesk/tests/denied-caller/run", json={"mode": "demo"}))
-    assert evs[-1]["edges"] == {"ingress:denied": evs[-1]["edges"]["ingress:denied"]}
-    # caller identity isn't enforced at the ingress gateway yet (docs/ISSUES.md #1)
-    assert evs[-1]["edges"]["ingress:denied"]["state"] == "allowed"
+    evs = sse_events(client.post("/api/themes/helpdesk/tests/normal/run",
+                                 json={"mode": "demo", "scenario_id": "ingress"}))
+    assert evs[-1]["edges"] == {"ingress:user": evs[-1]["edges"]["ingress:user"]}
+    assert evs[-1]["edges"]["ingress:user"]["state"] == "allowed"
+    client.post("/api/model-armor", json={"enabled": True, "mode": "demo"})
+    evs = sse_events(client.post("/api/themes/helpdesk/tests/injection/run",
+                                 json={"mode": "demo", "scenario_id": "ingress"}))
+    assert evs[-1]["edges"]["ingress:user"]["state"] == "blocked"
+    client.post("/api/model-armor", json={"enabled": False, "mode": "demo"})
 
 
 def test_fallback_when_live_unavailable(client):
@@ -254,7 +260,7 @@ def test_live_flow(client, live):
 
     # record saves a recording keyed by the live signature, demo replays it
     r = client.post("/api/themes/helpdesk/tests/ask-kb/record").json()
-    assert r["signature"] == "gw-egress+ma-off" and r["events"] >= 4
+    assert r["signature"] == "gw-egress+ma-any" and r["events"] >= 4
     assert client.get("/api/themes/helpdesk/policies/gw-egress/explain").json()["lines"][-1] == "gcloud fake gw-egress"
 
     # model armor live
@@ -336,3 +342,51 @@ def test_live_reset_detaches_gateways_in_one_call_and_skips_absent(live, client)
         assert calls == [["gw-egress", "gw-ingress"]]
     finally:
         mp.undo()
+
+
+def test_live_sync_clears_stuck_pending(live, client):
+    """A change GCP already shows as done (e.g. a stalled background thread) is cleared by sync."""
+    import agdemo_ui.main as m
+    from agdemo_ui.engine import Op
+    lt = m.engine.live.lt("helpdesk")
+    op = Op("apply"); op.running = True; op.started -= 2000            # stalled for > STALE_OP_SECONDS
+    lt.ops["allow-kb"] = op
+    live.applied.add("allow-kb")                                       # GCP has it
+    assert client.get("/api/themes/helpdesk/state?mode=live").json()["policies"]["allow-kb"]["status"] == "pending"
+    r = client.post("/api/themes/helpdesk/sync", json={"mode": "live"}).json()
+    kb = next(p for p in r["policies"] if p["id"] == "allow-kb")
+    assert kb["applied"] and kb["status"] == "applied"
+
+
+def test_model_armor_confirms_when_gcp_matches(live, client, monkeypatch):
+    import agdemo_ui.engine as eng
+    import agdemo_ui.main as m
+    monkeypatch.setattr(eng, "MA_SETTLE_S", 0.0)
+    client.post("/api/model-armor", json={"enabled": True, "mode": "live"})
+    import time as _t
+    for _ in range(50):
+        if not m.engine.live.ma_op.running:
+            break
+        _t.sleep(0.05)
+    m.engine.live.ma_cache = None
+    st = client.get("/api/themes/helpdesk/state?mode=live").json()["model_armor"]
+    assert st["enabled"] is True and st["status"] == "applied"          # no 10-minute pending tail
+    client.post("/api/model-armor", json={"enabled": False, "mode": "live"})
+
+
+def test_ingress_model_armor_block_on_egress_test_is_a_result(live, client, monkeypatch):
+    """Step 6 with the ingress gateway + Model Armor on: the agent call itself gets 403 Model Armor.
+    That's a governed outcome (blocked), not an infrastructure error, so it runs and records."""
+    from agdemo_core.runtime_client import RuntimeCallError, RuntimeClient
+
+    async def blocked(self, edges, malicious=False):
+        raise RuntimeCallError('Agent Runtime HTTP 403: {"error": {"code": 403, "message": '
+                               '"Model Armor: Prompt violates content security configurations"}}')
+    monkeypatch.setattr(RuntimeClient, "run_probes", blocked)
+    evs = sse_events(client.post("/api/themes/helpdesk/tests/injection/run",
+                                 json={"mode": "live", "scenario_id": "model-armor"}))
+    assert evs[-1]["type"] == "done"
+    assert all(s["state"] == "blocked" for s in evs[-1]["edges"].values()) and evs[-1]["edges"]
+    assert any(e["type"] == "message" and "ingress gateway" in e["text"] for e in evs)
+    r = client.post("/api/themes/helpdesk/tests/injection/record", json={"scenario_id": "model-armor"})
+    assert r.status_code == 200 and r.json()["events"] >= 4

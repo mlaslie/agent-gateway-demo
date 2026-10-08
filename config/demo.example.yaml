@@ -35,10 +35,6 @@ ui:
   iap_access: []                      # e.g. ["group:demo-viewers@example.com"] - who can open the UI
   admin_access: []                    # e.g. ["user:presenter@example.com"] - who can change Live policies
 
-ingress_demo:
-  allowed_principal: ""               # e.g. "user:presenter@example.com"
-  denied_principal: auto              # auto = create <prefix>-denied-caller SA with no access
-
 themes:
   enabled: [helpdesk, retail]
   default: helpdesk

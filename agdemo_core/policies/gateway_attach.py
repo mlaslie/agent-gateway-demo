@@ -73,7 +73,7 @@ class GatewayAttach:
             "# Remove: PATCH the same field without this direction (the other direction is re-sent unchanged).",
             "# The engine redeploys (minutes). Once attached, the gateway is default-deny: "
             + ("only registered destinations with roles/iap.egressor are reachable." if p == "egress"
-               else "only callers allowed by the ingress IAP policy reach query/streamQuery."),
+               else "query/streamQuery requests are screened by Model Armor when it is on."),
         ]
 
 

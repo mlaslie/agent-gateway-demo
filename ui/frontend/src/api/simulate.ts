@@ -7,7 +7,7 @@ export function edgeIds(theme: Theme): string[] {
     if (c.kind === "a2a_agent") out.push(c.id);
     else out.push(...(theme.mcp_servers[c.id]?.tools ?? []).map((t) => `${c.id}:${t.name}`));
   }
-  out.push("ingress:allowed", "ingress:denied");
+  out.push("ingress:user");
   return out;
 }
 
@@ -58,20 +58,11 @@ export function evaluate(
       }
     }
   }
-  for (const caller of ["allowed", "denied"] as const) {
-    const id = `ingress:${caller}`;
-    if (!ingress) {
-      out[id] = { state: "direct", governed: false, source, http_status: 200, detail: "No ingress gateway: caller has roles/aiplatform.user" };
-    } else {
-      // Caller policies only count when GCP enforces them (theme marks them enforced).
-      const callerAuth = theme.policies.some((p) => p.type === "ingress_allow" && p.enforced !== false);
-      const ok = !callerAuth || has("ingress_allow", (p) => p.caller === caller);
-      out[id] = ok
-        ? malicious
-          ? { state: "blocked", governed: true, source, http_status: 403, detail: "Blocked by Model Armor" }
-          : { state: "allowed", governed: true, source, http_status: 200, detail: "Allowed by ingress policy" }
-        : { state: "denied", governed: true, source, http_status: 403, detail: "403 from ingress gateway: caller not authorized" };
-    }
-  }
+  // Ingress (CLIENT_TO_AGENT) only enforces Model Armor: no caller identity checks, never "denied".
+  out["ingress:user"] = !ingress
+    ? { state: "direct", governed: false, source, http_status: 200, detail: "No ingress gateway: the request goes straight to Agent Runtime" }
+    : malicious
+      ? { state: "blocked", governed: true, source, http_status: 403, detail: "Model Armor on the ingress gateway blocked the prompt" }
+      : { state: "allowed", governed: true, source, http_status: 200, detail: "Through the ingress gateway (Model Armor " + (modelArmor ? "screened" : "off") + ")" };
   return out;
 }

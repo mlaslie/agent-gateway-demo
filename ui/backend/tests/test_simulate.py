@@ -30,7 +30,7 @@ def test_wide_open_is_direct(theme):
 
 def test_wide_open_ignores_allow_policies_and_model_armor(theme):
     mal = ScenarioTest(id="x", label="x", prompt="x", malicious=True)
-    r = simulate.evaluate(theme, {"allow-kb", "ingress-allowed-caller"}, True, mal)
+    r = simulate.evaluate(theme, {"allow-kb"}, True, mal)
     assert all(v["state"] == "direct" for v in r.values())
 
 
@@ -85,28 +85,17 @@ def test_model_armor_blocks_allowed_only_when_malicious(theme):
     assert r["tickets-mcp:delete_ticket"] == "denied"
 
 
-def test_ingress_preview_policy_is_ignored(theme):
-    """ingress-allowed-caller is enforced: false -> both callers pass through the gateway."""
-    for applied in ({"gw-ingress"}, {"gw-ingress", "ingress-allowed-caller"}):
-        r = states(simulate.evaluate(theme, applied, False))
-        assert r["ingress:allowed"] == "allowed" and r["ingress:denied"] == "allowed"
-    mal = ScenarioTest(id="m", label="m", prompt="p", malicious=True, caller="allowed")
-    assert states(simulate.evaluate(theme, {"gw-ingress"}, True, mal))["ingress:allowed"] == "blocked"
-
-
 def test_ingress_rules(theme):
-    theme = theme.model_copy(deep=True)
-    for p in theme.policies:
-        if p.type == "ingress_allow":
-            p.enforced = True
+    """Ingress gateways screen content only: direct without a gateway, allowed through it, blocked by
+    Model Armor for a malicious prompt, never denied."""
+    r = states(simulate.evaluate(theme, set(), False))
+    assert r["ingress:user"] == "direct"
     r = states(simulate.evaluate(theme, {"gw-ingress"}, False))
-    assert r["ingress:allowed"] == "denied" and r["ingress:denied"] == "denied"
-    assert r["kb-agent"] == "direct"
-    r = states(simulate.evaluate(theme, {"gw-ingress", "ingress-allowed-caller"}, False))
-    assert r["ingress:allowed"] == "allowed" and r["ingress:denied"] == "denied"
-    mal = ScenarioTest(id="m", label="m", prompt="p", malicious=True, caller="allowed")
-    r = states(simulate.evaluate(theme, {"gw-ingress", "ingress-allowed-caller"}, True, mal))
-    assert r["ingress:allowed"] == "blocked"
+    assert r["ingress:user"] == "allowed" and r["kb-agent"] == "direct"
+    mal = ScenarioTest(id="m", label="m", prompt="p", malicious=True)
+    assert states(simulate.evaluate(theme, {"gw-ingress"}, True, mal))["ingress:user"] == "blocked"
+    assert states(simulate.evaluate(theme, {"gw-ingress"}, False, mal))["ingress:user"] == "allowed"
+    assert states(simulate.evaluate(theme, set(), True, mal))["ingress:user"] == "direct"
 
 
 def test_signature():
@@ -127,9 +116,9 @@ def test_synth_events_shape(theme):
 
 
 def test_ingress_test_edges(theme):
-    scen, test = simulate.find_test(theme, "denied-caller")
-    assert simulate.test_is_ingress(scen, test)
-    assert simulate.test_edges(theme, scen, test) == ["ingress:denied"]
+    scen, test = simulate.find_test(theme, "injection", "ingress")
+    assert simulate.test_is_ingress(scen, test) and test.malicious
+    assert simulate.test_edges(theme, scen, test) == ["ingress:user"]
 
 
 def test_recordings_roundtrip(tmp_path):
@@ -207,3 +196,13 @@ def test_runtime_client_stream(monkeypatch):
     edge = next(e for e in evs if e["type"] == "edge")
     assert edge["state"]["state"] == "denied"
     assert evs[-1] == {"type": "message", "role": "agent", "text": "Access to KB Agent was blocked."}
+
+
+def test_recording_signature_uses_only_relevant_policies(theme):
+    scen, salary = simulate.find_test(theme, "salary", "wide-open")
+    everything = {p.id for p in theme.policies}
+    assert simulate.test_signature(theme, scen, salary, everything, True) == "allow-hr+gw-egress+ma-any"
+    assert simulate.test_signature(theme, scen, salary, set(), False) == "none+ma-any"
+    scen, inj = simulate.find_test(theme, "injection", "ingress")
+    assert simulate.test_signature(theme, scen, inj, everything, True) == "gw-ingress+ma-on"
+    assert simulate.test_signature(theme, scen, inj, {"gw-ingress"}, False) == "gw-ingress+ma-off"

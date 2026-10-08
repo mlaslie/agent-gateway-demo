@@ -1,7 +1,7 @@
 import { Background, BackgroundVariant, ReactFlow, ReactFlowProvider, useNodesInitialized, useReactFlow } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { EdgeState, Scenario, Theme, ThemeState } from "../api/types";
+import type { EdgeState, GatewayLogEntry, Scenario, Theme, ThemeState } from "../api/types";
 import { buildDiagram, type DNode } from "./build";
 import { edgeTypes } from "./edges";
 import { nodeTypes } from "./nodes";
@@ -15,6 +15,8 @@ interface Props {
   state: ThemeState | null;
   edgeStates: Record<string, EdgeState>;
   inFlight: Set<string>;
+  edgeLogs?: Record<string, GatewayLogEntry>;
+  onOpenLog?: (e: GatewayLogEntry) => void;
 }
 
 function Fitter({ fitKey, wrap }: { fitKey: string; wrap: React.RefObject<HTMLDivElement | null> }) {
@@ -85,10 +87,10 @@ function useAnimatedPositions(nodes: DNode[], resetKey: string, ms = 550): DNode
   return shown;
 }
 
-export function Diagram({ theme, scenario, state, edgeStates, inFlight }: Props) {
+export function Diagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog }: Props) {
   const { nodes: targetNodes, edges } = useMemo(
-    () => buildDiagram({ theme, scenario, state, edgeStates, inFlight }),
-    [theme, scenario, state, edgeStates, inFlight],
+    () => buildDiagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog }),
+    [theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog],
   );
   const nodes = useAnimatedPositions(targetNodes, `${theme.id}|${scenario.id}`);
   const wrap = useRef<HTMLDivElement>(null);

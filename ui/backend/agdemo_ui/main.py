@@ -11,6 +11,8 @@ import logging
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
+
+from .gateway_logs import SimLogBook
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -22,6 +24,7 @@ from . import settings
 from .engine import Engine, LiveUnavailable
 from .graph import build_graph
 
+sim_logs = SimLogBook()
 log = logging.getLogger("agdemo_ui")
 Mode = Literal["live", "demo", "live_with_fallback"]
 
@@ -200,6 +203,9 @@ async def run_test(theme_id: str, test_id: str, body: RunBody, request: Request)
     async def gen():
         try:
             async for e in _paced(engine.run_test(theme, scenario, test, body.mode, body.use_llm), pace):
+                st = e.get("state") if e.get("type") == "edge" else None
+                if st and st.get("source") != "live":       # no real gateway log for simulated/replayed calls
+                    sim_logs.add_edges(theme, {e["edge"]: st}, _prefix())
                 yield {"data": json.dumps(e)}
         except asyncio.CancelledError:
             raise
@@ -214,7 +220,9 @@ async def run_test(theme_id: str, test_id: str, body: RunBody, request: Request)
 async def probe(theme_id: str, body: ModeBody, request: Request) -> dict[str, Any]:
     theme = _theme(theme_id)
     if body.mode == "demo":
-        return {"edges": engine.demo.state(theme)["edges"]}
+        edges = engine.demo.state(theme)["edges"]
+        sim_logs.add_edges(theme, edges, _prefix())
+        return {"edges": edges}
     try:
         await asyncio.wait_for(engine.live.probe(theme), settings.live_timeout())
         st = await engine.live.state(theme)
@@ -227,7 +235,9 @@ async def probe(theme_id: str, body: ModeBody, request: Request) -> dict[str, An
                 applied, ma = await engine.live.signature_now(theme)
             except Exception:  # noqa: BLE001
                 applied, ma = set(), False
-            return {"edges": simulate.evaluate(theme, applied, ma), "fallback": reason}
+            edges = simulate.evaluate(theme, applied, ma)
+            sim_logs.add_edges(theme, edges, _prefix())
+            return {"edges": edges, "fallback": reason}
         if isinstance(e, LiveUnavailable):
             raise HTTPException(409, f"Live mode unavailable: {e}") from e
         raise HTTPException(502, f"probe failed: {reason}") from e
@@ -242,6 +252,55 @@ async def reset(theme_id: str, body: ModeBody, request: Request) -> dict[str, An
     _require_admin(request, body.mode)
     try:
         return await engine.live.reset(theme)
+    except LiveUnavailable as e:
+        raise HTTPException(409, f"Live mode unavailable: {e}") from e
+
+
+def _prefix() -> str:
+    cfg, _ = settings.get_config()
+    return cfg.prefix if cfg else "agdemo"
+
+
+@app.get("/api/themes/{theme_id}/gateway-logs")
+async def gateway_logs(theme_id: str, mode: Mode = "demo", since: str | None = None,
+                       denied_only: bool = False, limit: int = 50) -> dict[str, Any]:
+    """Agent Gateway request log entries for the theme (CONTRACTS §9)."""
+    theme = _theme(theme_id)
+    limit = max(1, min(limit, 500))
+    simulated = sim_logs.list(theme.id, since, denied_only, limit)
+    if mode == "demo":
+        return {"source": "simulated", "filter": "", "console_url": None, "entries": simulated}
+    cfg, err = settings.get_config()
+    if not cfg:
+        raise HTTPException(409, f"Live mode unavailable: {err}")
+    try:
+        from agdemo_core.gcp import gateway_logs as gl
+        from agdemo_core.gcp.rest import rest
+
+        out = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: gl.fetch(rest(cfg.project), cfg, settings.get_state(), theme, since, denied_only, limit))
+    except Exception as e:  # noqa: BLE001
+        if mode == "live_with_fallback":
+            return {"source": "simulated", "filter": "", "console_url": None, "entries": simulated,
+                    "error": f"{type(e).__name__}: {e}"}
+        raise HTTPException(502, f"Cloud Logging query failed: {type(e).__name__}: {e}") from e
+    if mode == "live_with_fallback" and simulated:      # entries from runs that fell back to replay
+        out["entries"] = sorted(out["entries"] + simulated, key=lambda x: x["timestamp"], reverse=True)[:limit]
+    return out
+
+
+@app.post("/api/themes/{theme_id}/sync")
+async def sync(theme_id: str, body: ModeBody) -> dict[str, Any]:
+    """Re-read policies and Model Armor from GCP, clear pending states GCP shows as done (CONTRACTS §7)."""
+    theme = _theme(theme_id)
+    if body.mode == "demo":
+        st = engine.demo.state(theme)
+        return {"policies": [{"id": p.id, "label": p.text, "applied": st["policies"][p.id]["applied"],
+                              "status": st["policies"][p.id]["status"], "detail": "simulated"} for p in theme.policies],
+                "model_armor": {"enabled": st["model_armor"]["enabled"], "status": st["model_armor"]["status"],
+                                "detail": "simulated"}}
+    try:
+        return await engine.live.sync(theme)
     except LiveUnavailable as e:
         raise HTTPException(409, f"Live mode unavailable: {e}") from e
 
@@ -278,7 +337,7 @@ async def record(theme_id: str, test_id: str, request: Request, body: RecordBody
     except HTTPException:
         raise
     applied, ma = await engine.live.signature_now(theme)
-    sig = simulate.signature(applied, ma)
+    sig = simulate.test_signature(theme, scenario, test, applied, ma)
     path = recordings.save(theme.id, test.id, sig, rec.events)
     return {"saved": str(path), "signature": sig, "events": len(rec.events)}
 
@@ -318,9 +377,6 @@ def _generic_explain(theme: Theme, policy) -> list[str]:
         what = "read-only tools" if p.get("read_only") else ", ".join(p.get("tools") or [])
         return [f"Conditional roles/iap.egressor on {p.get('target')}: only {what}",
                 "Write/destructive tools/call requests get 403 at the gateway."]
-    if t == "ingress_allow":
-        return [f"Allow the {p.get('caller')} caller to invoke {orch} through the ingress gateway "
-                "(IAP authz policy on the CLIENT_TO_AGENT gateway)"]
     return [policy.text]
 
 

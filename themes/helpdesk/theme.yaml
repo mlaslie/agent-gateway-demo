@@ -31,7 +31,7 @@ policies:
     params: {path: egress}
     explain: Binds the Agent Runtime engine to the egress gateway. Unregistered or unauthorized destinations get 403.
   - id: gw-ingress
-    text: "All calls to Helpdesk Agent must come in through Agent Gateway (default: deny everyone)."
+    text: "All calls to Helpdesk Agent come in through Agent Gateway, which screens them with Model Armor when it is on."
     type: gateway_attach
     params: {path: ingress}
   - id: allow-kb
@@ -54,9 +54,3 @@ policies:
     text: "Helpdesk Agent can use the Directory MCP server."
     type: mcp_server_allow
     params: {target: directory-mcp}
-  - id: ingress-allowed-caller
-    text: "Only the helpdesk-users principal can call Helpdesk Agent."
-    type: ingress_allow
-    params: {caller: allowed}
-    enforced: false
-    note: "Not enforced by GCP yet: the ingress gateway doesn't check caller identity (docs/ISSUES.md #1)."

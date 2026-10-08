@@ -1,18 +1,41 @@
 // Central app state: config, theme, polled state, optimistic policy toggles, SSE test runs, activity log.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Api } from "./api/client";
-import type { AppConfig, EdgeState, Mode, PolicyStatus, Scenario, SseEvent, Theme, ThemeState } from "./api/types";
+import type { AppConfig, EdgeState, GatewayLogEntry, Mode, PolicyStatus, Scenario, SseEvent, Theme, ThemeState } from "./api/types";
 import { copyText } from "./util";
 
 export interface LogEntry {
   id: number;
   ts: number;
-  kind: "status" | "agent" | "tool" | "user" | "edge" | "fallback" | "error" | "system" | "done" | "ge";
+  kind: "status" | "agent" | "tool" | "user" | "edge" | "fallback" | "error" | "system" | "done" | "ge" | "gwlog";
   text: string;
   edge?: string;
   edgeState?: EdgeState;
   replayed?: boolean;
   testLabel?: string;
+  /** kind "gwlog": the Agent Gateway request log entry (CONTRACTS §9). */
+  gw?: GatewayLogEntry;
+}
+
+/** A polling watch on the gateway-log endpoint started after a run / probe / GE prompt copy. */
+interface GwWatchSpec {
+  key: "run" | "ge";
+  sinceMs: number;
+  /** Only entries for these edges (null: every entry for the theme). */
+  edges: string[] | null;
+  /** Stop early once each of these edges has a matching entry (empty: run to the deadline). */
+  expect: string[];
+  durationMs: number;
+  startText: string;
+  emptyText: string;
+}
+
+const GW_POLL_MS = 5000;
+
+/** Does a log entry (edge id, or component id when the tool is unknown) belong to diagram edge `edge`? */
+export function logMatchesEdge(entryEdge: string | null | undefined, edge: string): boolean {
+  if (!entryEdge) return false;
+  return entryEdge === edge || edge.startsWith(`${entryEdge}:`);
 }
 
 const LS = {
@@ -70,6 +93,12 @@ export function useDemo(api: Api) {
   // until the server reports `changed_at`. A ref so the 5 s polling never resets it.
   const clickedAt = useRef<Map<string, number>>(new Map());
   const abortRef = useRef<AbortController | null>(null);
+  // Gateway logs: ids already shown (dedupe across the session), newest entry per edge (diagram badge),
+  // active watches, and the entry open in the glass viewer.
+  const seenGwIds = useRef<Set<string>>(new Set());
+  const gwWatches = useRef<Map<string, () => void>>(new Map());
+  const [edgeLogs, setEdgeLogs] = useState<Record<string, GatewayLogEntry>>({});
+  const [viewLog, setViewLog] = useState<GatewayLogEntry | null>(null);
   const reqSeq = useRef(0);
 
   const addLog = useCallback((e: Omit<LogEntry, "id" | "ts">) => {
@@ -188,6 +217,110 @@ export function useDemo(api: Api) {
 
   const edgeStates: Record<string, EdgeState> = useMemo(() => ({ ...(state?.edges ?? {}), ...testEdges }), [state, testEdges]);
 
+  // ---------- gateway logs (CONTRACTS §9) ----------
+  /** Remember the newest entry per edge (drives the "logged" badge on the diagram). */
+  const noteGatewayLogs = useCallback((entries: GatewayLogEntry[]) => {
+    if (!entries.length) return;
+    setEdgeLogs((cur) => {
+      let next: Record<string, GatewayLogEntry> | null = null;
+      for (const e of entries) {
+        if (!e.edge) continue;
+        const prev = (next ?? cur)[e.edge];
+        if (prev && (prev.id === e.id || prev.timestamp >= e.timestamp)) continue;
+        next = next ?? { ...cur };
+        next[e.edge] = e;
+      }
+      return next ?? cur;
+    });
+  }, []);
+
+  const stopGwWatches = useCallback(() => {
+    for (const cancel of gwWatches.current.values()) cancel();
+    gwWatches.current.clear();
+  }, []);
+
+  useEffect(() => {
+    stopGwWatches();
+    setEdgeLogs({});
+    setViewLog(null);
+  }, [themeId, mode, stopGwWatches]);
+  useEffect(() => stopGwWatches, [stopGwWatches]);
+
+  /** Poll the gateway-log endpoint every 5 s and add new entries to the activity log as "GATEWAY LOG". */
+  const watchGatewayLogs = useCallback(
+    (spec: GwWatchSpec) => {
+      if (!themeId) return;
+      gwWatches.current.get(spec.key)?.();
+      let cancelled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const cancel = () => {
+        cancelled = true;
+        clearTimeout(timer);
+        if (gwWatches.current.get(spec.key) === cancel) gwWatches.current.delete(spec.key);
+      };
+      gwWatches.current.set(spec.key, cancel);
+      const deadline = Date.now() + spec.durationMs;
+      const since = new Date(spec.sinceMs - 5000).toISOString();
+      const matched = new Set<string>();
+      let shown = 0;
+      const tid = themeId;
+      const m = mode;
+      addLog({ kind: "status", text: spec.startText });
+      // MCP session handshakes (initialize, tools/list, notifications/*) that were ALLOWED are noise in the
+      // activity log; a DENIED handshake is kept because that's how a fully denied MCP server shows up.
+      const handshake = (e: GatewayLogEntry) => !!e.mcp_method && e.mcp_method !== "tools/call";
+      const belongs = (e: GatewayLogEntry) =>
+        !(handshake(e) && e.decision === "allowed") && (!spec.edges || spec.edges.some((x) => logMatchesEdge(e.edge, x)));
+      const tick = async () => {
+        if (cancelled) return;
+        try {
+          const r = await api.gatewayLogs(tid, m, { since, denied_only: false, limit: 100 });
+          if (cancelled) return;
+          const mine = r.entries.filter(belongs);
+          noteGatewayLogs(mine);
+          for (const e of [...mine].reverse()) {
+            if (e.decision !== "allowed") for (const x of spec.expect) if (logMatchesEdge(e.edge, x)) matched.add(x);
+            if (seenGwIds.current.has(e.id)) continue;
+            seenGwIds.current.add(e.id);
+            shown++;
+            addLog({ kind: "gwlog", text: e.summary, edge: e.edge ?? undefined, gw: e });
+          }
+        } catch {
+          /* endpoint not available yet / transient: keep polling until the deadline */
+        }
+        if (cancelled) return;
+        const done = spec.expect.length > 0 && spec.expect.every((x) => matched.has(x));
+        if (done || Date.now() >= deadline) {
+          if (!shown && !done) addLog({ kind: "status", text: spec.emptyText });
+          cancel();
+          return;
+        }
+        timer = setTimeout(tick, GW_POLL_MS);
+      };
+      timer = setTimeout(tick, GW_POLL_MS);
+    },
+    [api, themeId, mode, addLog, noteGatewayLogs],
+  );
+
+  /** After a run / probe: watch for the gateway's log entries of the governed egress edges it touched. */
+  const watchAfterRun = useCallback(
+    (sinceMs: number, results: Record<string, EdgeState>, specific: boolean) => {
+      const governed = Object.entries(results).filter(([e, st]) => !e.startsWith("ingress:") && st?.governed && ["allowed", "denied", "blocked"].includes(st.state));
+      if (!governed.length) return; // nothing went through the egress gateway: nothing to log
+      const stopped = governed.filter(([, st]) => st.state === "denied" || st.state === "blocked").map(([e]) => e);
+      watchGatewayLogs({
+        key: "run",
+        sinceMs,
+        edges: specific ? governed.map(([e]) => e) : null,
+        expect: stopped.length ? stopped : governed.map(([e]) => e),
+        durationMs: 60_000,
+        startText: "Waiting for Cloud Logging…",
+        emptyText: "No gateway log entries yet (logs can take up to a minute)",
+      });
+    },
+    [watchGatewayLogs],
+  );
+
   // ---------- actions ----------
   const canAdmin = !!config?.can_admin;
 
@@ -272,6 +405,8 @@ export function useDemo(api: Api) {
     abortRef.current?.abort();
     setBusy("reset");
     setLog([]);
+    stopGwWatches();
+    setEdgeLogs({});
     setTestEdges({});
     const first = theme?.scenarios[0]?.id;
     if (first) {
@@ -303,7 +438,32 @@ export function useDemo(api: Api) {
     } finally {
       setBusy(null);
     }
-  }, [api, themeId, theme, serverState, mode, addLog, refresh, flash]);
+  }, [api, themeId, theme, serverState, mode, addLog, refresh, flash, stopGwWatches]);
+
+  // Re-read everything from GCP, clear pending states GCP shows as done, and log what's in place.
+  const sync = useCallback(async () => {
+    if (!themeId) return;
+    setBusy("sync");
+    addLog({ kind: "status", text: "Syncing with GCP: reading every policy and Model Armor…" });
+    try {
+      const r = await api.sync(themeId, mode);
+      const on = r.policies.filter((p) => p.applied && p.status === "applied");
+      const pend = r.policies.filter((p) => p.status === "pending" || p.status === "pending_removal");
+      const err = r.policies.filter((p) => p.status === "error");
+      addLog({ kind: "system", text: on.length ? `In place: ${on.map((p) => p.label).join(" · ")}` : "No policies in place (wide open)." });
+      if (pend.length) addLog({ kind: "status", text: `Still changing in GCP: ${pend.map((p) => p.label).join(" · ")}` });
+      for (const p of err) addLog({ kind: "error", text: `${p.label}: ${p.detail}` });
+      addLog({ kind: "system", text: `Model Armor: ${r.model_armor.enabled ? "on" : "off"}${r.model_armor.status === "pending" ? " (still changing)" : ""}` });
+      clickedAt.current.clear();
+      await refresh();
+      flash("Synced with GCP", "ok");
+    } catch (e) {
+      addLog({ kind: "error", text: `Sync failed: ${(e as Error).message}` });
+      flash(`Sync failed: ${(e as Error).message}`, "error");
+    } finally {
+      setBusy(null);
+    }
+  }, [api, themeId, mode, addLog, flash, refresh]);
 
   // Check, fresh from GCP, that the theme is back at step 1 and log a checklist.
   const verify = useCallback(async () => {
@@ -342,6 +502,7 @@ export function useDemo(api: Api) {
     if (!themeId) return;
     setBusy("probe");
     addLog({ kind: "status", text: "Probing every connection…" });
+    const startedAt = Date.now();
     try {
       const r = await api.probe(themeId, mode);
       setFallbackShown(!!r.fallback);
@@ -355,12 +516,13 @@ export function useDemo(api: Api) {
       }
       await refresh();
       addLog({ kind: "done", text: r.fallback ? "Probe finished (fallback)." : "Probe complete — diagram shows the observed state.", replayed: !!r.fallback });
+      watchAfterRun(startedAt, r.edges ?? {}, false);
     } catch (e) {
       addLog({ kind: "error", text: `Probe failed: ${(e as Error).message}` });
     } finally {
       setBusy(null);
     }
-  }, [api, themeId, mode, addLog, refresh]);
+  }, [api, themeId, mode, addLog, refresh, watchAfterRun]);
 
   const runTest = useCallback(
     async (testId: string) => {
@@ -379,17 +541,20 @@ export function useDemo(api: Api) {
         return n;
       });
       let replayed = false;
+      const startedAt = Date.now();
+      const results: Record<string, EdgeState> = {};
+      let finished = false;
       setFallbackShown(false);
       addLog({ kind: "system", text: `▶ ${test.label}`, testLabel: test.label });
-      if (!test.caller) addLog({ kind: "user", text: test.prompt });
+      addLog({ kind: "user", text: test.prompt });
       const onEvent = (ev: SseEvent) => {
         switch (ev.type) {
           case "status":
             addLog({ kind: "status", text: ev.text, replayed });
             break;
           case "message":
-            if (ev.role === "user" && !test.caller) break; // already logged
-            addLog({ kind: ev.role === "agent" ? "agent" : ev.role === "user" ? "user" : "tool", text: ev.text, replayed });
+            if (ev.role === "user") break; // already logged
+            addLog({ kind: ev.role === "agent" ? "agent" : "tool", text: ev.text, replayed });
             break;
           case "fallback":
             replayed = true;
@@ -397,6 +562,7 @@ export function useDemo(api: Api) {
             addLog({ kind: "fallback", text: ev.reason, replayed: true });
             break;
           case "edge":
+            results[ev.edge] = ev.state;
             setTestEdges((te) => ({ ...te, [ev.edge]: ev.state }));
             setInFlight((s) => {
               const n = new Set(s);
@@ -406,6 +572,8 @@ export function useDemo(api: Api) {
             addLog({ kind: "edge", text: ev.state.detail ?? "", edge: ev.edge, edgeState: ev.state, replayed: replayed || ev.state.source === "replayed" });
             break;
           case "done":
+            Object.assign(results, ev.edges);
+            finished = true;
             setTestEdges((te) => ({ ...te, ...ev.edges }));
             setInFlight(new Set());
             addLog({ kind: "done", text: "Test finished.", replayed });
@@ -417,6 +585,7 @@ export function useDemo(api: Api) {
       };
       try {
         await api.runTest(themeId, testId, { mode, use_llm: useLlm, scenario_id: scenario.id }, onEvent, ac.signal);
+        if (finished && !ac.signal.aborted) watchAfterRun(startedAt, results, true);
       } catch (e) {
         if ((e as Error).name !== "AbortError") {
           addLog({ kind: "error", text: `Test failed: ${(e as Error).message}` });
@@ -428,7 +597,7 @@ export function useDemo(api: Api) {
         }
       }
     },
-    [api, themeId, scenario, mode, useLlm, addLog],
+    [api, themeId, scenario, mode, useLlm, addLog, watchAfterRun],
   );
 
   const recordTest = useCallback(
@@ -473,8 +642,18 @@ export function useDemo(api: Api) {
       addLog({ kind: "ge", text: `${ok ? "Copied" : "Copy this"} prompt for “${test.label}”: ${test.prompt}`, testLabel: test.label });
       if (ok) flash("Prompt copied: paste it into Gemini Enterprise", "ok");
       else flash("Couldn't copy automatically. The prompt is in the Activity log; copy it from there.", "error");
+      // Calls made from Gemini Enterprise never pass through this UI: watch the gateway's logs for them.
+      watchGatewayLogs({
+        key: "ge",
+        sinceMs: Date.now(),
+        edges: null,
+        expect: [],
+        durationMs: 3 * 60_000,
+        startText: "Watching Cloud Logging for gateway decisions on calls from Gemini Enterprise (3 min)…",
+        emptyText: "No gateway log entries from Gemini Enterprise yet (logs can take up to a minute)",
+      });
     },
-    [scenario, addLog, flash],
+    [scenario, addLog, flash, watchGatewayLogs],
   );
 
   /** GE Demo: probe the connections a test would use so the diagram shows the current policy for them. */
@@ -487,6 +666,7 @@ export function useDemo(api: Api) {
       setBusy(`show:${testId}`);
       setInFlight(new Set(edges));
       addLog({ kind: "status", text: `Probing the connections “${test.label}” uses (${edges.join(", ")})…`, testLabel: test.label });
+      const startedAt = Date.now();
       try {
         const r = await api.probe(themeId, mode);
         const picked: Record<string, EdgeState> = {};
@@ -501,6 +681,7 @@ export function useDemo(api: Api) {
         for (const [e, st] of Object.entries(picked))
           addLog({ kind: "edge", text: st.detail ?? "", edge: e, edgeState: st, replayed: !!r.fallback || st.source === "replayed" });
         await refresh();
+        watchAfterRun(startedAt, picked, true);
       } catch (e) {
         addLog({ kind: "error", text: `Probe failed: ${(e as Error).message}` });
         flash(`Probe failed: ${(e as Error).message}`, "error");
@@ -509,7 +690,7 @@ export function useDemo(api: Api) {
         setBusy(null);
       }
     },
-    [api, themeId, scenario, mode, addLog, flash, refresh],
+    [api, themeId, scenario, mode, addLog, flash, refresh, watchAfterRun],
   );
 
   /** Start time (ms) of a pending change: server `changed_at`, else when the user clicked. */
@@ -596,6 +777,7 @@ export function useDemo(api: Api) {
     setModelArmor,
     reset,
     verify,
+    sync,
     probe,
     busy,
     canAdmin,
@@ -608,6 +790,11 @@ export function useDemo(api: Api) {
     showWhatHappened,
     pendingSince,
     refresh,
+    edgeLogs,
+    noteGatewayLogs,
+    viewLog,
+    openLog: setViewLog,
+    closeLog: () => setViewLog(null),
   };
 }
 

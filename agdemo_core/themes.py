@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, model_validator
 from .config import REPO_ROOT
 
 THEMES_DIR = REPO_ROOT / "themes"
+INGRESS_EDGE = "ingress:user"         # the one ingress connection: user -> ingress gateway -> orchestrator
 
 ComponentKind = Literal["a2a_agent", "mcp_server"]
 PolicyType = Literal[
@@ -26,8 +27,9 @@ PolicyType = Literal[
     "a2a_allow",          # params: {target: <a2a component id>}  egressor on that agent's registry entry
     "mcp_server_allow",   # params: {target: <mcp component id>}  egressor on the whole MCP server
     "mcp_tool_allow",     # params: {target: <mcp id>, read_only: true} or {target, tools: [names]}
-    "ingress_allow",      # params: {caller: allowed|denied}      caller may invoke the orchestrator via ingress gateway
 ]
+# Ingress (CLIENT_TO_AGENT) gateways enforce content screening with Model Armor, so
+# there is no ingress allow policy: the ingress scenario is gateway_attach{path: ingress} + Model Armor.
 
 
 # Measured (apply, remove) seconds per policy type; see docs/ARCHITECTURE.md §9 and docs/ISSUES.md.
@@ -37,7 +39,6 @@ TYPICAL_SECONDS: dict[tuple[str, str | None], tuple[int, int]] = {
     ("a2a_allow", None): (90, 90),              # IAP egressor binding propagation
     ("mcp_server_allow", None): (90, 90),
     ("mcp_tool_allow", None): (360, 120),       # conditional binding took ~6 min to confirm
-    ("ingress_allow", None): (90, 90),
 }
 MODEL_ARMOR_TYPICAL_SECONDS = 240               # authz extension + CONTENT_AUTHZ policy per gateway (~4 min)
 
@@ -108,10 +109,6 @@ class Policy(BaseModel):
     type: PolicyType
     params: dict[str, Any] = Field(default_factory=dict)
     explain: str = ""                           # optional "under the hood" summary
-    # false = GCP does not enforce this yet (docs/ISSUES.md). The UI shows a "Preview" badge and the
-    # simulator ignores the policy, so Demo mode matches what Live really does.
-    enforced: bool = True
-    note: str = ""                              # shown next to the Preview badge
     # Typical time for GCP to apply / remove this policy (seconds), shown next to the pending timer.
     # Defaults come from measurements in docs/ARCHITECTURE.md; override per policy if needed.
     typical_seconds: int | None = None
@@ -169,7 +166,10 @@ class ScenarioTest(BaseModel):
     prompt: str                                 # natural-language prompt sent to the orchestrator (or ingress call)
     probes: list[Probe] = Field(default_factory=list)   # deterministic edge checks run alongside / instead of the LLM
     malicious: bool = False                     # Model Armor should block this when enabled
-    caller: Literal["allowed", "denied"] | None = None  # ingress tests only
+    # Simulated runs (Demo mode, fallback replays) have no real model output. Optional canned answers per
+    # edge id shown when that call goes through, e.g. {hr-records-agent: "jdoe earns $182,000."};
+    # "ingress:user" is the orchestrator's answer on the ingress tab. MCP tools use their tools.yaml response.
+    sample_replies: dict[str, str] = Field(default_factory=dict)
 
 
 class Scenario(BaseModel):
@@ -224,5 +224,5 @@ def edge_ids(theme: Theme) -> list[str]:
             out.append(c.id)
         else:
             out += [f"{c.id}:{t.name}" for t in theme.mcp_servers[c.id].tools]
-    out += ["ingress:allowed", "ingress:denied"]
+    out.append(INGRESS_EDGE)
     return out

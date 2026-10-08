@@ -37,18 +37,13 @@ def step_apis(cfg: DemoConfig, r: Rest) -> None:
 
 def step_service_accounts(cfg: DemoConfig, r: Rest, me: str | None) -> dict[str, str]:
     sas = {
-        "denied_caller_sa": project.ensure_sa(r, cfg.project, c.denied_sa_id(cfg), "agdemo ingress denied caller"),
-        "allowed_caller_sa": project.ensure_sa(r, cfg.project, c.allowed_sa_id(cfg), "agdemo ingress allowed caller"),
         "ui_sa": project.ensure_sa(r, cfg.project, c.ui_sa_id(cfg), "agdemo demo UI backend"),
         "targets_sa": project.ensure_sa(r, cfg.project, c.run_sa_id(cfg), "agdemo Cloud Run demo targets"),
     }
     time.sleep(2)
-    # Both demo callers may call Agent Runtime when nothing governs ingress (scenario: direct).
-    pairs = [(f"serviceAccount:{sas['denied_caller_sa']}", "roles/aiplatform.user"),
-             (f"serviceAccount:{sas['allowed_caller_sa']}", "roles/aiplatform.user")]
-    if cfg.ingress_demo.allowed_principal and cfg.ingress_demo.allowed_principal.startswith(
-            ("user:", "group:", "serviceAccount:")):
-        pairs.append((cfg.ingress_demo.allowed_principal, "roles/aiplatform.user"))
+    # Presenters call Agent Runtime directly and through Gemini Enterprise (which uses their credentials).
+    pairs = [(m, "roles/aiplatform.user") for m in cfg.ui.admin_access
+             if m.startswith(("user:", "group:", "serviceAccount:"))]
     # Cloud Run demo targets: the A2A agents call Gemini on Vertex AI.
     targets = f"serviceAccount:{sas['targets_sa']}"
     pairs += [(targets, "roles/aiplatform.user"), (targets, "roles/logging.logWriter")]
@@ -62,12 +57,6 @@ def step_service_accounts(cfg: DemoConfig, r: Rest, me: str | None) -> dict[str,
     added = project.project_add_bindings(r, cfg.project, pairs)
     for m, role in added:
         c.log(f"  granted {role} to {m}")
-    # Who may impersonate the demo callers: the UI SA, and the operator running the CLI.
-    impersonators = [ui] + ([me] if me else [])
-    for caller in (sas["denied_caller_sa"], sas["allowed_caller_sa"]):
-        for m in impersonators:
-            if project.sa_add_binding(r, cfg.project, caller, m, "roles/iam.serviceAccountTokenCreator"):
-                c.log(f"  {m} can impersonate {caller}")
     return sas
 
 
@@ -125,8 +114,10 @@ def step_gateways(cfg: DemoConfig, r: Rest, timeout: float = 2400) -> dict[str, 
 
 
 def step_iap_authz(cfg: DemoConfig, r: Rest) -> dict[str, str]:
+    """IAP request authorization on the egress gateway (roles/iap.egressor decides each destination).
+    The ingress gateway gets no IAP policy: in CLIENT_TO_AGENT mode it enforces Model Armor only."""
     out = {}
-    for p in ("egress", "ingress"):
+    for p in ("egress",):
         proj = gw.gateway_project(cfg, p)
         ext = gw.iap_extension_name(cfg, p)
         res = gw.ensure_extension(r, proj, cfg.region, ext, gw.iap_extension_body(cfg))
@@ -216,7 +207,7 @@ def run(cfg: DemoConfig, me: str | None = None, skip_gateways_wait: bool = False
     step_apis(cfg, r)
     c.log("[bold]2/8 Service accounts[/]")
     sas = step_service_accounts(cfg, r, me)
-    _save_shared(**sas, denied_caller_member=c.denied_member(cfg), allowed_caller_members=c.allowed_members(cfg))
+    _save_shared(**sas)
     c.log("[bold]3/8 Artifact Registry + staging bucket[/]")
     repo = step_artifact_registry(cfg, r)
     bucket = step_staging_bucket(cfg, r)

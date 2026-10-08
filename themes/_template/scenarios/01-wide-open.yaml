@@ -1,5 +1,5 @@
 # One file per UI tab, sorted by `order`. Edge ids: "<a2a id>", "<mcp id>:<tool>",
-# "ingress:allowed", "ingress:denied" (docs/CONTRACTS.md section 2).
+# "ingress:user" (docs/CONTRACTS.md section 2).
 id: wide-open
 order: 1
 title: "Wide open"

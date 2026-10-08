@@ -1321,7 +1321,7 @@ a {
   color: var(--blue);
 }
 
-.node-caller {
+.node-user {
   width: 200px;
 }
 .node-orch {
@@ -1529,7 +1529,7 @@ a {
   }
 }
 
-/* node rings by state (A2A agents, callers) */
+/* node rings by state (A2A agents, the ingress user) */
 .node.ring-allowed {
   border-color: var(--e-allowed);
 }
@@ -1548,15 +1548,15 @@ a {
 .node.ring-error {
   border-color: var(--e-error);
 }
-.node.ring-denied.node-a2a,
-.node.ring-denied.node-caller {
+.node.ring-denied.node-a2a {
   box-shadow: 0 0 0 3px var(--red-weak), var(--shadow-1);
 }
 .node.ring-allowed.node-a2a,
-.node.ring-allowed.node-caller {
+.node.ring-allowed.node-user {
   box-shadow: 0 0 0 3px var(--green-weak), var(--shadow-1);
 }
-.node.ring-blocked.node-a2a {
+.node.ring-blocked.node-a2a,
+.node.ring-blocked.node-user {
   box-shadow: 0 0 0 3px var(--orange-weak), var(--shadow-1);
 }
 .node.in-flight {
@@ -1794,9 +1794,6 @@ a {
 }
 
 /* Policies GCP does not enforce yet (docs/ISSUES.md) */
-.policy-preview { margin-top: 4px; font-size: 12px; color: var(--muted, #5f6368); line-height: 1.35; }
-.pill-preview { background: #fef7e0; color: #b06000; border: 1px solid #f9d77e; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 600; }
-@media (prefers-color-scheme: dark) { .pill-preview { background: #3c2f00; color: #fdd663; border-color: #6b5200; } }
 
 /* ======================================================================
    Liquid glass: shared material for sheets, the progress pop-out and toasts
@@ -2507,3 +2504,311 @@ a {
 
 .confirm-list { margin: 8px 0 10px; padding-left: 18px; }
 .confirm-list li { margin: 2px 0; }
+
+/* ======================================================================
+   Gateway logs (Cloud Logging, CONTRACTS §9)
+   ====================================================================== */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.tag-sim {
+  background: var(--surface-3);
+  color: var(--text-2);
+  border: 1px dashed var(--border-strong);
+}
+/* activity-log tag, Cloud Logging style */
+.role-gwlog {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  vertical-align: 1px;
+  border: 1px solid currentColor;
+  background: var(--surface);
+}
+.role-gwlog.gwl-denied {
+  color: var(--red);
+  background: var(--red-weak);
+}
+.role-gwlog.gwl-blocked {
+  color: var(--orange);
+  background: var(--orange-weak);
+}
+.role-gwlog.gwl-allowed {
+  color: var(--green);
+  background: var(--green-weak);
+}
+.log-gwlog .log-text {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+.log-text.gw-open {
+  border: 0;
+  padding: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.log-text.gw-open:hover {
+  color: var(--blue);
+  text-decoration: underline;
+}
+.log-text.gw-open:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.gw-sim-note {
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-3);
+}
+.gw-cl-link {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--blue);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.gw-cl-link:hover {
+  text-decoration: underline;
+}
+
+/* diagram: "logged" badge next to the ✕ / shield marker */
+.edge-log-badge {
+  position: absolute;
+  left: 15px;
+  top: -11px;
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1.5px solid var(--surface);
+  background: #1a73e8;
+  color: #fff;
+  box-shadow: var(--shadow-1);
+  cursor: pointer;
+  animation: pop 0.3s cubic-bezier(0.2, 1.6, 0.4, 1);
+  transition: transform 0.12s;
+}
+.edge-log-badge.elb-blocked {
+  background: #1a73e8;
+}
+.edge-log-badge:hover {
+  transform: scale(1.15);
+}
+.edge-log-badge:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+/* decision pills */
+.gw-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 999px;
+  text-transform: lowercase;
+}
+.gw-allowed {
+  background: var(--green-weak);
+  color: var(--green);
+}
+.gw-denied {
+  background: var(--red-weak);
+  color: var(--red);
+}
+.gw-blocked {
+  background: var(--orange-weak);
+  color: var(--orange);
+}
+
+/* sheet */
+.sheet-gwlogs .sheet-body {
+  padding: 12px 20px 18px;
+}
+.gw-note {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.gw-empty {
+  padding: 28px 8px;
+  text-align: center;
+}
+.gw-toggle .gw-toggle-dot {
+  width: 22px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  position: relative;
+  transition: background 0.15s;
+}
+.gw-toggle .gw-toggle-dot::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+.gw-toggle.on .gw-toggle-dot {
+  background: var(--red);
+}
+.gw-toggle.on .gw-toggle-dot::after {
+  transform: translateX(10px);
+}
+.gw-toggle:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.sheet-actions a.glass-btn {
+  text-decoration: none;
+}
+.gw-table-wrap {
+  overflow-x: auto;
+}
+.gw-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.gw-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-3);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--glass-edge);
+  white-space: nowrap;
+}
+.gw-table td {
+  padding: 6px 8px;
+  border-bottom: 1px dashed var(--border);
+  vertical-align: middle;
+}
+.gw-table .mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.gw-row {
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.gw-row:hover,
+.gw-row.open {
+  background: var(--glass-btn);
+}
+.gw-c-x {
+  width: 28px;
+  padding-right: 0 !important;
+}
+.gw-expand {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.gw-expand[aria-expanded="true"] {
+  transform: rotate(90deg);
+}
+.gw-expand:focus-visible {
+  outline: 2px solid var(--blue);
+}
+.gw-time {
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.gw-tool {
+  color: var(--text-2);
+}
+.gw-by {
+  color: var(--text-2);
+  word-break: break-all;
+}
+.gw-raw-row > td {
+  padding: 4px 8px 14px 36px;
+  background: var(--glass-btn);
+}
+.gw-raw-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.gw-raw-summary {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.gw-raw-tools a.mini-btn {
+  text-decoration: none;
+}
+.gw-raw-row .code-full {
+  font-size: 12px;
+}
+.glass-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ingress tab: nudge to turn Model Armor on */
+.ma-callout {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--orange-weak);
+  border: 1px solid color-mix(in srgb, var(--orange) 40%, transparent);
+}
+.ma-callout > svg {
+  flex-shrink: 0;
+  color: var(--orange);
+  margin-top: 1px;
+}
+.ma-callout-btn {
+  margin-top: 8px;
+  background: var(--orange);
+  color: #fff;
+  border: none;
+}
+.ma-callout-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+@media (prefers-color-scheme: dark) {
+  .ma-callout-btn {
+    color: #202124;
+  }
+}

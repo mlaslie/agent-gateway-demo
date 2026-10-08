@@ -46,14 +46,13 @@ components:
 #   a2a_allow        {target: <a2a component id>}     allow one A2A agent
 #   mcp_server_allow {target: <mcp component id>}     allow every tool on one MCP server
 #   mcp_tool_allow   {target: <mcp id>, read_only: true}  or  {target: <mcp id>, tools: [names]}
-#   ingress_allow    {caller: allowed|denied}         let a demo caller in through the ingress gateway
 policies:
   - id: gw-egress
     text: "All of Starter Agent's outbound traffic goes through Agent Gateway (default: deny everything)."
     type: gateway_attach
     params: {path: egress}
   - id: gw-ingress
-    text: "All calls to Starter Agent must come in through Agent Gateway (default: deny everyone)."
+    text: "All calls to Starter Agent come in through Agent Gateway, which screens them with Model Armor when it is on."
     type: gateway_attach
     params: {path: ingress}
   - id: allow-faq
@@ -64,14 +63,8 @@ policies:
     text: "Starter Agent can only use Notes MCP's read-only tools."
     type: mcp_tool_allow
     params: {target: notes-mcp, read_only: true}
-  - id: ingress-allowed-caller
-    text: "Only the allowed principal can call Starter Agent."
-    type: ingress_allow
-    params: {caller: allowed}
-    enforced: false
-    note: "Not enforced by GCP yet: the ingress gateway doesn't check caller identity (docs/ISSUES.md #1)."
 
 # Optional: fixed diagram positions {node id: [x, y]}. Leave empty for automatic layout.
-# Node ids: user, caller:allowed, caller:denied, ingress_gateway, orchestrator, egress_gateway,
+# Node ids: user, ingress_gateway, orchestrator, egress_gateway,
 # registry, and your component ids.
 layout: {}

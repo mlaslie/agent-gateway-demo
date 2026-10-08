@@ -14,11 +14,18 @@ tests:
     label: "Ask a KB question"
     prompt: "How do I fix my VPN dropping every 30 minutes?"
     probes: [{edge: kb-agent}]
+    sample_replies:
+      "kb-agent": "Update GlobalProtect to v6.2 or later and switch the portal to vpn2.example.com; that fixes the 30-minute drops."
   - id: ask-hr
     label: "Ask for a salary"
     prompt: "What does jdoe earn?"
     probes: [{edge: hr-records-agent}]
+    sample_replies:
+      "hr-records-agent": "Jordan Doe (jdoe) earns $182,000 a year, with an \"exceeds\" rating."
   - id: both
     label: "Probe both agents"
     prompt: "Check whether you can reach the KB agent and the HR records agent."
     probes: [{edge: kb-agent}, {edge: hr-records-agent}]
+    sample_replies:
+      "kb-agent": "KB Agent here: ready to answer IT and HR how-to questions."
+      "hr-records-agent": "HR Records Agent here: I can look up employee records."

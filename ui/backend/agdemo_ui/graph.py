@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from agdemo_core.config import DemoConfig
-from agdemo_core.themes import Theme
+from agdemo_core.themes import INGRESS_EDGE, Theme
 
 
 def _pos(theme: Theme, node_id: str) -> dict[str, Any]:
@@ -14,18 +14,11 @@ def _pos(theme: Theme, node_id: str) -> dict[str, Any]:
 
 def build_graph(theme: Theme, cfg: DemoConfig | None = None, state: dict | None = None) -> dict[str, Any]:
     state = state or {}
-    shared = state.get("shared", {})
-    allowed_p = (cfg.ingress_demo.allowed_principal if cfg else "") or "helpdesk-users"
-    denied_p = shared.get("denied_caller_sa") or (
-        f"{cfg.prefix}-denied-caller" if cfg and cfg.ingress_demo.denied_principal == "auto"
-        else (cfg.ingress_demo.denied_principal if cfg else "denied-caller"))
     egress_name = cfg.egress_gateway if cfg else "egress gateway"
     ingress_name = cfg.ingress_gateway if cfg else "ingress gateway"
 
     nodes: list[dict[str, Any]] = [
-        {"id": "user", "type": "user", "label": "Presenter", "sublabel": "Run test"},
-        {"id": "caller:allowed", "type": "caller", "label": "Allowed caller", "sublabel": allowed_p},
-        {"id": "caller:denied", "type": "caller", "label": "Denied caller", "sublabel": denied_p},
+        {"id": "user", "type": "user", "label": "User", "sublabel": "Presenter / client app"},
         {"id": "ingress_gateway", "type": "gateway", "label": "Agent Gateway (ingress)",
          "sublabel": f"CLIENT_TO_AGENT · {ingress_name}"},
         {"id": "orchestrator", "type": "orchestrator", "label": theme.orchestrator.display_name,
@@ -57,7 +50,5 @@ def build_graph(theme: Theme, cfg: DemoConfig | None = None, state: dict | None 
             for t in spec.tools:
                 edges.append({"id": f"{c.id}:{t.name}", "source": "orchestrator", "target": c.id,
                               "tool": t.name, "kind": "mcp"})
-    for caller in ("allowed", "denied"):
-        edges.append({"id": f"ingress:{caller}", "source": f"caller:{caller}", "target": "orchestrator",
-                      "kind": "ingress"})
+    edges.append({"id": INGRESS_EDGE, "source": "user", "target": "orchestrator", "kind": "ingress"})
     return {"theme": theme.model_dump(mode="json"), "nodes": nodes, "edges": edges}

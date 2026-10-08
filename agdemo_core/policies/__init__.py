@@ -10,7 +10,6 @@ _MODULES = {
     "a2a_allow": "egress_allow",
     "mcp_server_allow": "egress_allow",
     "mcp_tool_allow": "egress_allow",
-    "ingress_allow": "ingress_allow",
 }
 
 

@@ -15,11 +15,18 @@ tests:
     label: "Ask about promotions"
     prompt: "Is the Ember Camp Stove on promotion this week, and where is it in the store?"
     probes: [{edge: merchandising-agent}]
+    sample_replies:
+      "merchandising-agent": "Yes: the Ember Camp Stove is 20% off through Sunday (\"Fall Into Camping\"). It's in aisle 14, bay A."
   - id: ask-margin
     label: "Ask for a margin"
     prompt: "What is our margin on the Trailhead 2-Person Tent?"
     probes: [{edge: pricing-agent}]
+    sample_replies:
+      "pricing-agent": "Trailhead 2-Person Tent: unit cost $61.20, shelf $149.99, gross margin 59.2%."
   - id: both
     label: "Probe both agents"
     prompt: "Check whether you can reach the merchandising agent and the pricing agent."
     probes: [{edge: merchandising-agent}, {edge: pricing-agent}]
+    sample_replies:
+      "merchandising-agent": "Merchandising Agent here: I can help with products and promotions."
+      "pricing-agent": "Pricing Agent here: I hold cost and margin data."

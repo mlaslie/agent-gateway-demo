@@ -82,16 +82,13 @@ export type PolicyType =
   | "gateway_attach"
   | "a2a_allow"
   | "mcp_server_allow"
-  | "mcp_tool_allow"
-  | "ingress_allow";
+  | "mcp_tool_allow";
 export interface Policy {
   id: string;
   text: string;
   type: PolicyType;
   params: Record<string, unknown>;
   explain?: string;
-  enforced?: boolean; // false = not enforced by GCP yet: shown as "Preview"
-  note?: string;
   /** Measured GCP propagation times (seconds) for applying / removing this policy. */
   typical_seconds?: number | null;
   typical_remove_seconds?: number | null;
@@ -102,7 +99,6 @@ export interface ScenarioTest {
   prompt: string;
   probes: { edge: string }[];
   malicious?: boolean;
-  caller?: "allowed" | "denied" | null;
 }
 export interface Scenario {
   id: string;
@@ -186,4 +182,55 @@ export interface VerifyCheck {
 export interface VerifyResult {
   ok: boolean;
   checks: VerifyCheck[];
+}
+
+// ---- gateway logs (CONTRACTS §9) ----
+export type GatewayDecision = "allowed" | "denied" | "blocked";
+
+export interface GatewayLogPolicy {
+  name: string;
+  kind: "iap" | "model_armor" | "other";
+  result: string;
+}
+
+/** One Agent Gateway request log entry (networkservices.googleapis.com/gateway_requests), normalized. */
+export interface GatewayLogEntry {
+  id: string;
+  timestamp: string;
+  gateway: string;
+  decision: GatewayDecision;
+  status: number | null;
+  method: string | null;
+  url: string | null;
+  host: string | null;
+  mcp_method: string | null;
+  mcp_tool: string | null;
+  /** Diagram edge id, or the component id when the tool is unknown, or null. */
+  edge: string | null;
+  component: string | null;
+  policies: GatewayLogPolicy[];
+  decided_by: string | null;
+  summary: string;
+  console_url: string | null;
+  simulated: boolean;
+  raw: Record<string, unknown>;
+}
+
+export interface GatewayLogsResponse {
+  source: "live" | "simulated";
+  filter: string;
+  console_url: string | null;
+  entries: GatewayLogEntry[]; // newest first
+}
+
+export interface GatewayLogsQuery {
+  since?: string;
+  denied_only?: boolean;
+  limit?: number;
+}
+
+/** POST /api/themes/{id}/sync: what's in place in GCP right now (stuck pending states cleared). */
+export interface SyncResult {
+  policies: { id: string; label: string; applied: boolean; status: string; detail: string }[];
+  model_armor: { enabled: boolean; status: string; detail: string };
 }
