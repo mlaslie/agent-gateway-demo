@@ -9,7 +9,7 @@ description: |
 flow: egress
 nodes: [orchestrator, egress_gateway, registry, inventory-mcp, orders-mcp]
 preconditions: [gw-egress]
-policies: [inventory-readonly, inventory-all, orders-lookup, allow-orders]
+policies: [inventory-readonly, inventory-readonly-hints, inventory-all, orders-lookup, allow-orders]
 tests:
   - id: check-stock
     label: "Check stock"

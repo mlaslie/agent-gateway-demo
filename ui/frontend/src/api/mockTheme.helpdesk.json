@@ -79,13 +79,26 @@
   },
   {
    "id": "tickets-readonly",
-   "text": "Helpdesk Agent can only use Tickets MCP's read-only tools.",
+   "text": "Helpdesk Agent can only use Tickets MCP's read-only tools (listed by name).",
    "type": "mcp_tool_allow",
    "params": {
     "target": "tickets-mcp",
     "read_only": true
    },
-   "explain": "",
+   "explain": "Conditional egressor binding that lists the allowed tool names (list_tickets, get_ticket). A new tool stays blocked until it's added to the list.",
+   "typical_seconds": 360,
+   "typical_remove_seconds": 120
+  },
+  {
+   "id": "tickets-readonly-hints",
+   "text": "Helpdesk Agent can only use Tickets MCP tools annotated read-only (MCP readOnlyHint).",
+   "type": "mcp_tool_allow",
+   "params": {
+    "target": "tickets-mcp",
+    "read_only": true,
+    "use_annotation": true
+   },
+   "explain": "Conditional egressor binding on the iap.googleapis.com/mcp.tool.isReadOnly attribute, which the gateway takes from the readOnlyHint in the tool spec registered in Agent Registry. No tool names in the policy; a new tool annotated read-only is allowed automatically.",
    "typical_seconds": 360,
    "typical_remove_seconds": 120
   },
@@ -570,6 +583,7 @@
    ],
    "policies": [
     "tickets-readonly",
+    "tickets-readonly-hints",
     "tickets-all",
     "allow-directory"
    ],

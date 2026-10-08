@@ -15,6 +15,24 @@ export interface LogEntry {
   testLabel?: string;
   /** kind "gwlog": the Agent Gateway request log entry (CONTRACTS §9). */
   gw?: GatewayLogEntry;
+  /** Set on entries produced by a test run (or that run's gateway-log watch): drives the Test results popup. */
+  runId?: number;
+}
+
+export type TestRunStatus = "running" | "finished" | "failed" | "fallback" | "cancelled";
+
+/** One test run (▶ or ● Record), shown in the Test results popup. */
+export interface TestRun {
+  id: number;
+  testId: string;
+  label: string;
+  prompt: string;
+  kind: "run" | "record";
+  mode: Mode;
+  status: TestRunStatus;
+  startedAt: number;
+  /** Final edge results (edge events + the done event). */
+  results: Record<string, EdgeState>;
 }
 
 /** A polling watch on the gateway-log endpoint started after a run / probe / GE prompt copy. */
@@ -28,6 +46,8 @@ interface GwWatchSpec {
   durationMs: number;
   startText: string;
   emptyText: string;
+  /** Tag the watch's log entries with this test run. */
+  runId?: number;
 }
 
 const GW_POLL_MS = 5000;
@@ -100,6 +120,14 @@ export function useDemo(api: Api) {
   const [edgeLogs, setEdgeLogs] = useState<Record<string, GatewayLogEntry>>({});
   const [viewLog, setViewLog] = useState<GatewayLogEntry | null>(null);
   const reqSeq = useRef(0);
+  // Test results popup: the latest run, whether the popup is open, and a counter that asks it to take focus.
+  const [testRun, setTestRun] = useState<TestRun | null>(null);
+  const [resultsOpen, setResultsOpen] = useState(false);
+  const [resultsFocus, setResultsFocus] = useState(0);
+  const [testPopup, setTestPopupRaw] = useState<boolean>(LS.get("agdemo.testPopup") !== "0");
+  const [watchingRun, setWatchingRun] = useState<number | null>(null);
+  const runSeq = useRef(0);
+  const currentRun = useRef<number | null>(null);
 
   const addLog = useCallback((e: Omit<LogEntry, "id" | "ts">) => {
     const entry = { ...e, id: ++logSeq, ts: Date.now() };
@@ -253,19 +281,22 @@ export function useDemo(api: Api) {
       gwWatches.current.get(spec.key)?.();
       let cancelled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      const runId = spec.runId;
       const cancel = () => {
         cancelled = true;
         clearTimeout(timer);
         if (gwWatches.current.get(spec.key) === cancel) gwWatches.current.delete(spec.key);
+        if (runId !== undefined) setWatchingRun((w) => (w === runId ? null : w));
       };
       gwWatches.current.set(spec.key, cancel);
+      if (runId !== undefined) setWatchingRun(runId);
       const deadline = Date.now() + spec.durationMs;
       const since = new Date(spec.sinceMs - 5000).toISOString();
       const matched = new Set<string>();
       let shown = 0;
       const tid = themeId;
       const m = mode;
-      addLog({ kind: "status", text: spec.startText });
+      addLog({ kind: "status", text: spec.startText, runId });
       // MCP session handshakes (initialize, tools/list, notifications/*) that were ALLOWED are noise in the
       // activity log; a DENIED handshake is kept because that's how a fully denied MCP server shows up.
       const handshake = (e: GatewayLogEntry) => !!e.mcp_method && e.mcp_method !== "tools/call";
@@ -283,7 +314,7 @@ export function useDemo(api: Api) {
             if (seenGwIds.current.has(e.id)) continue;
             seenGwIds.current.add(e.id);
             shown++;
-            addLog({ kind: "gwlog", text: e.summary, edge: e.edge ?? undefined, gw: e });
+            addLog({ kind: "gwlog", text: e.summary, edge: e.edge ?? undefined, gw: e, runId });
           }
         } catch {
           /* endpoint not available yet / transient: keep polling until the deadline */
@@ -291,7 +322,7 @@ export function useDemo(api: Api) {
         if (cancelled) return;
         const done = spec.expect.length > 0 && spec.expect.every((x) => matched.has(x));
         if (done || Date.now() >= deadline) {
-          if (!shown && !done) addLog({ kind: "status", text: spec.emptyText });
+          if (!shown && !done) addLog({ kind: "status", text: spec.emptyText, runId });
           cancel();
           return;
         }
@@ -304,7 +335,7 @@ export function useDemo(api: Api) {
 
   /** After a run / probe: watch for the gateway's log entries of the governed egress edges it touched. */
   const watchAfterRun = useCallback(
-    (sinceMs: number, results: Record<string, EdgeState>, specific: boolean) => {
+    (sinceMs: number, results: Record<string, EdgeState>, specific: boolean, runId?: number) => {
       const governed = Object.entries(results).filter(([e, st]) => !e.startsWith("ingress:") && st?.governed && ["allowed", "denied", "blocked"].includes(st.state));
       if (!governed.length) return; // nothing went through the egress gateway: nothing to log
       const stopped = governed.filter(([, st]) => st.state === "denied" || st.state === "blocked").map(([e]) => e);
@@ -316,6 +347,7 @@ export function useDemo(api: Api) {
         durationMs: 60_000,
         startText: "Waiting for Cloud Logging…",
         emptyText: "No gateway log entries yet (logs can take up to a minute)",
+        runId,
       });
     },
     [watchGatewayLogs],
@@ -407,6 +439,8 @@ export function useDemo(api: Api) {
     setLog([]);
     stopGwWatches();
     setEdgeLogs({});
+    setResultsOpen(false);
+    setTestRun(null);
     setTestEdges({});
     const first = theme?.scenarios[0]?.id;
     if (first) {
@@ -524,8 +558,26 @@ export function useDemo(api: Api) {
     }
   }, [api, themeId, mode, addLog, refresh, watchAfterRun]);
 
+  /** Start a Test results run; opens the popup (when enabled) and returns the run id for tagging log entries. */
+  const beginRun = useCallback(
+    (test: { id: string; label: string; prompt: string }, kind: TestRun["kind"], runMode: Mode, focus: boolean) => {
+      const id = ++runSeq.current;
+      currentRun.current = id;
+      setTestRun({ id, testId: test.id, label: test.label, prompt: test.prompt, kind, mode: runMode, status: "running", startedAt: Date.now(), results: {} });
+      if (testPopup) {
+        setResultsOpen(true);
+        if (focus) setResultsFocus((n) => n + 1);
+      }
+      return id;
+    },
+    [testPopup],
+  );
+  const updateRun = useCallback((id: number, patch: Partial<TestRun>) => {
+    setTestRun((r) => (r && r.id === id ? { ...r, ...patch } : r));
+  }, []);
+
   const runTest = useCallback(
-    async (testId: string) => {
+    async (testId: string, opts: { focus?: boolean } = {}) => {
       if (!themeId || !scenario) return;
       const test = scenario.tests.find((t) => t.id === testId);
       if (!test) return;
@@ -544,22 +596,24 @@ export function useDemo(api: Api) {
       const startedAt = Date.now();
       const results: Record<string, EdgeState> = {};
       let finished = false;
+      let failed = false;
       setFallbackShown(false);
-      addLog({ kind: "system", text: `▶ ${test.label}`, testLabel: test.label });
-      addLog({ kind: "user", text: test.prompt });
+      const runId = beginRun(test, "run", mode, !!opts.focus);
+      addLog({ kind: "system", text: `▶ ${test.label}`, testLabel: test.label, runId });
+      addLog({ kind: "user", text: test.prompt, runId });
       const onEvent = (ev: SseEvent) => {
         switch (ev.type) {
           case "status":
-            addLog({ kind: "status", text: ev.text, replayed });
+            addLog({ kind: "status", text: ev.text, replayed, runId });
             break;
           case "message":
             if (ev.role === "user") break; // already logged
-            addLog({ kind: ev.role === "agent" ? "agent" : "tool", text: ev.text, replayed });
+            addLog({ kind: ev.role === "agent" ? "agent" : "tool", text: ev.text, replayed, runId });
             break;
           case "fallback":
             replayed = true;
             setFallbackShown(true);
-            addLog({ kind: "fallback", text: ev.reason, replayed: true });
+            addLog({ kind: "fallback", text: ev.reason, replayed: true, runId });
             break;
           case "edge":
             results[ev.edge] = ev.state;
@@ -569,26 +623,35 @@ export function useDemo(api: Api) {
               n.delete(ev.edge);
               return n;
             });
-            addLog({ kind: "edge", text: ev.state.detail ?? "", edge: ev.edge, edgeState: ev.state, replayed: replayed || ev.state.source === "replayed" });
+            addLog({ kind: "edge", text: ev.state.detail ?? "", edge: ev.edge, edgeState: ev.state, replayed: replayed || ev.state.source === "replayed", runId });
+            updateRun(runId, { results: { ...results } });
             break;
           case "done":
             Object.assign(results, ev.edges);
             finished = true;
             setTestEdges((te) => ({ ...te, ...ev.edges }));
             setInFlight(new Set());
-            addLog({ kind: "done", text: "Test finished.", replayed });
+            addLog({ kind: "done", text: "Test finished.", replayed, runId });
             break;
           case "error":
-            addLog({ kind: "error", text: ev.text, replayed });
+            failed = true;
+            addLog({ kind: "error", text: ev.text, replayed, runId });
             break;
         }
       };
       try {
         await api.runTest(themeId, testId, { mode, use_llm: useLlm, scenario_id: scenario.id }, onEvent, ac.signal);
-        if (finished && !ac.signal.aborted) watchAfterRun(startedAt, results, true);
+        if (!ac.signal.aborted) {
+          const anyReplayed = replayed || Object.values(results).some((r) => r?.source === "replayed");
+          updateRun(runId, { results: { ...results }, status: !finished || failed ? "failed" : anyReplayed ? "fallback" : "finished" });
+        }
+        if (finished && !ac.signal.aborted) watchAfterRun(startedAt, results, true, runId);
       } catch (e) {
         if ((e as Error).name !== "AbortError") {
-          addLog({ kind: "error", text: `Test failed: ${(e as Error).message}` });
+          addLog({ kind: "error", text: `Test failed: ${(e as Error).message}`, runId });
+          updateRun(runId, { results: { ...results }, status: "failed" });
+        } else {
+          updateRun(runId, { results: { ...results }, status: "cancelled" });
         }
       } finally {
         if (abortRef.current === ac) {
@@ -597,26 +660,30 @@ export function useDemo(api: Api) {
         }
       }
     },
-    [api, themeId, scenario, mode, useLlm, addLog, watchAfterRun],
+    [api, themeId, scenario, mode, useLlm, addLog, watchAfterRun, beginRun, updateRun],
   );
 
   const recordTest = useCallback(
-    async (testId: string) => {
+    async (testId: string, opts: { focus?: boolean } = {}) => {
       if (!themeId || !scenario) return;
       const test = scenario.tests.find((t) => t.id === testId);
       setBusy(`record:${testId}`);
-      addLog({ kind: "system", text: `● Recording "${test?.label ?? testId}" against Live GCP…` });
+      const runId = beginRun(test ?? { id: testId, label: testId, prompt: "" }, "record", "live", !!opts.focus);
+      addLog({ kind: "system", text: `● Recording "${test?.label ?? testId}" against Live GCP…`, runId });
+      if (test?.prompt) addLog({ kind: "user", text: test.prompt, runId });
       try {
         const r = await api.record(themeId, testId, { use_llm: useLlm, scenario_id: scenario.id });
-        addLog({ kind: "done", text: `Recorded ${r.events} events · signature ${r.signature} · saved to ${r.saved}` });
+        addLog({ kind: "done", text: `Recorded ${r.events} events · signature ${r.signature} · saved to ${r.saved}`, runId });
+        updateRun(runId, { status: "finished" });
       } catch (e) {
-        addLog({ kind: "error", text: `Recording failed: ${(e as Error).message}` });
+        addLog({ kind: "error", text: `Recording failed: ${(e as Error).message}`, runId });
+        updateRun(runId, { status: "failed" });
         flash(`Recording failed: ${(e as Error).message}`, "error");
       } finally {
         setBusy(null);
       }
     },
-    [api, themeId, scenario, useLlm, addLog, flash],
+    [api, themeId, scenario, useLlm, addLog, flash, beginRun, updateRun],
   );
 
   // ---------- GE Demo: prompts are sent from Gemini Enterprise, this UI copies them ----------
@@ -704,7 +771,7 @@ export function useDemo(api: Api) {
     abortRef.current?.abort();
     setRunningTest(null);
     setInFlight(new Set());
-    addLog({ kind: "system", text: "Test cancelled." });
+    addLog({ kind: "system", text: "Test cancelled.", runId: currentRun.current ?? undefined });
   }, [addLog]);
 
   const setMode = useCallback(
@@ -747,6 +814,15 @@ export function useDemo(api: Api) {
     LS.set("agdemo.useLlm", v ? "1" : "0");
   }, []);
 
+  const setTestPopup = useCallback((v: boolean) => {
+    setTestPopupRaw(v);
+    LS.set("agdemo.testPopup", v ? "1" : "0");
+    if (!v) setResultsOpen(false);
+  }, []);
+
+  /** Log entries of the run shown in the Test results popup. */
+  const runLog = useMemo(() => (testRun ? log.filter((e) => e.runId === testRun.id) : []), [log, testRun]);
+
   return {
     config,
     isMock: api.isMock,
@@ -772,6 +848,14 @@ export function useDemo(api: Api) {
     clearLog: () => setLog([]),
     useLlm,
     toggleLlm,
+    testPopup,
+    setTestPopup,
+    testRun,
+    runLog,
+    resultsOpen,
+    resultsFocus,
+    closeResults: () => setResultsOpen(false),
+    watchingRun,
     setPolicy,
     applyPreconditions,
     setModelArmor,

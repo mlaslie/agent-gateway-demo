@@ -85,7 +85,11 @@ After the salary test:
 
 **Audience sees:** on the Tickets node, the `list_tickets` and `get_ticket` rows are green and the `close_ticket` and `delete_ticket` rows are red; both Directory rows are red.
 
-**Recovery:** if the write tools show green, per-tool enforcement hasn't taken effect (or this environment uses the split read/write endpoint fallback). Use fallback, or switch to Demo for this tab.
+**Optional, the same result from MCP hints:** turn `tickets-readonly` off and `tickets-readonly-hints` on (allow ~6 minutes), then run **Probe every tool** again. Same outcome, but open **Under the hood** on both: the first policy lists tool names (`mcp.toolName in ['list_tickets', 'get_ticket', '']`), the second has no names at all (`mcp.tool.isReadOnly == true`). The gateway reads `readOnlyHint` from the tool spec in Agent Registry, so a new read-only tool is allowed automatically, while with the name list it stays blocked until someone adds it.
+
+> "Two ways to say 'read-only'. Name the tools, which is explicit but needs updating as the server grows, or trust the tools' own MCP annotations as registered in Agent Registry."
+
+**Recovery:** if the write tools show green, per-tool enforcement hasn't taken effect yet (IAM conditions can take a few minutes). Use fallback, or switch to Demo for this tab.
 
 ## Scenario 5: Users → agent (about 2 min)
 

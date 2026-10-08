@@ -8,3 +8,4 @@ node_modules/
 ui/frontend/dist/
 .env
 .pytest_cache/
+*.tsbuildinfo

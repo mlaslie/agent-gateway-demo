@@ -79,13 +79,26 @@
   },
   {
    "id": "inventory-readonly",
-   "text": "Store Ops Agent can only use Inventory MCP's read-only tools.",
+   "text": "Store Ops Agent can only use Inventory MCP's read-only tools (listed by name).",
    "type": "mcp_tool_allow",
    "params": {
     "target": "inventory-mcp",
     "read_only": true
    },
-   "explain": "Conditional egressor binding that only matches Inventory MCP tools annotated readOnlyHint (list_stock, get_item).",
+   "explain": "Conditional egressor binding that lists the allowed tool names (list_stock, get_item). A new tool stays blocked until it's added to the list.",
+   "typical_seconds": 360,
+   "typical_remove_seconds": 120
+  },
+  {
+   "id": "inventory-readonly-hints",
+   "text": "Store Ops Agent can only use Inventory MCP tools annotated read-only (MCP readOnlyHint).",
+   "type": "mcp_tool_allow",
+   "params": {
+    "target": "inventory-mcp",
+    "read_only": true,
+    "use_annotation": true
+   },
+   "explain": "Conditional egressor binding on the iap.googleapis.com/mcp.tool.isReadOnly attribute, which the gateway takes from the readOnlyHint in the tool spec registered in Agent Registry. No tool names in the policy; a new tool annotated read-only is allowed automatically.",
    "typical_seconds": 360,
    "typical_remove_seconds": 120
   },
@@ -653,6 +666,7 @@
    ],
    "policies": [
     "inventory-readonly",
+    "inventory-readonly-hints",
     "inventory-all",
     "orders-lookup",
     "allow-orders"

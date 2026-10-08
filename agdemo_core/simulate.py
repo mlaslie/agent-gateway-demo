@@ -262,14 +262,13 @@ def synth_message(theme: Theme, scenario: Any, test: ScenarioTest, edges: dict[s
                     "prompt injection / sensitive data.")
         return f"The call failed: {edges.get(INGRESS_EDGE, {}).get('detail', st)}."
     lines = [edge_sentence(theme, e, edges[e]) for e in test_edges(theme, scenario, test) if e in edges]
-    # What the remote agents said (simulated): only for calls that went through.
-    for e in test_edges(theme, scenario, test):
-        if e in edges and edges[e].get("state") in ("direct", "allowed") and test.sample_replies.get(e):
-            lines.append(f"{_label(theme, e)} replied: {test.sample_replies[e]}")
     ok = sum(1 for e in edges.values() if e.get("state") in ("direct", "allowed"))
     head = (f"I tried {len(lines)} connection{'s' if len(lines) != 1 else ''}; {ok} worked."
             if len(lines) > 1 else "")
-    return "\n".join([h for h in [head] if h] + lines)
+    # What the remote agents said (simulated): only for calls that went through.
+    replies = [f"{_label(theme, e)} replied: {test.sample_replies[e]}" for e in test_edges(theme, scenario, test)
+               if e in edges and edges[e].get("state") in ("direct", "allowed") and test.sample_replies.get(e)]
+    return "\n".join([h for h in [head] if h] + lines + replies)
 
 
 def synth_events(theme: Theme, scenario: Any, test: ScenarioTest, applied: Iterable[str],

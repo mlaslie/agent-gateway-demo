@@ -165,9 +165,13 @@ policy owns one binding, identified by its condition, so `tickets-readonly` and 
 
 **The `''` entry is required.** Without it, `initialize` and `tools/list` (which carry no tool name) are denied, and the MCP session never starts.
 
-Alternative (`params.use_annotation: true`): the condition
+Alternative (`params.use_annotation: true`, policies `tickets-readonly-hints` / `inventory-readonly-hints`): the condition
 `api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly', false) == true || api.getAttribute('iap.googleapis.com/mcp.toolName', '') == ''`.
-This uses the annotation stored in the registry rather than a list of names. It is documented in the cloudnet codelab but not run here.
+This uses the annotation stored in the registry rather than a list of names: `deploy-theme` registers each MCP server's
+tool spec with `readOnlyHint` / `destructiveHint`, and the gateway exposes `readOnlyHint` as `mcp.tool.isReadOnly`.
+**Verified live (retail, Oct 2026):** with only this binding on Inventory MCP (no tool names anywhere), `list_stock` and
+`get_item` returned 200 and `adjust_stock` / `delete_item` 403, with gateway log entries `DENIED by agdemo-egress-iap-policy`
+on the write tools. Took about 5 minutes to take effect, like the name-based form.
 No fallback is needed. If conditions ever stop working, the documented fallback is to register two MCP services
 on different paths (`/mcp-ro`, `/mcp-rw`) and grant each without a condition.
 

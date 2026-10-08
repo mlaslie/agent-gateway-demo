@@ -206,3 +206,17 @@ def test_recording_signature_uses_only_relevant_policies(theme):
     scen, inj = simulate.find_test(theme, "injection", "ingress")
     assert simulate.test_signature(theme, scen, inj, everything, True) == "gw-ingress+ma-on"
     assert simulate.test_signature(theme, scen, inj, {"gw-ingress"}, False) == "gw-ingress+ma-off"
+
+
+def test_hints_based_read_only_policy(theme):
+    """tickets-readonly-hints: same edges as the name-based policy, different IAM condition."""
+    from agdemo_core.policies.egress_allow import condition
+    a = states(simulate.evaluate(theme, {"gw-egress", "tickets-readonly-hints"}, False))
+    b = states(simulate.evaluate(theme, {"gw-egress", "tickets-readonly"}, False))
+    assert {k: v for k, v in a.items() if k.startswith("tickets-mcp")} == \
+           {k: v for k, v in b.items() if k.startswith("tickets-mcp")}
+    assert a["tickets-mcp:get_ticket"] == "allowed" and a["tickets-mcp:delete_ticket"] == "denied"
+    hints = condition(theme, theme.policy("tickets-readonly-hints"))["expression"]
+    names = condition(theme, theme.policy("tickets-readonly"))["expression"]
+    assert "mcp.tool.isReadOnly" in hints and "get_ticket" not in hints
+    assert "mcp.toolName" in names and "get_ticket" in names

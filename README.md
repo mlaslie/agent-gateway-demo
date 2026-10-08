@@ -38,7 +38,7 @@ Use cases are pluggable **themes** (YAML only). Two ship with the repo: *IT / HR
 | 1 | Wide open | No gateway: the agent reaches every agent and tool, including sensitive and destructive ones |
 | 2 | Gateway: deny all | Binding the engine to the egress gateway denies everything except platform endpoints |
 | 3 | A2A agents on Cloud Run | Identity-based allow of one A2A agent, deny of another (`iap.egressor` on Agent Registry entries) |
-| 4 | MCP tools | Per-tool policy: read-only MCP tools allowed, write and delete tools denied |
+| 4 | MCP tools | Per-tool policy: read-only MCP tools allowed, write and delete tools denied, either by listing tool names or by the tools' MCP `readOnlyHint` annotations |
 | 5 | Users → agent | Every call into the agent goes through the ingress gateway; with Model Armor on, a prompt injection or PII is blocked (403) before it reaches the agent |
 | 6 | Model Armor | Prompt injection and sensitive data in MCP tool calls blocked by the egress gateway, even where policy allows the tool |
 
@@ -210,10 +210,11 @@ These are created or removed only while the demo runs; **Reset** removes all of 
 | Ingress gateway policy | `gw-ingress` | PATCH `agentGatewayConfig.clientToAgentConfig` → `agdemo-ingress` (~2½ min) |
 | Allow an A2A agent | `allow-kb`, `allow-hr` | `roles/iap.egressor` for the orchestrator's Agent Identity on that agent's Agent Registry entry |
 | Allow a whole MCP server | `tickets-all`, `allow-directory` | `roles/iap.egressor` on that MCP server's Agent Registry entry |
-| Allow read-only MCP tools | `tickets-readonly` | The same binding with an IAM condition on `iap.googleapis.com/mcp.toolName` (read-only tools only) |
+| Allow read-only MCP tools, by name | `tickets-readonly` | The same binding with an IAM condition listing the allowed tool names: `iap.googleapis.com/mcp.toolName in ['list_tickets', 'get_ticket', '']` |
+| Allow read-only MCP tools, by MCP hint | `tickets-readonly-hints` | The same binding with an IAM condition on the tool's annotation: `iap.googleapis.com/mcp.tool.isReadOnly == true`, which the gateway takes from `readOnlyHint` in the tool spec registered in Agent Registry. No tool names in the policy |
 | **Model Armor** checkbox | (all themes) | Creates `agdemo-egress-ma-policy` and `agdemo-ingress-ma-policy` (`CONTENT_AUTHZ`, via `agdemo-ma-authz` and template `agdemo-shield`); unticking deletes them (~4 min) |
 
-Retail uses the same patterns with its own ids (`allow-merch`, `allow-pricing`, `inventory-readonly`, `inventory-all`, `orders-lookup`, `allow-orders`). **Under the hood** in each policy shows the exact commands.
+Retail uses the same patterns with its own ids (`allow-merch`, `allow-pricing`, `inventory-readonly`, `inventory-readonly-hints`, `inventory-all`, `orders-lookup`, `allow-orders`). **Under the hood** in each policy shows the exact commands.
 
 ## Using the UI
 

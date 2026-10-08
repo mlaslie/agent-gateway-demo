@@ -8,7 +8,7 @@ description: |
 flow: egress
 nodes: [orchestrator, egress_gateway, registry, tickets-mcp, directory-mcp]
 preconditions: [gw-egress]
-policies: [tickets-readonly, tickets-all, allow-directory]
+policies: [tickets-readonly, tickets-readonly-hints, tickets-all, allow-directory]
 tests:
   - id: read-ticket
     label: "Read a ticket"
