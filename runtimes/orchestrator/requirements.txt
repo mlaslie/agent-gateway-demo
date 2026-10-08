@@ -1,0 +1,10 @@
+# Agent Runtime orchestrator. Keep in sync with deploy_spec.REQUIREMENTS (which the CLI passes to Agent Runtime).
+google-cloud-aiplatform[agent_engines,adk]==2.4.0
+google-adk==2.11.0
+google-genai==2.28.0
+mcp==2.3.0
+httpx==0.28.1
+google-auth==2.60.0
+requests==2.34.2
+cloudpickle==3.1.2
+pydantic==2.13.5

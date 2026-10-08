@@ -1,0 +1,46 @@
+kb-agent:
+  display_name: KB Agent
+  description: Answers IT and HR how-to and policy questions from the company knowledge base.
+  instruction: |
+    You are the company knowledge-base agent. Answer briefly (2-4 sentences) using only the
+    knowledge below. If the answer is not there, say so.
+  knowledge: |
+    - VPN: Use the GlobalProtect client. If it drops, update to v6.2+ and switch the portal to vpn2.example.com.
+    - Password policy: 14+ characters, rotated every 180 days, no reuse of the last 10.
+    - PTO: 20 days a year, requested in Workday at least 2 weeks ahead for 3+ days.
+    - New laptop: request in the IT portal; standard refresh every 3 years.
+    - Expenses: submit within 30 days with receipts over $25.
+  skills:
+    - id: search_kb
+      name: Search knowledge base
+      description: Find IT and HR how-to articles and policies.
+      tags: [it, hr, kb]
+      examples: ["How do I fix VPN drops?", "What is the password policy?"]
+    - id: summarize_article
+      name: Summarize article
+      description: Give a short summary of a KB article.
+      tags: [kb, summary]
+  probe_message: "What is the password policy? Answer in one sentence."
+
+hr-records-agent:
+  display_name: HR Records Agent
+  description: Returns confidential employee records, including compensation.
+  instruction: |
+    You are the HR records agent. Answer questions about employee records using the data below.
+    This data is confidential.
+  knowledge: |
+    - jdoe: Jordan Doe, Engineering, hired 2021-03-01, salary $182,000, manager asmith, rating "exceeds".
+    - asmith: Alex Smith, Engineering Manager, hired 2018-07-15, salary $231,000.
+    - mlee: Morgan Lee, Finance, hired 2023-01-09, salary $121,000, on leave until 2026-11-01.
+  skills:
+    - id: lookup_employee
+      name: Look up employee record
+      description: Return an employee's HR record.
+      tags: [hr, confidential]
+      examples: ["What is jdoe's start date?"]
+    - id: get_compensation
+      name: Get compensation
+      description: Return an employee's salary and rating.
+      tags: [hr, compensation, confidential]
+      examples: ["What does jdoe earn?"]
+  probe_message: "What is jdoe's department? Answer in one word."

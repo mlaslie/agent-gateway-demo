@@ -1,0 +1,21 @@
+# A2A agents, keyed by component id (must match a component of kind a2a_agent in theme.yaml).
+# Each one is deployed from the generic runtimes/a2a_agent image as an ADK agent exposed with
+# to_a2a(); its agent card skills come from `skills`.
+faq-agent:
+  display_name: FAQ Agent
+  description: Answers general questions from a short FAQ.   # also used in Agent Registry
+  instruction: |
+    You are the FAQ agent. Answer in one or two sentences using only the knowledge below.
+  # Mock data appended to the instruction. Keep it obviously fake.
+  knowledge: |
+    - Office hours: 9am-5pm Monday to Friday.
+    - Support email: support@example.com.
+  skills:
+    - id: answer_faq
+      name: Answer FAQ
+      description: Answer a general question from the FAQ.
+      tags: [faq]
+      examples: ["What are the office hours?"]
+  # model: gemini-2.5-flash      # optional; defaults to models.default
+  # Sent by deterministic probes (no orchestrator LLM involved). Make it short and cheap to answer.
+  probe_message: "What are the office hours? Answer in one sentence."

@@ -1,0 +1,62 @@
+id: helpdesk
+name: IT / HR Helpdesk
+description: >
+  An internal helpdesk agent that resolves employee requests using a knowledge-base agent,
+  an HR-records agent, a ticketing MCP server and a directory MCP server.
+
+orchestrator:
+  id: helpdesk-agent
+  display_name: Helpdesk Agent
+  description: Employee-facing IT/HR helpdesk agent on Agent Runtime
+  instruction: |
+    You are the company IT/HR helpdesk agent. Help employees with IT and HR questions.
+    Use list_capabilities to see which remote agents and MCP tools exist.
+    - Use call_agent("kb-agent", ...) for how-to and policy questions.
+    - Use call_agent("hr-records-agent", ...) for employee record questions.
+    - Use call_mcp_tool("tickets-mcp", ...) to look up or change support tickets.
+    - Use call_mcp_tool("directory-mcp", ...) to look up users or reset passwords.
+    Every tool returns an "outcome". If the outcome is "denied" or "blocked", tell the user plainly
+    that access was blocked by policy (name the agent or tool) and do not retry another way.
+
+components:
+  - {id: kb-agent, kind: a2a_agent, role_label: "A2A agent"}
+  - {id: hr-records-agent, kind: a2a_agent, role_label: "A2A agent"}
+  - {id: tickets-mcp, kind: mcp_server, role_label: "MCP server"}
+  - {id: directory-mcp, kind: mcp_server, role_label: "MCP server"}
+
+policies:
+  - id: gw-egress
+    text: "All of Helpdesk Agent's outbound traffic goes through Agent Gateway (default: deny everything)."
+    type: gateway_attach
+    params: {path: egress}
+    explain: Binds the Agent Runtime engine to the egress gateway. Unregistered or unauthorized destinations get 403.
+  - id: gw-ingress
+    text: "All calls to Helpdesk Agent must come in through Agent Gateway (default: deny everyone)."
+    type: gateway_attach
+    params: {path: ingress}
+  - id: allow-kb
+    text: "Helpdesk Agent can talk to KB Agent over A2A."
+    type: a2a_allow
+    params: {target: kb-agent}
+  - id: allow-hr
+    text: "Helpdesk Agent can talk to HR Records Agent over A2A."
+    type: a2a_allow
+    params: {target: hr-records-agent}
+  - id: tickets-readonly
+    text: "Helpdesk Agent can only use Tickets MCP's read-only tools."
+    type: mcp_tool_allow
+    params: {target: tickets-mcp, read_only: true}
+  - id: tickets-all
+    text: "Helpdesk Agent can use every Tickets MCP tool, including write and delete."
+    type: mcp_server_allow
+    params: {target: tickets-mcp}
+  - id: allow-directory
+    text: "Helpdesk Agent can use the Directory MCP server."
+    type: mcp_server_allow
+    params: {target: directory-mcp}
+  - id: ingress-allowed-caller
+    text: "Only the helpdesk-users principal can call Helpdesk Agent."
+    type: ingress_allow
+    params: {caller: allowed}
+    enforced: false
+    note: "Not enforced by GCP yet: the ingress gateway doesn't check caller identity (docs/ISSUES.md #1)."

@@ -1,0 +1,13 @@
+# Applies to every image built with the repo root as context (ui/Dockerfile and the runtimes).
+.git
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.env
+# Never bake environment config/state into images: the CLI passes them at deploy time (AGDEMO_CONFIG_YAML / AGDEMO_STATE_JSON).
+config/demo.yaml
+config/state.json
+# rebuilt inside ui/Dockerfile
+ui/frontend/dist

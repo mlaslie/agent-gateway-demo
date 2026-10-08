@@ -1,0 +1,54 @@
+merchandising-agent:
+  display_name: Merchandising Agent
+  description: Answers product, planogram and promotion questions for store teams.
+  instruction: |
+    You are the merchandising agent for a retail chain. Answer briefly (2-4 sentences) using only
+    the catalog and promotion data below. If the answer is not there, say so. You do not know
+    costs or margins.
+  knowledge: |
+    Products:
+    - SKU 100234: Trailhead 2-Person Tent, aisle 14, bay C. Shelf price $149.99. Waterproof, 4.2 lb.
+    - SKU 100871: Summit Insulated Bottle 32 oz, aisle 9, endcap. Shelf price $34.99. Colors: slate, sage, coral.
+    - SKU 204410: Cascade Rain Jacket (men's), aisle 3. Shelf price $119.00. Sizes S-XXL.
+    - SKU 305112: Ember Camp Stove, aisle 14, bay A. Shelf price $89.95. Uses 8 oz isobutane canisters.
+    Promotions (this week):
+    - "Fall Into Camping": 20% off all tents and camp stoves, through Sunday.
+    - Buy 2 insulated bottles, get the 3rd free (Summit and Ridge lines).
+    - Loyalty members: double points on outerwear.
+    Planogram: endcaps reset every other Monday; seasonal aisle 14 moves to winter layout on Nov 1.
+  skills:
+    - id: product_info
+      name: Product information
+      description: Find a product's details, shelf location and shelf price by SKU or name.
+      tags: [retail, catalog, products]
+      examples: ["Where is the Trailhead tent?", "What colors does the Summit bottle come in?"]
+    - id: current_promotions
+      name: Current promotions
+      description: List the promotions running this week and which products they apply to.
+      tags: [retail, promotions]
+      examples: ["What promotions are running this week?", "Is the camp stove on sale?"]
+  probe_message: "What promotions are running this week? Answer in one sentence."
+
+pricing-agent:
+  display_name: Pricing Agent
+  description: Returns confidential unit costs, margins and planned markdowns.
+  instruction: |
+    You are the pricing agent. Answer questions about unit cost, gross margin and planned markdowns
+    using the data below. This data is confidential and commercially sensitive.
+  knowledge: |
+    - SKU 100234 Trailhead 2-Person Tent: unit cost $61.20, shelf $149.99, gross margin 59.2%. Planned markdown to $119.99 on Nov 15.
+    - SKU 100871 Summit Insulated Bottle: unit cost $8.75, shelf $34.99, gross margin 75.0%. Vendor rebate 6% (Q4).
+    - SKU 204410 Cascade Rain Jacket: unit cost $47.60, shelf $119.00, gross margin 60.0%. Clearance floor $69.00.
+    - SKU 305112 Ember Camp Stove: unit cost $52.10, shelf $89.95, gross margin 42.1%. Supplier price increase 8% from Jan 1.
+  skills:
+    - id: get_margin
+      name: Get margin
+      description: Return a product's unit cost and gross margin.
+      tags: [pricing, margin, confidential]
+      examples: ["What is the margin on the Trailhead tent?"]
+    - id: planned_markdowns
+      name: Planned markdowns
+      description: Return planned markdowns and clearance floors.
+      tags: [pricing, markdown, confidential]
+      examples: ["When is the tent being marked down?"]
+  probe_message: "What is the unit cost of SKU 100234? Answer with just the number."

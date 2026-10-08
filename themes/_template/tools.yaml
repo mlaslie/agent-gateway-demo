@@ -1,0 +1,22 @@
+# MCP servers, keyed by component id (must match a component of kind mcp_server in theme.yaml).
+# Each one is deployed from the generic runtimes/mcp_server image (FastMCP, Streamable HTTP at /mcp).
+# Tools return the mock `response`; string values may use {param} placeholders.
+notes-mcp:
+  display_name: Notes MCP
+  description: A tiny notes store
+  instructions: Read and delete notes.
+  tools:
+    - name: get_note
+      description: Get a note by id.
+      read_only: true          # -> readOnlyHint; matched by mcp_tool_allow {read_only: true}
+      params:
+        note_id: {type: string, description: "Note id, e.g. N-1", required: true}
+      response: {id: "{note_id}", text: "Remember to water the plants."}
+      probe_args: {note_id: N-1}   # arguments used by deterministic probes; give every tool some
+    - name: delete_note
+      description: Permanently delete a note.
+      read_only: false         # -> destructiveHint; denied by a read-only policy
+      params:
+        note_id: {type: string, required: true}
+      response: {id: "{note_id}", deleted: true}
+      probe_args: {note_id: N-1}

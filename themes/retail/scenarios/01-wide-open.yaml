@@ -1,0 +1,21 @@
+id: wide-open
+order: 1
+title: "Wide open"
+subtitle: "Agent Runtime → anything"
+description: |
+  Store Ops Agent runs on Agent Runtime with no Agent Gateway. It finds the agents and MCP servers in
+  Agent Registry and calls them directly. Nothing governs what it can reach: confidential cost and
+  margin data, stock adjustments, catalog deletes and refunds are all available to it.
+flow: egress
+preconditions: []
+policies: [gw-egress]
+tests:
+  - id: everything
+    label: "Probe every connection"
+    prompt: "Check every agent and tool you can reach and tell me which ones worked."
+    probes: [{edge: merchandising-agent}, {edge: pricing-agent}, {edge: "inventory-mcp:get_item"},
+             {edge: "inventory-mcp:delete_item"}, {edge: "orders-mcp:lookup_order"}, {edge: "orders-mcp:issue_refund"}]
+  - id: margin
+    label: "Ask for a margin"
+    prompt: "What is our margin on the Trailhead 2-Person Tent?"
+    probes: [{edge: pricing-agent}]

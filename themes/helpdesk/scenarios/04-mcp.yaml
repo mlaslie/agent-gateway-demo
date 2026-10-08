@@ -1,0 +1,25 @@
+id: mcp
+order: 4
+title: "MCP tools"
+subtitle: "Agent Runtime → Agent Gateway → MCP server"
+description: |
+  Restrict Helpdesk Agent to the read-only tools of Tickets MCP. The gateway inspects each MCP
+  tools/call request and allows get/list but blocks close/delete. Directory MCP is allowed or blocked as a whole.
+flow: egress
+nodes: [orchestrator, egress_gateway, registry, tickets-mcp, directory-mcp]
+preconditions: [gw-egress]
+policies: [tickets-readonly, tickets-all, allow-directory]
+tests:
+  - id: read-ticket
+    label: "Read a ticket"
+    prompt: "What's the status of ticket INC-1042?"
+    probes: [{edge: "tickets-mcp:get_ticket"}]
+  - id: delete-ticket
+    label: "Delete a ticket"
+    prompt: "Delete ticket INC-1042."
+    probes: [{edge: "tickets-mcp:delete_ticket"}]
+  - id: all-tools
+    label: "Probe every tool"
+    prompt: "Check which ticket and directory tools you can use."
+    probes: [{edge: "tickets-mcp:list_tickets"}, {edge: "tickets-mcp:get_ticket"}, {edge: "tickets-mcp:close_ticket"},
+             {edge: "tickets-mcp:delete_ticket"}, {edge: "directory-mcp:lookup_user"}, {edge: "directory-mcp:reset_password"}]

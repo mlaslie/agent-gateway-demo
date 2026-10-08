@@ -1,0 +1,17 @@
+id: deny-all
+order: 2
+title: "Gateway: deny all"
+subtitle: "Agent Runtime → Agent Gateway ✕"
+description: |
+  Attach Agent Gateway to Store Ops Agent. The gateway denies everything by default: only platform
+  endpoints (Gemini, logging, sessions) are allowed. The agent still runs and can still talk to the
+  model, but every remote agent and MCP server is blocked until a policy allows it.
+flow: egress
+preconditions: []
+policies: [gw-egress]
+tests:
+  - id: everything
+    label: "Probe every connection"
+    prompt: "Check every agent and tool you can reach and tell me which ones worked."
+    probes: [{edge: merchandising-agent}, {edge: pricing-agent}, {edge: "inventory-mcp:get_item"},
+             {edge: "inventory-mcp:delete_item"}, {edge: "orders-mcp:lookup_order"}, {edge: "orders-mcp:issue_refund"}]

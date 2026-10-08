@@ -1,0 +1,17 @@
+# One file per UI tab, sorted by `order`. Edge ids: "<a2a id>", "<mcp id>:<tool>",
+# "ingress:allowed", "ingress:denied" (docs/CONTRACTS.md section 2).
+id: wide-open
+order: 1
+title: "Wide open"
+subtitle: "Agent Runtime → anything"
+description: |
+  Talk track shown in the UI. Starter Agent has no gateway, so it calls everything directly.
+flow: egress                 # egress | ingress
+nodes: []                    # node ids shown in this tab; empty = all egress nodes
+preconditions: []            # policy ids applied on entering the tab (Live: offered, not forced)
+policies: [gw-egress]        # policy ids the presenter can toggle in this tab
+tests:
+  - id: everything
+    label: "Probe every connection"
+    prompt: "Check every agent and tool you can reach and tell me which ones worked."
+    probes: [{edge: faq-agent}, {edge: "notes-mcp:get_note"}, {edge: "notes-mcp:delete_note"}]

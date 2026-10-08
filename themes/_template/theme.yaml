@@ -1,0 +1,77 @@
+# ---------------------------------------------------------------------------------------------
+# Starter theme. Copy this folder to themes/<your-id>/ and edit. Full reference:
+# docs/ADDING_A_THEME.md. Schema: agdemo_core/themes.py.
+#
+# Folders whose name starts with "_" are skipped by the UI and CLI theme lists, so this template
+# never shows up in the demo. Validate a copy with:
+#   uv run python -c "from agdemo_core.themes import load_theme, edge_ids; \
+#     t=load_theme('<your-id>'); print(t.name, len(t.scenarios), edge_ids(t))"
+# ---------------------------------------------------------------------------------------------
+
+# Must match the folder name. Lowercase letters, digits and hyphens; keep it short, because every
+# resource is named <resource_prefix>-<theme id>-<component id> (e.g. agdemo-mytheme-notes-mcp).
+id: _template
+name: Starter Theme                 # shown in the UI's Theme drop-down
+description: >
+  One orchestrator, one A2A agent and one MCP server. Replace this with a sentence describing
+  the use case.
+
+# The agent deployed on Agent Runtime (diagram node "orchestrator"). It does not get MCP toolsets
+# directly: it always has three function tools, list_capabilities / call_agent / call_mcp_tool
+# (docs/CONTRACTS.md section 6). Tell it in plain words which component to use for what.
+orchestrator:
+  id: starter-agent                 # Agent Runtime display/resource suffix
+  display_name: Starter Agent
+  description: Example orchestrator on Agent Runtime
+  instruction: |
+    You are a helpful assistant.
+    Use list_capabilities to see which remote agents and MCP tools exist.
+    - Use call_agent("faq-agent", ...) for general questions.
+    - Use call_mcp_tool("notes-mcp", ...) to read or delete notes.
+    Every tool returns an "outcome". If the outcome is "denied" or "blocked", tell the user plainly
+    that access was blocked by policy (name the agent or tool) and do not retry another way.
+  # model: gemini-2.5-flash         # optional; defaults to models.default in config/demo.yaml
+  # malicious_payload: "..."        # optional; text added to probes when a test is `malicious: true`
+
+# Every remote component. `id` must be unique in the theme and have a matching entry in
+# agents.yaml (kind a2a_agent) or tools.yaml (kind mcp_server). Each becomes a Cloud Run service.
+components:
+  - {id: faq-agent, kind: a2a_agent, role_label: "A2A agent"}
+  - {id: notes-mcp, kind: mcp_server, role_label: "MCP server"}
+
+# The policy catalog. Scenarios refer to these ids. `text` is the plain-English sentence shown
+# next to the Apply/Remove toggle; `explain` is an optional "under the hood" summary.
+# Types and params:
+#   gateway_attach   {path: egress|ingress}           bind the orchestrator to a gateway (default deny)
+#   a2a_allow        {target: <a2a component id>}     allow one A2A agent
+#   mcp_server_allow {target: <mcp component id>}     allow every tool on one MCP server
+#   mcp_tool_allow   {target: <mcp id>, read_only: true}  or  {target: <mcp id>, tools: [names]}
+#   ingress_allow    {caller: allowed|denied}         let a demo caller in through the ingress gateway
+policies:
+  - id: gw-egress
+    text: "All of Starter Agent's outbound traffic goes through Agent Gateway (default: deny everything)."
+    type: gateway_attach
+    params: {path: egress}
+  - id: gw-ingress
+    text: "All calls to Starter Agent must come in through Agent Gateway (default: deny everyone)."
+    type: gateway_attach
+    params: {path: ingress}
+  - id: allow-faq
+    text: "Starter Agent can talk to FAQ Agent over A2A."
+    type: a2a_allow
+    params: {target: faq-agent}
+  - id: notes-readonly
+    text: "Starter Agent can only use Notes MCP's read-only tools."
+    type: mcp_tool_allow
+    params: {target: notes-mcp, read_only: true}
+  - id: ingress-allowed-caller
+    text: "Only the allowed principal can call Starter Agent."
+    type: ingress_allow
+    params: {caller: allowed}
+    enforced: false
+    note: "Not enforced by GCP yet: the ingress gateway doesn't check caller identity (docs/ISSUES.md #1)."
+
+# Optional: fixed diagram positions {node id: [x, y]}. Leave empty for automatic layout.
+# Node ids: user, caller:allowed, caller:denied, ingress_gateway, orchestrator, egress_gateway,
+# registry, and your component ids.
+layout: {}

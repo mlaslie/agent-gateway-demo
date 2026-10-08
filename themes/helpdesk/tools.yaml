@@ -1,0 +1,57 @@
+tickets-mcp:
+  display_name: Tickets MCP
+  description: IT support ticketing system
+  instructions: Look up, close and delete IT support tickets.
+  tools:
+    - name: list_tickets
+      description: List open support tickets, optionally filtered by status (open, pending, closed).
+      read_only: true
+      params:
+        status: {type: string, description: "Ticket status filter"}
+      response:
+        - {id: INC-1042, title: "VPN drops every 30 minutes", status: open, owner: jdoe}
+        - {id: INC-1043, title: "Laptop battery not charging", status: pending, owner: asmith}
+        - {id: INC-1044, title: "Need access to finance share", status: open, owner: mlee}
+    - name: get_ticket
+      description: Get the details of one ticket by id.
+      read_only: true
+      params:
+        ticket_id: {type: string, description: "Ticket id, e.g. INC-1042", required: true}
+      response: {id: "{ticket_id}", title: "VPN drops every 30 minutes", status: open, priority: P3,
+                 notes: "User on macOS 15; reinstalling the VPN client did not help."}
+      probe_args: {ticket_id: INC-1042}
+    - name: close_ticket
+      description: Close a ticket with a resolution note.
+      read_only: false
+      params:
+        ticket_id: {type: string, required: true}
+        resolution: {type: string, required: true}
+      response: {id: "{ticket_id}", status: closed, resolution: "{resolution}"}
+      probe_args: {ticket_id: INC-1042, resolution: "probe"}
+    - name: delete_ticket
+      description: Permanently delete a ticket.
+      read_only: false
+      params:
+        ticket_id: {type: string, required: true}
+      response: {id: "{ticket_id}", deleted: true}
+      probe_args: {ticket_id: INC-1042}
+
+directory-mcp:
+  display_name: Directory MCP
+  description: Corporate user directory
+  instructions: Look up employees and reset passwords.
+  tools:
+    - name: lookup_user
+      description: Look up an employee by username or email.
+      read_only: true
+      params:
+        user: {type: string, required: true}
+      response: {user: "{user}", name: "Jordan Doe", department: Engineering, manager: "asmith", location: "Austin"}
+      probe_args: {user: jdoe}
+    - name: reset_password
+      description: Reset an employee's password and send a temporary one by email.
+      read_only: false
+      params:
+        user: {type: string, required: true}
+      response: {user: "{user}", reset: true, delivery: "temporary password emailed"}
+      probe_args: {user: jdoe}

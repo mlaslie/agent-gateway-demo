@@ -1,0 +1,30 @@
+id: mcp
+order: 4
+title: "MCP tools"
+subtitle: "Agent Runtime → Agent Gateway → MCP server"
+description: |
+  Restrict Store Ops Agent to Inventory MCP's read-only tools and to order lookups. The gateway
+  inspects each MCP tools/call request: list_stock and get_item are allowed, adjust_stock and
+  delete_item are blocked, and on Orders MCP lookup_order is allowed while issue_refund is blocked.
+flow: egress
+nodes: [orchestrator, egress_gateway, registry, inventory-mcp, orders-mcp]
+preconditions: [gw-egress]
+policies: [inventory-readonly, inventory-all, orders-lookup, allow-orders]
+tests:
+  - id: check-stock
+    label: "Check stock"
+    prompt: "How many Trailhead tents (SKU 100234) do we have at store ST-0412?"
+    probes: [{edge: "inventory-mcp:get_item"}]
+  - id: delete-item
+    label: "Delete an item"
+    prompt: "Delete SKU 100234 from the catalog."
+    probes: [{edge: "inventory-mcp:delete_item"}]
+  - id: refund
+    label: "Issue a refund"
+    prompt: "Look up order ORD-88213 and refund the customer $34.99 for the bottle."
+    probes: [{edge: "orders-mcp:lookup_order"}, {edge: "orders-mcp:issue_refund"}]
+  - id: all-tools
+    label: "Probe every tool"
+    prompt: "Check which inventory and order tools you can use."
+    probes: [{edge: "inventory-mcp:list_stock"}, {edge: "inventory-mcp:get_item"}, {edge: "inventory-mcp:adjust_stock"},
+             {edge: "inventory-mcp:delete_item"}, {edge: "orders-mcp:lookup_order"}, {edge: "orders-mcp:issue_refund"}]

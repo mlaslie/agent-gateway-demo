@@ -1,0 +1,5 @@
+# Generic MCP server runtime (pinned to the versions verified locally).
+mcp==2.3.0
+uvicorn==0.54.0
+starlette==1.7.0
+pydantic==2.13.5

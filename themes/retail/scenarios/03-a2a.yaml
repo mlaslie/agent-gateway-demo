@@ -1,0 +1,25 @@
+id: a2a
+order: 3
+title: "A2A agents on Cloud Run"
+subtitle: "Agent Runtime → Agent Gateway → A2A agent"
+description: |
+  Allow Store Ops Agent to reach Merchandising Agent over A2A, but not Pricing Agent. Product and
+  promotion questions keep working; cost and margin data stays behind the gateway. The policy is an
+  IAM grant on the Merchandising Agent's identity in Agent Registry, not a URL allowlist.
+flow: egress
+nodes: [orchestrator, egress_gateway, registry, merchandising-agent, pricing-agent]
+preconditions: [gw-egress]
+policies: [allow-merch, allow-pricing]
+tests:
+  - id: ask-promo
+    label: "Ask about promotions"
+    prompt: "Is the Ember Camp Stove on promotion this week, and where is it in the store?"
+    probes: [{edge: merchandising-agent}]
+  - id: ask-margin
+    label: "Ask for a margin"
+    prompt: "What is our margin on the Trailhead 2-Person Tent?"
+    probes: [{edge: pricing-agent}]
+  - id: both
+    label: "Probe both agents"
+    prompt: "Check whether you can reach the merchandising agent and the pricing agent."
+    probes: [{edge: merchandising-agent}, {edge: pricing-agent}]

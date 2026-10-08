@@ -1,0 +1,51 @@
+# Agent Gateway & Agent Registry demo — environment configuration.
+# Copy to config/demo.yaml (git-ignored) and edit. Every script, the CLI and the UI backend read this file.
+
+environment:
+  project_id: my-project              # Runtime agent, ingress gateway, Cloud Run services, UI
+  gateway_project_id: ""              # optional: project for the egress gateway + Agent Registry (defaults to project_id)
+  region: us-east4                    # gateways, Agent Runtime, Agent Registry and Cloud Run all use this region
+  resource_prefix: agdemo             # prefix for every created resource (lowercase, <= 10 chars)
+  labels:
+    app: agent-gateway-demo
+
+gateways:
+  create: true                        # false = reuse the existing gateways named below
+  egress_name: ""                     # default: <prefix>-egress
+  ingress_name: ""                    # default: <prefix>-ingress
+  iap_enforcement: ENFORCE            # ENFORCE | DRY_RUN
+
+models:
+  default: gemini-2.5-flash
+
+model_armor:
+  template_id: ""                     # default: <prefix>-shield
+  filters:
+    - prompt_injection_jailbreak
+    - sensitive_data
+
+cloud_run:
+  # Demo targets (mock MCP servers and A2A agents) serve fake data only.
+  # true  = allow unauthenticated invocation; enforcement happens at Agent Gateway.
+  # false = require a Google ID token (orchestrator signs calls with its service identity).
+  public_targets: true
+
+ui:
+  deploy: cloud_run                   # cloud_run | local
+  iap_access: []                      # e.g. ["group:demo-viewers@example.com"] - who can open the UI
+  admin_access: []                    # e.g. ["user:presenter@example.com"] - who can change Live policies
+
+ingress_demo:
+  allowed_principal: ""               # e.g. "user:presenter@example.com"
+  denied_principal: auto              # auto = create <prefix>-denied-caller SA with no access
+
+themes:
+  enabled: [helpdesk, retail]
+  default: helpdesk
+
+gemini_enterprise:                    # optional: GE Demo mode (paste prompts into Gemini Enterprise)
+  app_id: ""                          # engine id of the GE app; ./agdemo publish-ge <theme> registers orchestrators there
+  location: us                        # global | us | eu
+  app_url: ""                         # link shown in the UI header when GE Demo is on
+
+default_mode: live_with_fallback      # live | demo | live_with_fallback

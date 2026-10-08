@@ -1,0 +1,69 @@
+inventory-mcp:
+  display_name: Inventory MCP
+  description: Store inventory system
+  instructions: Check stock levels by store, look up items, adjust stock counts and remove items from the catalog.
+  tools:
+    - name: list_stock
+      description: List stock on hand for a store, optionally only items at or below their reorder point.
+      read_only: true
+      params:
+        store_id: {type: string, description: "Store id, e.g. ST-0412", required: true}
+        low_stock_only: {type: boolean, description: "Only return items at or below the reorder point"}
+      response:
+        store_id: "{store_id}"
+        items:
+          - {sku: "100234", name: "Trailhead 2-Person Tent", on_hand: 4, reorder_point: 6}
+          - {sku: "100871", name: "Summit Insulated Bottle 32 oz", on_hand: 57, reorder_point: 24}
+          - {sku: "204410", name: "Cascade Rain Jacket", on_hand: 12, reorder_point: 10}
+          - {sku: "305112", name: "Ember Camp Stove", on_hand: 0, reorder_point: 5, next_delivery: "2026-10-14"}
+      probe_args: {store_id: ST-0412}
+    - name: get_item
+      description: Get stock and location details for one SKU at a store.
+      read_only: true
+      params:
+        sku: {type: string, description: "SKU, e.g. 100234", required: true}
+        store_id: {type: string, description: "Store id, e.g. ST-0412"}
+      response: {sku: "{sku}", name: "Trailhead 2-Person Tent", store_id: ST-0412, on_hand: 4,
+                 in_transit: 12, location: "aisle 14, bay C", last_counted: "2026-10-05"}
+      probe_args: {sku: "100234", store_id: ST-0412}
+    - name: adjust_stock
+      description: Adjust the on-hand count for a SKU at a store (e.g. after a cycle count or damage).
+      read_only: false
+      params:
+        sku: {type: string, required: true}
+        store_id: {type: string, required: true}
+        delta: {type: integer, description: "Units to add (positive) or remove (negative)", required: true}
+        reason: {type: string, description: "cycle_count, damaged, theft, or received"}
+      response: {sku: "{sku}", store_id: "{store_id}", adjusted_by: "{delta}", reason: "{reason}", status: applied}
+      probe_args: {sku: "100234", store_id: ST-0412, delta: -1, reason: "probe"}
+    - name: delete_item
+      description: Permanently delete a SKU from the store catalog and inventory.
+      read_only: false
+      params:
+        sku: {type: string, required: true}
+      response: {sku: "{sku}", deleted: true}
+      probe_args: {sku: "100234"}
+
+orders-mcp:
+  display_name: Orders MCP
+  description: Customer order management
+  instructions: Look up customer orders and issue refunds.
+  tools:
+    - name: lookup_order
+      description: Look up a customer order by order number.
+      read_only: true
+      params:
+        order_id: {type: string, description: "Order number, e.g. ORD-88213", required: true}
+      response: {order_id: "{order_id}", status: delivered, channel: "buy online, pick up in store",
+                 store_id: ST-0412, placed: "2026-10-01", total: 184.98,
+                 items: [{sku: "100234", qty: 1, price: 149.99}, {sku: "100871", qty: 1, price: 34.99}]}
+      probe_args: {order_id: ORD-88213}
+    - name: issue_refund
+      description: Issue a refund for an order to the original payment method.
+      read_only: false
+      params:
+        order_id: {type: string, required: true}
+        amount: {type: number, description: "Refund amount in USD", required: true}
+        reason: {type: string}
+      response: {order_id: "{order_id}", refunded: "{amount}", reason: "{reason}", status: refund_issued}
+      probe_args: {order_id: ORD-88213, amount: 1.00, reason: "probe"}

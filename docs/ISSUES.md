@@ -1,0 +1,28 @@
+# Issues Found
+
+These are product gaps and surprises found while building and running this demo against real Google Cloud. Project `my-demo-project`, region `us-east4`, October 2026. Exact requests and responses are in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+Status key:
+- **Open:** a product gap, worked around in the demo.
+- **Mitigated:** handled in the demo code.
+- **Info:** behavior worth knowing.
+
+| # | Area | Issue | Status | How the demo handles it |
+|---|---|---|---|---|
+| 1 | Ingress gateway | The ingress gateway (`CLIENT_TO_AGENT`) **doesn't check who is calling**. `roles/iap.httpsResourceAccessor` was granted only to the allowed caller, yet the denied caller still got HTTP 200 for 22+ minutes, with both `iapPolicyVersion` V1 and V2. No IAP decision was logged for ingress callers, but Model Armor *did* apply on the same path. | Open | The "only the allowed caller" policy is marked `enforced: false`, and the UI shows a **Preview** badge on it. The simulator ignores it, so Demo and Live agree: both callers get through. The ingress tab demonstrates gateway governance with Model Armor instead (prompt-injection test). If enforcement starts working, set `enforced: true` in the theme files. |
+| 2 | Model Armor (egress) | Egress Model Armor screens **MCP `tools/call`** traffic but **not A2A** `message/send` traffic. A malicious A2A message to an allowed agent goes through. | Open | Simulator rule changed: on egress, only MCP edges become `blocked`. The scenario 6 talk track calls out the contrast. |
+| 3 | IAM conditions for MCP tools | A tool-level condition on `iap.googleapis.com/mcp.toolName` must also allow the empty string (`'' in [...]`). Without it, `initialize` and `tools/list` are denied and the MCP session never starts. | Mitigated | `egress_allow` always adds `''`. The documented `mcp.tool.isReadOnly` attribute hasn't been tested. |
+| 4 | Gateway bind/unbind time | A PATCH to `agentGatewayConfig` is a long-running operation that redeploys the agent container. Attaching egress took 5m11s; attaching or detaching ingress, or detaching egress, took about 2.5 minutes. While it runs, a GET on the engine still shows the old config. | Info | The UI shows the change as *pending* for up to `PENDING_SECONDS = 600`, and status reads the engine's operations. Use **Live with fallback**, or attach the gateway about 10 minutes before presenting. |
+| 5 | PATCH semantics | The PATCH replaces the whole `agentGatewayConfig`. Sending one direction drops the other. | Mitigated | The `gateway_attach` handler always re-sends the direction it isn't changing. |
+| 6 | Model Armor toggle time | Creating or deleting the Model Armor authz extension and policy pair takes about 4 minutes per gateway. | Info | The checkbox shows *pending*. Turn it on before the Model Armor segment. |
+| 7 | Default-deny platform endpoints | Under default deny, an Agent Runtime agent needs about 25 Google API hostnames registered and allowed: plain, `.mtls`, regional `.rep`, and some gRPC `:443` forms. Otherwise the agent can't reach Gemini, sessions, logging or tracing. | Mitigated | `bootstrap` registers them and grants a project-wide principal set. See ARCHITECTURE.md (g). |
+| 8 | TLS right after attach | The first call through the gateway right after an attach or a registration sometimes fails with `ssl/tls alert handshake failure`. | Info | Shown as `error`, not `denied`. Fallback mode replays it, and a re-probe clears it. |
+| 9 | Cloud Run reserved paths | Cloud Run reserves paths ending in `z`, so `GET /healthz` on the deployed targets returns Google's 404 page. | Info | Nothing in the deploy path uses `/healthz`; it's only for local runs. Rename it to `/health` if you need an external health check. |
+| 10 | Agent Registry and A2A cards | The registry accepted a2a-sdk 1.x agent cards, where the URL is in `supportedInterfaces[].url` with no top-level `url`, and the gateway matched the host correctly. Engines are registered automatically as agents. `gcloud agent-registry bindings` is for delegated OAuth, not the egress allowlist. | Info | Documented in ARCHITECTURE.md (a). |
+| 11 | Billing API | `cloudbilling` `projects.getBillingInfo` returned 403 for a project Owner. | Mitigated | `preflight` falls back to `gcloud billing projects describe`. |
+| 12 | IAM deny policies | An IAM deny policy would make the denied caller in #1 fail, but it needs `iam.denyAdmin`, which project Owner doesn't have. | Info | Not used; see #1. |
+| 13 | Model Armor block responses | The block looks different on each path:<br>• **Egress MCP:** HTTP 403 with a JSON-RPC `result.isError` body that carries the template's custom message.<br>• **Ingress:** HTTP 403 `PERMISSION_DENIED`, "Model Armor: Prompt violates content security configurations".<br>• **Policy deny:** HTTP 403 with plain text `Egress request is not authorized.` | Info | The orchestrator's `classify_failure()` treats a 403 that mentions Model Armor (including the template's `agdemo-model-armor-block` message) as `blocked`, and any other 403 as `denied`. |
+
+## Not yet verified
+- **The deployed UI behind IAP:** `./agdemo ui deploy` succeeded, and unauthenticated requests are redirected to Google sign-in. The signed-in app on Cloud Run hasn't been clicked through yet. The local UI against live GCP was tested end to end.
+- **Docker images:** never built locally (no Docker daemon). They were built with Cloud Build only.

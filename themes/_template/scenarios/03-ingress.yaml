@@ -1,0 +1,21 @@
+id: ingress
+order: 3
+title: "Users → agent"
+subtitle: "User → Agent Gateway → Agent Runtime"
+description: |
+  Callers reach Starter Agent through the ingress gateway. Only the allowed caller gets in.
+flow: ingress
+nodes: [caller:allowed, caller:denied, ingress_gateway, orchestrator]
+preconditions: []
+policies: [gw-ingress, ingress-allowed-caller]
+tests:
+  - id: allowed-caller
+    label: "Call as allowed user"
+    prompt: "What are the office hours?"
+    caller: allowed          # ingress tests only: which demo principal makes the call
+    probes: [{edge: "ingress:allowed"}]
+  - id: denied-caller
+    label: "Call as denied user"
+    prompt: "What are the office hours?"
+    caller: denied
+    probes: [{edge: "ingress:denied"}]

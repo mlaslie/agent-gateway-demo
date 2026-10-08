@@ -1,0 +1,17 @@
+id: deny-all
+order: 2
+title: "Gateway: deny all"
+subtitle: "Agent Runtime → Agent Gateway ✕"
+description: |
+  Attach Agent Gateway to Helpdesk Agent. The gateway denies everything by default: only platform
+  endpoints (Gemini, logging, sessions) are allowed. The agent still runs, but every remote agent and
+  MCP server is blocked until a policy allows it.
+flow: egress
+preconditions: []
+policies: [gw-egress]
+tests:
+  - id: everything
+    label: "Probe every connection"
+    prompt: "Check every agent and tool you can reach and tell me which ones worked."
+    probes: [{edge: kb-agent}, {edge: hr-records-agent}, {edge: "tickets-mcp:get_ticket"},
+             {edge: "tickets-mcp:delete_ticket"}, {edge: "directory-mcp:lookup_user"}, {edge: "directory-mcp:reset_password"}]

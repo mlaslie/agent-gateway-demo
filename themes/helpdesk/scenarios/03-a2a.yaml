@@ -1,0 +1,24 @@
+id: a2a
+order: 3
+title: "A2A agents on Cloud Run"
+subtitle: "Agent Runtime → Agent Gateway → A2A agent"
+description: |
+  Allow Helpdesk Agent to reach KB Agent over A2A, but not HR Records Agent. Through the gateway,
+  the policy decides which agents it can reach, using the identities in Agent Registry.
+flow: egress
+nodes: [orchestrator, egress_gateway, registry, kb-agent, hr-records-agent]
+preconditions: [gw-egress]
+policies: [allow-kb, allow-hr]
+tests:
+  - id: ask-kb
+    label: "Ask a KB question"
+    prompt: "How do I fix my VPN dropping every 30 minutes?"
+    probes: [{edge: kb-agent}]
+  - id: ask-hr
+    label: "Ask for a salary"
+    prompt: "What does jdoe earn?"
+    probes: [{edge: hr-records-agent}]
+  - id: both
+    label: "Probe both agents"
+    prompt: "Check whether you can reach the KB agent and the HR records agent."
+    probes: [{edge: kb-agent}, {edge: hr-records-agent}]

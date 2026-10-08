@@ -1,0 +1,5 @@
+# Generic ADK A2A agent runtime (pinned to the versions verified locally).
+google-adk[a2a]==2.11.0
+a2a-sdk[http-server]==1.2.2
+google-genai==2.28.0
+uvicorn==0.54.0
