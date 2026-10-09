@@ -1,5 +1,5 @@
 // HTTP client for the FastAPI backend (CONTRACTS §7).
-import type { AppConfig, GatewayLogsQuery, GatewayLogsResponse, Mode, PolicyStatus, ProbeResult, RecordResult, SseEvent, ThemeResponse, ThemeState, VerifyResult, SyncResult } from "./types";
+import type { AppConfig, GatewayLogsQuery, GatewayLogsResponse, Mode, PolicyStatus, ProbeResult, RecordResult, RegistryView, SseEvent, TerraformExport, ThemeResponse, ThemeState, VerifyResult, SyncResult } from "./types";
 
 export interface Api {
   getConfig(): Promise<AppConfig>;
@@ -22,6 +22,10 @@ export interface Api {
   explain(id: string, pid: string): Promise<{ lines: string[] }>;
   /** CONTRACTS §9: Agent Gateway request log entries for the theme, newest first. */
   gatewayLogs(id: string, mode: Mode, q?: GatewayLogsQuery): Promise<GatewayLogsResponse>;
+  /** CONTRACTS §10: the theme's Agent Registry entries and who may call each one. */
+  registry(id: string, mode: Mode, refresh?: boolean): Promise<RegistryView>;
+  /** CONTRACTS §11: Terraform for the theme's current policy state (read-only). */
+  terraform(id: string, mode: Mode, includeShared: boolean): Promise<TerraformExport>;
   readonly isMock: boolean;
 }
 
@@ -104,6 +108,8 @@ export const httpApi: Api = {
     if (q.limit !== undefined) qs.set("limit", String(q.limit));
     return req("GET", `/api/themes/${enc(id)}/gateway-logs?${qs}`);
   },
+  registry: (id, mode, refresh = false) => req("GET", `/api/themes/${enc(id)}/registry?mode=${enc(mode)}${refresh ? "&refresh=true" : ""}`),
+  terraform: (id, mode, includeShared) => req("GET", `/api/themes/${enc(id)}/terraform?mode=${enc(mode)}&include_shared=${includeShared}`),
   async runTest(id, testId, body, onEvent, signal) {
     const r = await fetch(`/api/themes/${enc(id)}/tests/${enc(testId)}/run`, {
       method: "POST",

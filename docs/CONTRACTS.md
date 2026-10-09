@@ -165,6 +165,9 @@ Every mutating request carries `mode: "live" | "demo" | "live_with_fallback"`. D
 | POST | `/api/themes/{id}/verify` | `{mode}` | `{ok, checks:[{id,label,ok,detail}]}`: fresh (uncached) check that the theme is back at step 1: every policy removed, Model Armor off, and every egress connection probes `direct` |
 | POST | `/api/themes/{id}/tests/{test_id}/record` | | Live only. Runs the test and saves a recording |
 | GET | `/api/themes/{id}/policies/{pid}/explain` | | `{lines:[...]}` |
+| GET | `/api/themes/{id}/gateway-logs?mode=&since=&denied_only=&limit=` | | Gateway log entries (§9) |
+| GET | `/api/themes/{id}/registry?mode=&refresh=` | | Agent Registry entries and who may call each one (§10). Read-only |
+| GET | `/api/themes/{id}/terraform?mode=&include_shared=` | | Terraform for the theme's current policy state (§11). Read-only |
 
 The SSE events, all of which are JSON in the `data:` field:
 
@@ -256,3 +259,122 @@ The ingress gateway writes none, so these logs cover egress only (see ISSUES.md 
 - Entries only come from hosts that belong to the theme's components.
 - In **Demo** mode, and for runs that fell back to replay or simulation, entries are synthesized from the run's governed edge results. They have the same shape, with `simulated: true`, and their `raw` mimics the real format.
 - Expect a delay of a few seconds to about a minute before real entries can be read.
+- **Calling agent** (themes with `additional_orchestrators`, §12): see "Gateway log attribution" in §12. Entries then also carry `caller: {"orchestrator": <id or null for the primary>, "display_name"}` (or `null`), and the summary ends with "(from <agent>)".
+
+## 10. Registry view <a id="registry-view"></a>
+
+`GET /api/themes/{id}/registry?mode=&refresh=<bool>` lists the theme's Agent Registry entries and, for each one, who holds `roles/iap.egressor` on it (who may call it through Agent Gateway). It never changes anything in GCP: in Live it only lists the registry projections (`agents`, `mcpServers`, `endpoints`) and calls IAP `getIamPolicy` on `iap.googleapis.com/v1/projects/<NUM>/locations/<R>/iap_web/agentRegistry/{agents|mcpServers|endpoints}/<id>`. Logic: `agdemo_core/gcp/registry_view.py`.
+
+```json
+{"theme": "helpdesk", "source": "live|simulated", "fetched_at": "<iso>",
+ "console_url": "https://console.cloud.google.com/agent-platform/agent-registry?project=P",
+ "orchestrator": {"display_name": "Helpdesk Agent", "principal": "principal://agents.global.org-…/reasoningEngines/123"},
+ "agents": [RegistryItem, ...],          // the theme's A2A agents, then the orchestrator's auto-registered entry
+ "mcp_servers": [RegistryItem, ...],
+ "endpoints": {"count": 25, "items": [RegistryItem, ...]},   // <prefix>-plat-* platform endpoints
+ "error": "list endpoints: HTTP 403 …"}  // only when part of the view could not be read (or why it is simulated)
+```
+
+`RegistryItem`:
+
+```json
+{"id": "tickets-mcp",                    // component id, "orchestrator", or the endpoint URL
+ "kind": "a2a_agent|mcp_server|endpoint|orchestrator",
+ "display_name": "…", "label": "auto-registered (Agent Runtime)",   // label: orchestrator only
+ "resource": "projects/P/locations/R/mcpServers/agentregistry-…", "registry_id": "agentregistry-…",
+ "description": "…", "url": "https://…/mcp",
+ "card": {"name", "description", "version", "protocol_version", "skills": [Skill]},   // A2A agents
+ "skills": [{"id", "name", "description", "tags": []}],                               // A2A agents
+ "tools": [{"name", "description", "read_only": true,                                // MCP servers
+            "annotations": {"readOnlyHint": true, "idempotentHint": true}}],
+ "access": [Access, ...],                // [] = no one (default deny); null when the IAP policy couldn't be read
+ "access_error": null, "error": null}    // per-item failures; the rest of the view still loads
+```
+
+`Access` (one per member of each `roles/iap.egressor` binding):
+
+```json
+{"member": "principal://…", "member_label": "Helpdesk Agent (Agent Identity)",
+ "member_kind": "orchestrator|project_agents|agent|user|service_account|group|domain|other",
+ "role": "roles/iap.egressor",
+ "condition": {"title": "agdemo helpdesk tickets-readonly-hints", "expression": "api.getAttribute(…)"} ,   // null = unconditional
+ "policy_id": "tickets-readonly-hints",  // the theme policy that creates this binding, else null
+ "policy_text": "…", "note": "platform allowlist (./agdemo bootstrap)"}
+```
+
+- The orchestrator's principal becomes "<orchestrator> (Agent Identity)"; the project's `principalSet://…/attribute.platformContainer/aiplatform/projects/<NUM>` becomes "All agents in project (Agent Identity)".
+- `policy_id` matches orchestrator bindings to theme policies: unconditional for `a2a_allow` / `mcp_server_allow`, and the exact condition expression from `egress_allow.condition()` for `mcp_tool_allow`.
+- Live results are cached for 15 s per theme (`refresh=true` skips the cache); GCP calls run in a thread pool.
+- **Demo** mode (and `live_with_fallback` when Live isn't available) returns the same shape with `source: "simulated"`, built from the theme files (`agents.yaml` skills, `tools.yaml` `read_only` as the MCP hints) and the bindings the applied Demo policies would create. `mode=live` without Live access returns 409.
+
+## 11. Terraform export <a id="terraform-export"></a>
+
+`GET /api/themes/{id}/terraform?mode=&include_shared=<bool>` renders Terraform (HCL) for the theme's current policy state. It never changes anything in GCP. Logic: `agdemo_core/terraform.py` (`render(cfg, state, theme, applied, model_armor, include_shared) -> {"main.tf", "variables.tf", "README.md"}`, a pure function); CLI: `./agdemo export-terraform <theme> [--out DIR] [--include-shared]` (Live state, default output `config/generated/terraform/<theme>`).
+
+```json
+{"theme": "helpdesk", "source": "live|simulated",
+ "files": {"main.tf": "…", "variables.tf": "…", "README.md": "…"},
+ "applied": ["gw-egress", "allow-kb", "tickets-readonly-hints"],     // theme order
+ "model_armor": false, "include_shared": false,
+ "state_line": "gw-egress, allow-kb, tickets-readonly-hints · Model Armor off",
+ "error": "…"}                                                         // only when live_with_fallback fell back
+```
+
+- **Policy state** is the one the UI shows. Live: the handlers' desired applied set (`applied` and not `pending_removal`, i.e. `LiveEngine.signature_now`) plus the Model Armor status. Demo: the in-memory Demo store. `live_with_fallback` without Live access uses the Demo store with `source: "simulated"` and `error`; `mode=live` returns 409.
+- Ids come from `config/state.json` (engine, orchestrator principal, registry projection ids, Cloud Run URLs); missing values become UPPER_CASE placeholders, listed in a `PLACEHOLDERS` comment.
+- Provider: `hashicorp/google` `>= 8.1.0` (no `google-beta`), Terraform `>= 1.5`. Variables: `project_id`, `project_number`, `gateway_project_id`, `gateway_project_number` (both default to the main project), `region`, `prefix`.
+- Mapping (resources named after the policy id, each with a comment holding the policy text):
+
+| Policy | Terraform |
+|---|---|
+| `a2a_allow` | `google_iap_agent_registry_agent_iam_member` (`roles/iap.egressor`, member = orchestrator principal, `project` = gateway project number) |
+| `mcp_server_allow` | `google_iap_agent_registry_mcp_server_iam_member` |
+| `mcp_tool_allow` | the same with `condition {}` = `egress_allow.condition(theme, policy)` (tool names, or `mcp.tool.isReadOnly`) |
+| `gateway_attach` (egress / ingress) | one `terraform_data.gateway_binding` with a `local-exec` `curl -X PATCH …?updateMask=spec.deploymentSpec.agentGatewayConfig` carrying every attached direction, and a destroy-time PATCH with `{}`; commented `google_vertex_ai_reasoning_engine.spec.deployment_spec.agent_gateway_config` example |
+| Model Armor on | `google_network_security_authz_policy.model_armor_{egress,ingress}` (`CONTENT_AUTHZ`, `CUSTOM`, Model Armor authz extension) |
+
+- `include_shared=false` references the shared resources by name in `locals`. `include_shared=true` also emits them: `google_network_services_agent_gateway` ×2, `google_network_services_authz_extension` (IAP egress, Model Armor per gateway project), `google_network_security_authz_policy` (IAP `REQUEST_AUTHZ`), `google_model_armor_template`, `google_agent_registry_service` (theme components with their A2A card / MCP tool spec, and the platform endpoints) with `google_iap_agent_registry_endpoint_iam_member` for all project agents, the UI and targets service accounts, and project IAM (UI, targets, presenters, orchestrator identity, Model Armor service agents). Registry ids then come from `basename(google_agent_registry_service.<c>.registry_resource)`.
+- Output passes `terraform fmt -check` and `terraform validate` (checked against provider 8.6.0); it has not been applied to GCP.
+
+## 12. Multiple agents per theme (backlog #3) <a id="multi-agent"></a>
+
+A theme can have **additional orchestrators** next to the primary one. They're separate Agent Runtime engines, each with its own Agent Identity, built from the same orchestrator package (their own `ORCHESTRATOR_SPEC`, with the same topology). They're bound to the **same** shared gateways, because GCP requires one egress and one ingress gateway per project and region. The point the demo makes is that access follows the agent's identity.
+
+**theme.yaml**
+
+```yaml
+orchestrator: {...}                      # primary, unchanged
+additional_orchestrators:                # optional, default []
+  - id: hr-assistant                     # short id, unique in the theme
+    display_name: HR Assistant
+    description: ...
+    instruction: ...
+```
+
+**Policies** take an optional `params.source: <orchestrator id>`. Without it, the policy applies to the primary orchestrator, so existing policies are unchanged.
+- `gateway_attach{path: egress, source: hr-assistant}` binds *that* engine to the egress gateway.
+- `a2a_allow` / `mcp_server_allow` / `mcp_tool_allow` with a `source` grant `roles/iap.egressor` to *that* engine's Agent Identity principal.
+- Ingress policies stay primary-only.
+
+**Edge ids.** Primary edges are unchanged (`kb-agent`, `tickets-mcp:get_ticket`, `ingress:user`). Edges from an additional orchestrator are `<orchestrator id>/<edge>`, for example `hr-assistant/hr-records-agent` or `hr-assistant/tickets-mcp:get_ticket`. Helpers in `agdemo_core/themes.py`:
+- `split_source(edge) -> (orchestrator_id | None, base_edge)`
+- `source_edge(orchestrator_id | None, base_edge) -> str`
+- `orchestrator_ids(theme)`
+
+`edge_ids(theme)` returns the primary egress edges, then every additional orchestrator's egress edges, then `ingress:user`.
+
+**Node ids.** `orchestrator` is the primary; `orchestrator:<id>` is an additional one. Scenarios list the nodes they show, e.g. `[orchestrator, orchestrator:hr-assistant, egress_gateway, registry, kb-agent, hr-records-agent]`.
+
+**Simulator.** Each orchestrator is evaluated on its own. Its egress edges are `direct` unless *its* egress `gateway_attach` (matched by `source`) is applied. When it is applied, an edge is allowed only by allow policies with the same `source`. Model Armor rules are unchanged.
+
+**state.json.** The primary stays at `themes.<t>.orchestrator`. Additional ones go in `themes.<t>.orchestrators.<id> = {engine, principal, registry, display_name, identity_type}`.
+
+**Probes and runs.** The backend groups edges by orchestrator and sends each group's base edge ids to that engine's `__PROBE__`. Results are mapped back to prefixed edge ids. A test can name its agent with `ScenarioTest.agent: <orchestrator id>` (default primary); natural-language runs (`use_llm`) go to that agent's engine.
+
+**Reset and Verify** cover every orchestrator's gateway binding and allows. Recording signatures and the Terraform export include `source` policies like any other.
+
+**Verified notes (2026-10-08, helpdesk + HR Assistant, live)**
+- Implementation: `Theme.additional_orchestrators`, `ScenarioTest.agent`, `split_source` / `source_edge` / `orchestrator_ids` / `base_egress_edges` in `agdemo_core/themes.py`; the loader rejects an unknown `source`, `source` on an ingress `gateway_attach`, an unknown `orchestrator:<id>` scenario node and an unknown test `agent`. Graph nodes `orchestrator:<id>` have `type: "orchestrator"`, `label` = display name, `sublabel` "Agent Runtime · <id>"; their edges are the primary's with `id` prefixed and `source: "orchestrator:<id>"`. Simulated labels name the caller ("HR Assistant → HR Records Agent"). `/registry` adds the additional orchestrators' auto-registered entries (`id: "orchestrator:<id>"`), labels their principals "<name> (Agent Identity)" (`member_kind: "orchestrator"`, `policy_id` matched within the same `source`) and returns `additional_orchestrators: [{id, display_name, principal}]`. Terraform: `member = local.agent_principals["<id>"]` for sourced allows, and one `terraform_data.gateway_binding_<id>` per additional engine that has a gateway.
+- Engines: `deploy-theme` creates `<prefix>-<theme>-<id>` (AGENT_IDENTITY, no gateway) and reuses existing engines; the two engines' gateway PATCHes run in parallel (they're serialized per engine only). Applying `gw-egress` + `gw-egress-hr` + `allow-kb` + `hr-assistant-allow-hr` gave: Helpdesk Agent → KB allowed, Helpdesk Agent → HR Records denied (403 "Egress request is not authorized"), HR Assistant → HR Records allowed, HR Assistant → KB denied. Probes sent right after the PATCH operation finished can still reach the old (unbound) revision and come back as plain successes for a minute or so.
+- **Gateway log attribution.** `gateway_requests` entries have no principal or engine field. They do carry the calling agent's mTLS client certificate fingerprint (`jsonPayload.mtls.clientCertSha256Fingerprint`): it differs per engine and is the same on that engine's own platform calls, whose URL names the engine (`…/reasoningEngines/<id>/sessions/…:appendEvent`). The fingerprint rotates (it changed for the same engine across a redeploy), so `gateway_logs.fetch` learns `{fingerprint: orchestrator}` per query from platform entries of the theme's engines (2 h before `since`) and maps each entry to the caller's edge (`hr-assistant/hr-records-agent`). Entries whose fingerprint isn't matched (or matches several engines) get `edge: null` (with `component` set) in a theme with additional orchestrators; themes with one orchestrator are unchanged. Not every request is necessarily logged: some probe calls in this run had no entry.
+

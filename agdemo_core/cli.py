@@ -63,21 +63,24 @@ def bootstrap():
 def deploy_theme(theme: str,
                  skip_build: bool = typer.Option(False, help="Reuse the images already in Artifact Registry"),
                  only: Optional[str] = typer.Option(None, help="images|run|registry|engine (one step)"),
-                 recreate_engine: bool = typer.Option(False, help="Delete and recreate the orchestrator engine"),
+                 recreate_engine: bool = typer.Option(False, help="Delete and recreate the orchestrator engines "
+                                                      "(primary and additional)"),
                  update_engine: bool = typer.Option(False, help="Push new orchestrator code/spec to the existing "
-                                                    "engine (keeps its identity, gateway binding and IAM)")):
-    """Build + deploy a theme: Cloud Run targets, Agent Registry entries, orchestrator on Agent Runtime
-    (Agent Identity, no gateway)."""
+                                                    "engines (keeps identity, gateway binding and IAM)")):
+    """Build + deploy a theme: Cloud Run targets, Agent Registry entries, orchestrators on Agent Runtime
+    (Agent Identity, no gateway): the primary and every additional_orchestrators entry."""
     from .infra import deploy_theme as d
     d.run(_cfg(), theme, skip_build=skip_build, only=only, recreate_engine=recreate_engine,
           update_engine=update_engine)
 
 
 @app.command("publish-ge")
-def publish_ge(theme: str):
+def publish_ge(theme: str,
+               agent: Optional[str] = typer.Option(None, "--agent", help="Additional orchestrator id to publish "
+                                                   "instead of the primary (default: the primary)")):
     """Register a theme's orchestrator in the Gemini Enterprise app from config (GE Demo mode)."""
     from .infra import publish_ge as g
-    g.run(_cfg(), theme)
+    g.run(_cfg(), theme, agent)
 
 
 @app.command()
@@ -92,6 +95,44 @@ def reset(theme: str, wait: bool = typer.Option(False, help="Wait for gateway de
     """Return a theme to wide open: remove every policy and detach the gateways."""
     from .infra import status as s
     s.reset(_cfg(), theme, wait=wait)
+
+
+@app.command("export-terraform")
+def export_terraform(theme: str,
+                     out: Optional[str] = typer.Option(None, "--out", help="Output directory "
+                                                       "(default: config/generated/terraform/<theme>)"),
+                     include_shared: bool = typer.Option(False, "--include-shared",
+                                                         help="Also emit the shared resources created by bootstrap "
+                                                              "and deploy-theme (gateways, extensions, registry, IAM)")):
+    """Write Terraform for a theme's current Live policy state (read-only: reads GCP, changes nothing)."""
+    from pathlib import Path
+
+    from . import terraform as tf
+    from .config import CONFIG_DIR
+    from .policies import Ctx, get_handler, model_armor_handler
+    from .themes import load_theme
+
+    cfg = _cfg()
+    t = load_theme(theme)
+    ctx = Ctx.load()
+    applied = set()
+    for p in t.policies:
+        st = get_handler(p.type).status(ctx, t, p)
+        if st["status"] == "error":
+            c.console.print(f"[yellow]{p.id}: could not read status ({st['detail'][:160]}); treated as not applied[/]")
+        elif st["applied"] and st["status"] != "pending_removal":
+            applied.add(p.id)
+    ma = model_armor_handler().status(ctx)
+    if ma.get("status") == "error":
+        c.console.print(f"[yellow]Model Armor: could not read status ({ma.get('detail', '')[:160]}); treated as off[/]")
+    files = tf.render(cfg, ctx.state, t, applied, bool(ma.get("enabled")), include_shared)
+    d = Path(out) if out else CONFIG_DIR / "generated" / "terraform" / theme
+    d.mkdir(parents=True, exist_ok=True)
+    for name, text in files.items():
+        (d / name).write_text(text)
+    c.console.print(f"Policy state: {tf.state_line(t, applied, bool(ma.get('enabled')))}")
+    c.console.print(f"[green]wrote[/] {', '.join(files)} to {d}")
+    c.console.print(f"Next: cd {d} && terraform init && terraform plan  (review before applying)")
 
 
 @app.command()

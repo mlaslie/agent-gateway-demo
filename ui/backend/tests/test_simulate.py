@@ -37,7 +37,7 @@ def test_wide_open_ignores_allow_policies_and_model_armor(theme):
 def test_gateway_default_deny(theme):
     r = simulate.evaluate(theme, {"gw-egress"}, False)
     for e, v in r.items():
-        if e.startswith("ingress:"):
+        if e.startswith("ingress:") or "/" in e:     # ingress, and the additional orchestrator's own (unbound) edges
             assert v["state"] == "direct"
         else:
             assert v["state"] == "denied" and v["http_status"] == 403 and v["governed"]

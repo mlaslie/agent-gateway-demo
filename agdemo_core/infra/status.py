@@ -48,6 +48,12 @@ def run(cfg: DemoConfig, theme_id: str | None = None) -> None:
         if eng:
             tt.add_row("  identity", f"{eng.get('spec', {}).get('identityType')} {o.get('principal', '')}")
             tt.add_row("  agentGatewayConfig", str(engines.gateway_config(eng) or "{} (wide open)"))
+        for oid, x in (ts.get("orchestrators") or {}).items():      # additional orchestrators (CONTRACTS §12)
+            xe = engines.get_engine(r, cfg, x["engine"]) if x.get("engine") else None
+            tt.add_row(f"orchestrator {oid}", x.get("engine", "[red]not deployed[/]"))
+            if xe:
+                tt.add_row("  identity", f"{xe.get('spec', {}).get('identityType')} {x.get('principal', '')}")
+                tt.add_row("  agentGatewayConfig", str(engines.gateway_config(xe) or "{} (wide open)"))
         for cid, v in ts.get("components", {}).items():
             tt.add_row(cid, f"{v.get('url', '')}  registry={v.get('registry', '')}")
         for p in theme.policies:
@@ -70,8 +76,10 @@ def reset(cfg: DemoConfig, theme_id: str, wait: bool = False) -> None:
             h.remove(ctx, theme, p)
     if wait:
         r = c.client(cfg)
-        o = ctx.state.get("themes", {}).get(theme_id, {}).get("orchestrator", {})
-        while o.get("engine") and engines.inflight(r, cfg, o["engine"]):
+        ts = ctx.state.get("themes", {}).get(theme_id, {})
+        engs = [o["engine"] for o in [ts.get("orchestrator", {}), *(ts.get("orchestrators") or {}).values()]
+                if o.get("engine")]
+        while any(engines.inflight(r, cfg, e) for e in engs):
             c.log("  ... waiting for engine PATCH")
             time.sleep(20)
     c.log(f"[green]{theme_id} reset to wide open[/] (gateway detach may take minutes)")

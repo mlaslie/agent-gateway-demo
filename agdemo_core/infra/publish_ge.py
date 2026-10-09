@@ -22,16 +22,25 @@ def app_resource(cfg: DemoConfig) -> str:
             f"/collections/default_collection/engines/{ge.app_id}")
 
 
-def run(cfg: DemoConfig, theme_id: str) -> None:
+def run(cfg: DemoConfig, theme_id: str, agent: str | None = None) -> None:
+    """Publish the theme's primary orchestrator, or the additional orchestrator `agent` (CONTRACTS §12)."""
     if not cfg.gemini_enterprise.app_id:
         raise SystemExit("gemini_enterprise.app_id is not set in config/demo.yaml")
     if not shutil.which("agents-cli"):
         raise SystemExit("agents-cli not found on PATH (needed for Gemini Enterprise registration)")
     theme = load_theme(theme_id)
-    engine = load_state().get("themes", {}).get(theme_id, {}).get("orchestrator", {}).get("engine")
+    if agent and agent not in {x.id for x in theme.additional_orchestrators}:
+        if agent == theme.orchestrator.id:
+            agent = None
+        else:
+            raise SystemExit(f"theme {theme_id} has no agent {agent!r} (additional orchestrators: "
+                             f"{', '.join(x.id for x in theme.additional_orchestrators) or 'none'})")
+    ts = load_state().get("themes", {}).get(theme_id, {})
+    rec = ts.get("orchestrator", {}) if not agent else (ts.get("orchestrators") or {}).get(agent, {})
+    engine = rec.get("engine")
     if not engine:
         raise SystemExit(f"theme {theme_id} is not deployed; run ./agdemo deploy-theme {theme_id} first")
-    o = theme.orchestrator
+    o = theme.orchestrator_for(agent)
     cmd = ["agents-cli", "publish", "gemini-enterprise",
            "--registration-type", "adk",
            "--agent-runtime-id", engine,

@@ -72,6 +72,7 @@ export interface Orchestrator {
   id: string;
   display_name: string;
   description?: string;
+  instruction?: string;
 }
 export interface Component {
   id: string;
@@ -87,7 +88,8 @@ export interface Policy {
   id: string;
   text: string;
   type: PolicyType;
-  params: Record<string, unknown>;
+  /** `params.source`: id of an additional orchestrator this policy is for (CONTRACTS §12); absent = primary. */
+  params: Record<string, unknown> & { source?: string };
   explain?: string;
   /** Measured GCP propagation times (seconds) for applying / removing this policy. */
   typical_seconds?: number | null;
@@ -99,6 +101,10 @@ export interface ScenarioTest {
   prompt: string;
   probes: { edge: string }[];
   malicious?: boolean;
+  /** Orchestrator that runs this test (CONTRACTS §12); absent = the primary. */
+  agent?: string | null;
+  /** Edge id → canned reply shown by the simulator for a successful call. */
+  sample_replies?: Record<string, string>;
 }
 export interface Scenario {
   id: string;
@@ -117,6 +123,8 @@ export interface Theme {
   name: string;
   description?: string;
   orchestrator: Orchestrator;
+  /** Other Agent Runtime agents sharing the same gateways (CONTRACTS §12). */
+  additional_orchestrators?: Orchestrator[];
   components: Component[];
   policies: Policy[];
   layout: Record<string, [number, number]>;
@@ -233,4 +241,80 @@ export interface GatewayLogsQuery {
 export interface SyncResult {
   policies: { id: string; label: string; applied: boolean; status: string; detail: string }[];
   model_armor: { enabled: boolean; status: string; detail: string };
+}
+
+// ---- Agent Registry view (CONTRACTS §10) ----
+/** One member holding roles/iap.egressor on a registry entry (may call it through Agent Gateway). */
+export interface RegistryAccess {
+  member: string;
+  member_label: string;
+  member_kind: "orchestrator" | "project_agents" | "agent" | "user" | "service_account" | "group" | "domain" | "other";
+  role: string;
+  condition: { title: string; expression: string } | null;
+  /** The theme policy that created this binding, when it matches one. */
+  policy_id: string | null;
+  policy_text: string | null;
+  note: string | null;
+}
+
+export interface RegistrySkill {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+}
+
+export interface RegistryTool {
+  name: string;
+  description: string;
+  read_only: boolean;
+  annotations: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
+}
+
+export interface RegistryItem {
+  /** Component id, "orchestrator", or the endpoint URL. */
+  id: string;
+  kind: "a2a_agent" | "mcp_server" | "endpoint" | "orchestrator";
+  display_name: string;
+  label?: string;
+  resource: string;
+  registry_id: string;
+  description: string;
+  url: string | null;
+  protocol?: string | null;
+  card?: { name: string; description: string; version: string | null; protocol_version: string | null; skills: RegistrySkill[] } | null;
+  skills?: RegistrySkill[];
+  tools?: RegistryTool[];
+  /** null when the IAP policy couldn't be read (see access_error). */
+  access: RegistryAccess[] | null;
+  access_error: string | null;
+  error: string | null;
+}
+
+export interface RegistryView {
+  theme: string;
+  source: "live" | "simulated";
+  fetched_at: string;
+  console_url: string | null;
+  orchestrator: { display_name: string; principal: string | null };
+  agents: RegistryItem[];
+  mcp_servers: RegistryItem[];
+  endpoints: { count: number; items: RegistryItem[] };
+  error?: string;
+}
+
+// ---- Terraform export (CONTRACTS §11) ----
+export interface TerraformExport {
+  theme: string;
+  /** File name -> content: main.tf, variables.tf, README.md. */
+  files: Record<string, string>;
+  /** Policy ids the export reflects (theme order). */
+  applied: string[];
+  model_armor: boolean;
+  include_shared: boolean;
+  source: "live" | "simulated";
+  /** e.g. "gw-egress, allow-kb · Model Armor off" */
+  state_line: string;
+  /** Live unavailable in live_with_fallback: exported from the Demo-mode state instead. */
+  error?: string;
 }

@@ -5,7 +5,7 @@ from typing import Any
 
 from ..gcp.rest import Rest, rest
 from ..state import load_state
-from ..themes import Theme
+from ..themes import Policy, Theme
 from .base import Ctx, PolicyStatus, now_iso
 
 
@@ -22,19 +22,33 @@ def theme_state(ctx: Ctx, theme: Theme) -> dict[str, Any]:
     return st
 
 
-def engine(ctx: Ctx, theme: Theme) -> str:
-    e = theme_state(ctx, theme).get("orchestrator", {}).get("engine")
+def orchestrator_state(ctx: Ctx, theme: Theme, source: str | None = None) -> dict[str, Any]:
+    """state.json record of the primary orchestrator (source None) or of an additional one (CONTRACTS §12)."""
+    ts = theme_state(ctx, theme)
+    if source is None:
+        return ts.get("orchestrator", {}) or {}
+    return (ts.get("orchestrators", {}) or {}).get(source, {}) or {}
+
+
+def source(policy: Policy | None) -> str | None:
+    """The orchestrator a policy applies to (params.source), None = the primary."""
+    return (policy.params.get("source") or None) if policy is not None else None
+
+
+def engine(ctx: Ctx, theme: Theme, source: str | None = None) -> str:
+    e = orchestrator_state(ctx, theme, source).get("engine")
     if not e:
-        raise NotDeployed(f"theme {theme.id}: no orchestrator engine in state.json (run ./agdemo deploy-theme {theme.id})")
+        who = f"orchestrator {source}" if source else "orchestrator"
+        raise NotDeployed(f"theme {theme.id}: no {who} engine in state.json (run ./agdemo deploy-theme {theme.id})")
     return e
 
 
-def principal(ctx: Ctx, theme: Theme) -> str:
-    o = theme_state(ctx, theme).get("orchestrator", {})
+def principal(ctx: Ctx, theme: Theme, source: str | None = None) -> str:
+    o = orchestrator_state(ctx, theme, source)
     if o.get("principal"):
         return o["principal"]
     from ..gcp.engines import get_engine, principal as p
-    e = engine(ctx, theme)
+    e = engine(ctx, theme, source)
     return p(ctx.config, get_engine(r(ctx), ctx.config, e), e)
 
 
@@ -54,4 +68,4 @@ def error(e: Exception) -> PolicyStatus:
     return {"applied": False, "status": "error", "detail": f"{type(e).__name__}: {e}"[:500], "changed_at": None}
 
 
-__all__ = ["r", "engine", "principal", "component_registry", "status", "error", "now_iso", "NotDeployed"]
+__all__ = ["r", "engine", "principal", "orchestrator_state", "source", "component_registry", "status", "error", "now_iso", "NotDeployed"]

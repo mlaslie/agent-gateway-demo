@@ -16,7 +16,8 @@ from typing import Any, AsyncIterator
 from agdemo_core import recordings, simulate
 from agdemo_core.policies.base import PENDING_SECONDS, Ctx
 from agdemo_core.runtime_client import RuntimeCallError
-from agdemo_core.themes import INGRESS_EDGE, MODEL_ARMOR_TYPICAL_SECONDS, Policy, ScenarioTest, Theme, edge_ids, load_theme
+from agdemo_core.themes import (INGRESS_EDGE, MODEL_ARMOR_TYPICAL_SECONDS, Policy, ScenarioTest, Theme, edge_ids,
+                                load_theme, source_edge, split_source)
 
 from . import settings
 
@@ -107,14 +108,15 @@ def policy_edges(theme: Theme, policy: Policy) -> list[str]:
     """Edges whose state a policy can change (used for pending + probe confirmation)."""
     all_e = edge_ids(theme)
     t, prm = policy.type, policy.params
+    src = simulate.policy_source(policy)          # the orchestrator it applies to (CONTRACTS §12)
     if t == "gateway_attach":
         if prm.get("path", "egress") == "ingress":
             return list(simulate.INGRESS_EDGES)
-        return simulate.egress_edge_ids(theme)
+        return simulate.orchestrator_egress_edges(theme, src)
     if t == "a2a_allow":
-        return [prm.get("target")]
+        return [source_edge(src, prm.get("target"))]
     if t in ("mcp_server_allow", "mcp_tool_allow"):
-        return [e for e in all_e if e.startswith(f"{prm.get('target')}:")]
+        return [e for e in all_e if e.startswith(f"{source_edge(src, prm.get('target'))}:")]
     return []
 
 
@@ -469,13 +471,41 @@ class LiveEngine:
         return {"ok": policies_clear and bool(edges_ok), "checks": checks}
 
     # ---------------------------------------------------------------- probes / runs
-    def _client(self, theme: Theme):
+    def _client(self, theme: Theme, source: str | None = None):
+        """RuntimeClient for the primary orchestrator (source None) or an additional one (CONTRACTS §12)."""
         from agdemo_core.runtime_client import RuntimeClient
 
-        engine = settings.get_state().get("themes", {}).get(theme.id, {}).get("orchestrator", {}).get("engine")
+        ts = settings.get_state().get("themes", {}).get(theme.id, {})
+        rec = ts.get("orchestrator", {}) if source is None else (ts.get("orchestrators") or {}).get(source, {})
+        engine = (rec or {}).get("engine")
         if not engine:
-            raise LiveUnavailable(f"no orchestrator engine for theme {theme.id} in state.json")
+            who = f"orchestrator {source}" if source else "orchestrator"
+            raise LiveUnavailable(f"no {who} engine for theme {theme.id} in state.json "
+                                  f"(run ./agdemo deploy-theme {theme.id})")
         return RuntimeClient(engine, timeout_s=settings.live_timeout())
+
+    def undeployed_sources(self, theme: Theme) -> set[str]:
+        """Additional orchestrators with no engine in state.json."""
+        extra = settings.get_state().get("themes", {}).get(theme.id, {}).get("orchestrators") or {}
+        return {o.id for o in theme.additional_orchestrators if not (extra.get(o.id) or {}).get("engine")}
+
+    async def _probe_groups(self, theme: Theme, items: list[str | dict[str, Any]], malicious: bool
+                            ) -> list[dict[str, Any]]:
+        """Run probes (edge ids or §6 probe dicts, possibly prefixed '<orchestrator>/') on the right engines:
+        grouped by orchestrator, base edge ids sent to each engine's __PROBE__ in parallel, results mapped
+        back to the prefixed edge ids (CONTRACTS §12)."""
+        groups: dict[str | None, list[dict[str, Any]]] = {}
+        for it in items:
+            d = dict(it) if isinstance(it, dict) else {"edge": it}
+            src, base = split_source(d["edge"])
+            groups.setdefault(src, []).append({**d, "edge": base})
+
+        async def one(src: str | None, probes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            res = await self._client(theme, src).run_probes(probes, malicious)
+            return [{**r, "edge": source_edge(src, r["edge"])} if r.get("edge") else r for r in res]
+
+        outs = await asyncio.gather(*(one(src, probes) for src, probes in groups.items()))
+        return [r for o in outs for r in o]
 
     async def _ingress_call(self, theme: Theme, message: str) -> dict[str, Any]:
         try:
@@ -511,20 +541,25 @@ class LiveEngine:
         edges = edges or edge_ids(theme)
         statuses = await self.policy_statuses(theme)
         applied = self.desired_applied(statuses)
-        egress_on = simulate.gateway_applied(theme, applied, "egress")
         ingress_on = simulate.gateway_applied(theme, applied, "ingress")
         results: dict[str, dict[str, Any]] = {}
         from agdemo_core.runtime_client import tool_result_to_edge_state, build_probe_message
 
         eg = [e for e in edges if not simulate.is_ingress_edge(e)]
         ing = [e for e in edges if simulate.is_ingress_edge(e)]
+        # An additional orchestrator that isn't deployed yet: its edges stay untested instead of failing the probe.
+        missing = self.undeployed_sources(theme)
+        for e in [x for x in eg if split_source(x)[0] in missing]:
+            eg.remove(e)
+            results[e] = {"state": "unknown", "governed": False, "source": "live", "http_status": None,
+                          "detail": f"{split_source(e)[0]} is not deployed (run ./agdemo deploy-theme {theme.id})"}
 
         async def do_egress():
             if not eg:
                 return
-            for r in await self._client(theme).run_probes(eg, malicious):
+            for r in await self._probe_groups(theme, eg, malicious):
                 if r.get("edge"):
-                    results[r["edge"]] = tool_result_to_edge_state(r, egress_on)
+                    results[r["edge"]] = tool_result_to_edge_state(r, egress_attached(theme, applied, r["edge"]))
 
         async def do_ingress(e: str):
             try:
@@ -579,27 +614,31 @@ class LiveEngine:
             yield ev({"type": "edge", "edge": e, "state": st})
             text = r.get("text") or (r.get("result") if isinstance(r.get("result"), str) else None)
             if not text or text.startswith("__PROBE_RESULT__") or not use_llm:
-                text = simulate.synth_message(theme, scenario, test, results)
+                text = simulate.synth_message(theme, scenario, test, results, samples=False)
             yield ev({"type": "message", "role": "agent", "text": text}, 0.2)
         else:
             async def egress_steps():
-                egress_on = simulate.gateway_applied(theme, applied, "egress")
-                client = self._client(theme)
-                yield ev({"type": "status", "text": f"Calling {theme.orchestrator.id} via Agent Runtime..."})
+                # The test's agent (CONTRACTS §12: ScenarioTest.agent, default primary) runs the prompt.
+                me = theme.orchestrator_for(test.agent)
+                yield ev({"type": "status", "text": simulate.calling_text(theme, scenario, test)})
                 yield ev({"type": "message", "role": "user", "text": test.prompt})
                 if use_llm:
+                    client = self._client(theme, test.agent)
                     prompt = test.prompt
-                    if test.malicious and theme.orchestrator.malicious_payload not in prompt:
-                        prompt = f"{prompt}\n\n{theme.orchestrator.malicious_payload}"
-                    async for e in client.chat(prompt, egress_on):
+                    if test.malicious and me.malicious_payload not in prompt:
+                        prompt = f"{prompt}\n\n{me.malicious_payload}"
+                    on = simulate.gateway_applied(theme, applied, "egress", test.agent)
+                    async for e in client.chat(prompt, on):
                         if e["type"] == "edge":
+                            e = {**e, "edge": source_edge(test.agent, e["edge"])}
                             results[e["edge"]] = e["state"]
                         yield ev(e)
                 remaining = [e for e in edges_wanted if e not in results]
                 if remaining:
                     yield ev({"type": "status", "text": f"Probing {len(remaining)} connection(s) (deterministic, no LLM)..."})
-                    probe = await client.run_probes(probe_requests(test, remaining), test.malicious)
-                    got = {r["edge"]: tool_result_to_edge_state(r, egress_on) for r in probe if r.get("edge")}
+                    probe = await self._probe_groups(theme, probe_requests(test, remaining), test.malicious)
+                    got = {r["edge"]: tool_result_to_edge_state(r, egress_attached(theme, applied, r["edge"]))
+                           for r in probe if r.get("edge")}
                     errs = [f"{k}: {v['detail']}" for k, v in got.items() if v["state"] == "error"]
                     if errs:
                         raise RuntimeError("probe error on " + "; ".join(errs))
@@ -608,7 +647,7 @@ class LiveEngine:
                             results[e] = got[e]
                             yield ev({"type": "edge", "edge": e, "state": got[e]}, 0.0 if i == 0 else 0.25)
                     if not use_llm:
-                        text = simulate.synth_message(theme, scenario, test, results)
+                        text = simulate.synth_message(theme, scenario, test, results, samples=False)
                         replies = reply_lines(theme, [r for r in probe if r.get("edge") in remaining])
                         yield ev({"type": "message", "role": "agent",
                                   "text": "\n\n".join([text, *replies])}, 0.2)
@@ -736,6 +775,11 @@ class Engine:
             else:
                 yield ev({"type": "error", "text": reason})
 
+def egress_attached(theme: Theme, applied: set[str], edge: str) -> bool:
+    """Is the egress gateway attached to the orchestrator that owns `edge` (prefixed or primary)?"""
+    return simulate.gateway_applied(theme, applied, "egress", split_source(edge)[0])
+
+
 def probe_requests(test: ScenarioTest, edges: list[str]) -> list[dict[str, Any]]:
     """Probe dicts for a test run (CONTRACTS §6). A single A2A probe sends the test's own prompt,
     so e.g. "What does jdoe earn?" really reaches HR Records Agent and its answer is shown."""
@@ -745,7 +789,7 @@ def probe_requests(test: ScenarioTest, edges: list[str]) -> list[dict[str, Any]]
         p, d = by_edge.get(e), {"edge": e}
         if p and p.message:
             d["message"] = p.message
-        elif ":" not in e and len(edges) == 1:
+        elif ":" not in split_source(e)[1] and len(edges) == 1:
             d["message"] = test.prompt
         if p and p.args:
             d["args"] = p.args

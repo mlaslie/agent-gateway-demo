@@ -1,0 +1,38 @@
+id: two-agents
+order: 7
+title: "Same gateway, different agents"
+subtitle: "Two Agent Runtime agents → one Agent Gateway"
+description: |
+  Two agents on Agent Runtime, Helpdesk Agent and HR Assistant, share one egress Agent Gateway. Each has
+  its own Agent Identity, and the policies are granted per identity: Helpdesk Agent may reach KB Agent,
+  HR Assistant may reach HR Records Agent. Ask both the same salary question: same gateway, same
+  destination, a different answer depending on who's asking. Access follows the agent's identity,
+  not its network location.
+flow: egress
+nodes: [orchestrator, "orchestrator:hr-assistant", egress_gateway, registry, kb-agent, hr-records-agent]
+preconditions: [gw-egress, gw-egress-hr]
+policies: [allow-kb, allow-hr, hr-assistant-allow-hr, hr-assistant-allow-kb]
+tests:
+  - id: helpdesk-salary
+    label: "Helpdesk Agent: ask for a salary"
+    prompt: "What does jdoe earn?"
+    probes: [{edge: hr-records-agent}]
+    sample_replies:
+      "hr-records-agent": "Jordan Doe (jdoe) earns $182,000 a year, with an \"exceeds\" rating."
+  - id: hr-salary
+    label: "HR Assistant: ask for a salary"
+    agent: hr-assistant
+    prompt: "What does jdoe earn?"
+    probes: [{edge: "hr-assistant/hr-records-agent"}]
+    sample_replies:
+      "hr-assistant/hr-records-agent": "Jordan Doe (jdoe) earns $182,000 a year, with an \"exceeds\" rating."
+  - id: both-agents
+    label: "Probe both agents"
+    prompt: "Check whether you can reach the KB agent and the HR records agent."
+    probes: [{edge: kb-agent}, {edge: hr-records-agent},
+             {edge: "hr-assistant/kb-agent"}, {edge: "hr-assistant/hr-records-agent"}]
+    sample_replies:
+      "kb-agent": "KB Agent here: ready to answer IT and HR how-to questions."
+      "hr-records-agent": "HR Records Agent here: I can look up employee records."
+      "hr-assistant/kb-agent": "KB Agent here: ready to answer IT and HR how-to questions."
+      "hr-assistant/hr-records-agent": "HR Records Agent here: I can look up employee records."

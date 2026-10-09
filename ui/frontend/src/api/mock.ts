@@ -2,9 +2,11 @@
 // Simulates §3 rules, Live-mode propagation delays ("pending") and SSE test runs.
 import type { Api } from "./client";
 import { evaluate } from "./simulate";
+import { agentName, edgeLabel, policySource, splitSource } from "../util";
+import { mockTerraform } from "./mockTerraform";
 import helpdeskJson from "./mockTheme.helpdesk.json";
 import retailJson from "./mockTheme.retail.json";
-import type { AppConfig, EdgeState, GatewayLogEntry, GatewayLogsResponse, Mode, PolicyStatus, SseEvent, Theme, ThemeState } from "./types";
+import type { AppConfig, EdgeState, GatewayLogEntry, GatewayLogsResponse, Mode, Policy, PolicyStatus, RegistryAccess, RegistryItem, RegistryView, SseEvent, TerraformExport, Theme, ThemeState } from "./types";
 
 // Regenerate (repo root): uv run python -c "import json; from agdemo_core.themes import load_theme; [json.dump(load_theme(t).model_dump(mode='json'), open(f'ui/frontend/src/api/mockTheme.{t}.json','w'), indent=1) for t in ['helpdesk','retail']]"
 const QS = new URLSearchParams(location.search);
@@ -116,9 +118,12 @@ function edgeTouchedByPending(theme: Theme, s: Store, edge: string): boolean {
     const p = theme.policies.find((x) => x.id === pid);
     if (!p) continue;
     const isIngress = edge.startsWith("ingress:");
+    // CONTRACTS §12: a policy only touches the edges of its own orchestrator (params.source).
+    const [src, base] = splitSource(edge);
+    if (!isIngress && policySource(p) !== src) continue;
     if (p.type === "gateway_attach") {
       if ((p.params.path === "ingress") === isIngress) return true;
-    } else if (edge === p.params.target || edge.startsWith(`${p.params.target}:`)) return true;
+    } else if (base === p.params.target || base.startsWith(`${p.params.target}:`)) return true;
   }
   return false;
 }
@@ -138,7 +143,7 @@ function stateFor(theme: Theme, mode: Mode): ThemeState {
     for (const e of Object.keys(edges)) if (edgeTouchedByPending(theme, s, e)) edges[e] = { state: "pending", governed: true, source: "live", detail: "Policy change propagating" };
   }
   const gw = (path: string) => {
-    const pid = theme.policies.find((p) => p.type === "gateway_attach" && p.params.path === path)?.id ?? "";
+    const pid = theme.policies.find((p) => p.type === "gateway_attach" && p.params.path === path && !policySource(p))?.id ?? "";
     const st = policyStatus(s, pid);
     return { attached: st.applied, status: st.status };
   };
@@ -159,12 +164,13 @@ function stateFor(theme: Theme, mode: Mode): ThemeState {
 
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
 
-const EXPLAIN: Record<string, (p: Theme["policies"][number]) => string[]> = {
-  gateway_attach: (p) =>
+const principalTail = (t: Theme, p: Theme["policies"][number]) => policySource(p) ?? t.orchestrator.id;
+const EXPLAIN: Record<string, (p: Theme["policies"][number], t: Theme) => string[]> = {
+  gateway_attach: (p, t) =>
     p.params.path === "egress"
       ? [
-          "# Bind the Agent Runtime engine to the egress (AGENT_TO_ANYWHERE) gateway",
-          "PATCH https://us-east4-aiplatform.googleapis.com/v1beta1/projects/demo/locations/us-east4/reasoningEngines/123?updateMask=spec.deploymentSpec.agentGatewayConfig",
+          `# Bind ${agentName(t, policySource(p))}'s Agent Runtime engine to the egress (AGENT_TO_ANYWHERE) gateway`,
+          `PATCH https://us-east4-aiplatform.googleapis.com/v1beta1/projects/demo/locations/us-east4/reasoningEngines/${engineNum(t, policySource(p))}?updateMask=spec.deploymentSpec.agentGatewayConfig`,
           '{"spec":{"deploymentSpec":{"agentGatewayConfig":{"agentToAnywhereConfig":{"agentGateway":"projects/demo/locations/us-east4/agentGateways/agdemo-egress"}}}}}',
           "# Default deny: only platform endpoints (Gemini, logging, trace, sessions) are allowlisted",
         ]
@@ -173,29 +179,32 @@ const EXPLAIN: Record<string, (p: Theme["policies"][number]) => string[]> = {
           "PATCH .../reasoningEngines/123?updateMask=spec.deploymentSpec.agentGatewayConfig",
           '{"spec":{"deploymentSpec":{"agentGatewayConfig":{"clientToAgentConfig":{"agentGateway":".../agentGateways/agdemo-ingress"}}}}}',
         ],
-  a2a_allow: (p) => [
-    `# Grant the orchestrator's agent identity egress to ${p.params.target}'s registry endpoint`,
+  a2a_allow: (p, t) => [
+    `# Grant ${agentName(t, policySource(p))}'s agent identity egress to ${p.params.target}'s registry endpoint`,
     `gcloud beta iap web add-iam-policy-binding --resource-type=agent-registry-endpoint \\`,
-    `  --endpoint=agdemo-helpdesk-${p.params.target} --region=us-east4 \\`,
-    `  --member=principal://agents.global.org-123.system.id.goog/.../helpdesk-agent --role=roles/iap.egressor`,
+    `  --endpoint=agdemo-${t.id}-${p.params.target} --region=us-east4 \\`,
+    `  --member=principal://agents.global.org-123.system.id.goog/.../${principalTail(t, p)} --role=roles/iap.egressor`,
   ],
-  mcp_server_allow: (p) => [
-    `# Egressor on the whole MCP server ${p.params.target}`,
-    `gcloud beta iap web add-iam-policy-binding --endpoint=agdemo-helpdesk-${p.params.target} \\`,
-    `  --member=principal://.../helpdesk-agent --role=roles/iap.egressor`,
+  mcp_server_allow: (p, t) => [
+    `# Egressor on the whole MCP server ${p.params.target} for ${agentName(t, policySource(p))}`,
+    `gcloud beta iap web add-iam-policy-binding --endpoint=agdemo-${t.id}-${p.params.target} \\`,
+    `  --member=principal://.../${principalTail(t, p)} --role=roles/iap.egressor`,
   ],
-  mcp_tool_allow: (p) => [
-    `# Conditional egressor binding on ${p.params.target}: read-only tools only`,
-    `gcloud beta iap web add-iam-policy-binding --endpoint=agdemo-helpdesk-${p.params.target} \\`,
-    `  --member=principal://.../helpdesk-agent --role=roles/iap.egressor \\`,
+  mcp_tool_allow: (p, t) => [
+    `# Conditional egressor binding on ${p.params.target} for ${agentName(t, policySource(p))}: read-only tools only`,
+    `gcloud beta iap web add-iam-policy-binding --endpoint=agdemo-${t.id}-${p.params.target} \\`,
+    `  --member=principal://.../${principalTail(t, p)} --role=roles/iap.egressor \\`,
     `  --condition='expression=request.mcp.tool.annotations.readOnlyHint == true,title=read-only-tools'`,
   ],
 };
 
-function fakeResult(theme: Theme, edge: string): string {
-  if (edge.startsWith("ingress:")) return `${theme.orchestrator.display_name} answered the user.`;
-  if (!edge.includes(":")) return `${theme.a2a_agents[edge]?.display_name ?? edge}: (simulated answer)`;
+function fakeResult(theme: Theme, fullEdge: string): string {
+  if (fullEdge.startsWith("ingress:")) return `${theme.orchestrator.display_name} answered the user.`;
+  const [src, edge] = splitSource(fullEdge);
+  const who = src ? `${agentName(theme, src)} → ` : "";
+  if (!edge.includes(":")) return `${who}${theme.a2a_agents[edge]?.display_name ?? edge}: (simulated answer)`;
   const [srv, tool] = edge.split(":");
+  if (src) return `${who}${srv}.${tool} → 200 OK (simulated result)`;
   return `${srv}.${tool} → 200 OK ${tool.startsWith("get") || tool.startsWith("list") || tool.startsWith("lookup") ? "(INC-1042: VPN drops every 30 minutes)" : "(change made!)"}`;
 }
 
@@ -212,8 +221,95 @@ const consoleQueryUrl = (filter: string) =>
 const gwBook = new Map<string, { visibleAt: number; e: GatewayLogEntry }[]>();
 const hex = (n: number) => Array.from({ length: n }, () => Math.floor(Math.random() * 36).toString(36)).join("");
 
+// ---------- Agent Registry view (CONTRACTS §10) ----------
+// Mirrors agdemo_core/gcp/registry_view.simulate: entries from the theme, bindings from the applied policies.
+/** Mock reasoning-engine number per orchestrator (primary: fixed per theme; additional: derived from the id). */
+function engineNum(theme: Theme, source: string | null = null): string {
+  if (!source) return theme.id === "helpdesk" ? "1234567890123456789" : "9876543210987654321";
+  let h = 7;
+  for (const ch of theme.id + source) h = (h * 131 + ch.charCodeAt(0)) % 1_000_000_007;
+  return `55${String(h).padStart(17, "0")}`.slice(0, 19);
+}
+const REG_PRINCIPAL = (theme: Theme, source: string | null = null) =>
+  `principal://agents.global.org-000000000000.system.id.goog/resources/aiplatform/projects/${GW_PROJECT_NUM}/locations/us-east4/reasoningEngines/${engineNum(theme, source)}`;
+const REG_PROJECT_SET = `principalSet://agents.global.org-000000000000.system.id.goog/attribute.platformContainer/aiplatform/projects/${GW_PROJECT_NUM}`;
+const REG_PLATFORM_HOSTS = ["us-east4-aiplatform.googleapis.com", "aiplatform.googleapis.com", "agentregistry.googleapis.com", "logging.googleapis.com", "telemetry.googleapis.com", "cloudtrace.googleapis.com", "monitoring.googleapis.com", "cloudresourcemanager.googleapis.com", "iamcredentials.googleapis.com", "secretmanager.googleapis.com"];
+const regId = (seed: string) => {
+  let h = 0;
+  for (const ch of seed) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const x = h.toString(16).padStart(8, "0");
+  return `agentregistry-00000000-0000-0000-${x.slice(0, 4)}-${x}${x.slice(0, 4)}`;
+};
+
+function mockCondition(theme: Theme, p: Policy): { title: string; expression: string } | null {
+  if (p.type !== "mcp_tool_allow") return null;
+  const title = `agdemo ${theme.id} ${p.id}`;
+  const target = String(p.params.target);
+  if (p.params.read_only && p.params.use_annotation)
+    return { title, expression: "api.getAttribute('iap.googleapis.com/mcp.tool.isReadOnly', false) == true || api.getAttribute('iap.googleapis.com/mcp.toolName', '') == ''" };
+  const tools = p.params.read_only ? (theme.mcp_servers[target]?.tools ?? []).filter((t) => t.read_only).map((t) => t.name) : ((p.params.tools as string[]) ?? []);
+  return { title, expression: `api.getAttribute('iap.googleapis.com/mcp.toolName', '') in [${[...tools, ""].map((t) => `'${t}'`).join(", ")}]` };
+}
+
+function mockRegistry(theme: Theme, applied: Set<string>, live: boolean): RegistryView {
+  const principal = REG_PRINCIPAL(theme);
+  // CONTRACTS §12: each orchestrator has its own Agent Identity principal; allows with params.source bind that one.
+  const access = (cid: string): RegistryAccess[] =>
+    theme.policies
+      .filter((p) => ["a2a_allow", "mcp_server_allow", "mcp_tool_allow"].includes(p.type) && p.params.target === cid && applied.has(p.id))
+      .map((p) => ({
+        member: REG_PRINCIPAL(theme, policySource(p)),
+        member_label: `${agentName(theme, policySource(p))} (Agent Identity)`,
+        member_kind: "orchestrator",
+        role: "roles/iap.egressor",
+        condition: mockCondition(theme, p),
+        policy_id: p.id,
+        policy_text: p.text,
+        note: null,
+      }));
+  const base = { label: undefined, protocol: null, card: null, access_error: null, error: null };
+  const res = (kind: string, id: string) => `projects/${GW_PROJECT}/locations/us-east4/${kind}/${id}`;
+  const host = (cid: string) => `https://agdemo-${theme.id}-${cid}-${GW_PROJECT_NUM}.us-east4.run.app`;
+  const agents: RegistryItem[] = theme.components
+    .filter((c) => c.kind === "a2a_agent")
+    .map((c) => {
+      const a = theme.a2a_agents[c.id];
+      const skills = a.skills.map((s) => ({ id: s.id, name: s.name, description: s.description, tags: (s as { tags?: string[] }).tags ?? [] }));
+      const rid = regId(theme.id + c.id);
+      return { ...base, id: c.id, kind: "a2a_agent", display_name: a.display_name, resource: res("agents", rid), registry_id: rid, description: a.description, url: host(c.id), protocol: "A2A_AGENT", card: { name: a.display_name, description: a.description, version: "1.0.0", protocol_version: "1.0", skills }, skills, access: access(c.id) };
+    });
+  const orid = regId(theme.id + "orch");
+  agents.push({ ...base, id: "orchestrator", kind: "orchestrator", label: "auto-registered (Agent Runtime)", display_name: `agdemo-${theme.id}-orchestrator`, resource: res("agents", orid), registry_id: orid, description: theme.orchestrator.description ?? "", url: `https://us-east4-aiplatform.googleapis.com/v1/projects/${GW_PROJECT_NUM}/locations/us-east4/reasoningEngines/${engineNum(theme)}:query`, protocol: "CUSTOM", skills: [], access: [] });
+  for (const o of theme.additional_orchestrators ?? []) {
+    const rid = regId(theme.id + "orch" + o.id);
+    agents.push({ ...base, id: `orchestrator:${o.id}`, kind: "orchestrator", label: "auto-registered (Agent Runtime)", display_name: `agdemo-${theme.id}-${o.id}`, resource: res("agents", rid), registry_id: rid, description: o.description ?? "", url: `https://us-east4-aiplatform.googleapis.com/v1/projects/${GW_PROJECT_NUM}/locations/us-east4/reasoningEngines/${engineNum(theme, o.id)}:query`, protocol: "CUSTOM", skills: [], access: [] });
+  }
+  const mcp_servers: RegistryItem[] = theme.components
+    .filter((c) => c.kind === "mcp_server")
+    .map((c) => {
+      const m = theme.mcp_servers[c.id];
+      const rid = regId(theme.id + c.id);
+      const tools = m.tools.map((t) => ({ name: t.name, description: t.description, read_only: t.read_only, annotations: t.read_only ? { readOnlyHint: true, idempotentHint: true } : { destructiveHint: true } }));
+      return { ...base, id: c.id, kind: "mcp_server", display_name: `agdemo ${theme.id} ${m.display_name}`, resource: res("mcpServers", rid), registry_id: rid, description: m.description ?? "", url: `${host(c.id)}/mcp`, tools, access: access(c.id) };
+    });
+  const items: RegistryItem[] = REG_PLATFORM_HOSTS.map((h) => {
+    const rid = regId(h);
+    return { ...base, id: `https://${h}`, kind: "endpoint", display_name: `agdemo ${h}`, resource: res("endpoints", rid), registry_id: rid, description: "agdemo platform endpoint (default-deny allowlist)", url: `https://${h}`, access: [{ member: REG_PROJECT_SET, member_label: "All agents in project (Agent Identity)", member_kind: "project_agents", role: "roles/iap.egressor", condition: null, policy_id: null, policy_text: null, note: "platform allowlist (./agdemo bootstrap)" }] };
+  });
+  return {
+    theme: theme.id,
+    source: live ? "live" : "simulated",
+    fetched_at: new Date().toISOString(),
+    console_url: `https://console.cloud.google.com/agent-platform/agent-registry?project=${GW_PROJECT}`,
+    orchestrator: { display_name: theme.orchestrator.display_name, principal },
+    agents,
+    mcp_servers,
+    endpoints: { count: items.length, items },
+  };
+}
+
 function synthEntry(theme: Theme, edge: string, decision: "allowed" | "denied" | "blocked", ts: number): GatewayLogEntry {
-  const [comp, tool] = edge.split(":");
+  const [comp, tool] = splitSource(edge)[1].split(":");
   const host = `agdemo-${theme.id}-${comp}-${GW_PROJECT_NUM}.us-east4.run.app`;
   const status = decision === "allowed" ? 200 : 403;
   const url = tool ? `https://${host}/mcp` : `https://${host}/`;
@@ -298,18 +394,22 @@ async function* runEvents(themeId: string, testId: string, scenarioId: string | 
   }
   const result = evaluate(t, applied, ma, test, source);
   const ingress = sc?.flow === "ingress" || test.probes.some((p) => p.edge.startsWith("ingress:"));
+  // CONTRACTS §12: probes are grouped per orchestrator; a natural-language run goes to the test's agent.
+  const agents = [...new Set(test.probes.filter((p) => !p.edge.startsWith("ingress:")).map((p) => splitSource(p.edge)[0]))];
+  const who = useLlm || agents.length <= 1 ? agentName(t, test.agent ?? agents[0] ?? null) : agents.map((a) => agentName(t, a)).join(" and ");
   yield {
     type: "status",
     text: ingress
       ? `Sending prompt to ${t.orchestrator.display_name} through its Agent Runtime endpoint…`
-      : `Sending prompt to ${t.orchestrator.display_name} via Agent Runtime${useLlm ? " (Gemini)" : " (probe mode)"}…`,
+      : `Sending prompt to ${who} via Agent Runtime${useLlm ? " (Gemini)" : " (probe mode)"}…`,
   };
   yield { type: "message", role: "user", text: test.prompt };
   await sleep(700, signal);
   const done: Record<string, EdgeState> = {};
   for (const p of test.probes) {
-    const kind = p.edge.startsWith("ingress:") ? "ingress gateway" : p.edge.includes(":") ? "MCP tool" : "A2A agent";
-    yield { type: "status", text: `Calling ${kind} ${p.edge}…` };
+    const [psrc, pbase] = splitSource(p.edge);
+    const kind = p.edge.startsWith("ingress:") ? "ingress gateway" : pbase.includes(":") ? "MCP tool" : "A2A agent";
+    yield { type: "status", text: `${psrc ? `${agentName(t, psrc)}: c` : "C"}alling ${kind} ${pbase}…` };
     await sleep(600 + Math.random() * 500, signal);
     let st = result[p.edge];
     if (mode === "live" && edgeTouchedByPending(t, s, p.edge)) {
@@ -320,14 +420,16 @@ async function* runEvents(themeId: string, testId: string, scenarioId: string | 
     yield { type: "edge", edge: p.edge, state: st };
     const text =
       st.state === "denied"
-        ? `${p.edge} → ${st.http_status ?? 403} denied by Agent Gateway`
+        ? `${edgeLabel(t, p.edge)} → ${st.http_status ?? 403} denied by Agent Gateway`
         : st.state === "blocked"
           ? p.edge.startsWith("ingress:")
             ? `${p.edge} → ${st.http_status ?? 403} — Model Armor on the ingress gateway blocked the prompt`
-            : `${p.edge} → blocked by Model Armor`
+            : `${edgeLabel(t, p.edge)} → blocked by Model Armor`
           : st.state === "pending"
-            ? `${p.edge} → policy change pending`
-            : fakeResult(t, p.edge);
+            ? `${edgeLabel(t, p.edge)} → policy change pending`
+            : test.sample_replies?.[p.edge]
+              ? `${edgeLabel(t, p.edge)} replied: ${test.sample_replies[p.edge]}`
+              : fakeResult(t, p.edge);
     yield { type: "message", role: "tool", text };
   }
   await sleep(500, signal);
@@ -447,7 +549,7 @@ export const mockApi: Api = {
     const t = getThemeOrThrow(id);
     const p = t.policies.find((x) => x.id === pid);
     if (!p) throw new Error("unknown policy");
-    return delay({ lines: EXPLAIN[p.type]?.(p) ?? [] }, 250);
+    return delay({ lines: EXPLAIN[p.type]?.(p, t) ?? [] }, 250);
   },
   async gatewayLogs(id, _mode, q = {}): Promise<GatewayLogsResponse> {
     getThemeOrThrow(id);
@@ -461,5 +563,35 @@ export const mockApi: Api = {
       .slice(0, limit);
     const filter = GW_FILTER(id);
     return delay({ source: "simulated", filter, console_url: consoleQueryUrl(filter), entries }, 150);
+  },
+  async registry(id, mode): Promise<RegistryView> {
+    const theme = getThemeOrThrow(id);
+    const s = storeFor(mode, id);
+    settle(s);
+    return delay(mockRegistry(theme, s.applied, mode !== "demo"), 200);
+  },
+  async terraform(id, mode, includeShared): Promise<TerraformExport> {
+    const theme = getThemeOrThrow(id);
+    const s = storeFor(mode, id);
+    settle(s);
+    const principal = REG_PRINCIPAL(theme);
+    const out = mockTerraform(theme, s.applied, s.modelArmor, includeShared, mode !== "demo", {
+      project: GW_PROJECT,
+      projectNumber: GW_PROJECT_NUM,
+      region: "us-east4",
+      prefix: "agdemo",
+      principal,
+      projectSet: REG_PROJECT_SET,
+      engine: `projects/${GW_PROJECT_NUM}/locations/us-east4/reasoningEngines/${engineNum(theme)}`,
+      sources: Object.fromEntries(
+        (theme.additional_orchestrators ?? []).map((o) => [
+          o.id,
+          { name: o.display_name, principal: REG_PRINCIPAL(theme, o.id), engine: `projects/${GW_PROJECT_NUM}/locations/us-east4/reasoningEngines/${engineNum(theme, o.id)}` },
+        ]),
+      ),
+      registryId: (cid) => regId(theme.id + cid),
+      condition: mockCondition,
+    });
+    return delay(out, 200);
   },
 };

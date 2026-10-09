@@ -2,7 +2,8 @@ import { Background, BackgroundVariant, ReactFlow, ReactFlowProvider, useNodesIn
 import "@xyflow/react/dist/style.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EdgeState, GatewayLogEntry, Scenario, Theme, ThemeState } from "../api/types";
-import { buildDiagram, type DNode } from "./build";
+import { buildDiagram, visibleNodeIds, type DNode } from "./build";
+import { orchestratorNodeId } from "../util";
 import { edgeTypes } from "./edges";
 import { nodeTypes } from "./nodes";
 import { ClockIcon, CloseIcon, ShieldIcon } from "../components/Icons";
@@ -17,6 +18,7 @@ interface Props {
   inFlight: Set<string>;
   edgeLogs?: Record<string, GatewayLogEntry>;
   onOpenLog?: (e: GatewayLogEntry) => void;
+  onOpenRegistry?: () => void;
 }
 
 function Fitter({ fitKey, wrap }: { fitKey: string; wrap: React.RefObject<HTMLDivElement | null> }) {
@@ -87,14 +89,22 @@ function useAnimatedPositions(nodes: DNode[], resetKey: string, ms = 550): DNode
   return shown;
 }
 
-export function Diagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog }: Props) {
+export function Diagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry }: Props) {
   const { nodes: targetNodes, edges } = useMemo(
-    () => buildDiagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog }),
-    [theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog],
+    () => buildDiagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry }),
+    [theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry],
   );
   const nodes = useAnimatedPositions(targetNodes, `${theme.id}|${scenario.id}`);
+  // Several orchestrators on screen (CONTRACTS §12): the legend names each one's accent.
+  const agents = useMemo(() => {
+    const vis = new Set(visibleNodeIds(theme, scenario));
+    const all = [{ id: null as string | null, name: theme.orchestrator.display_name, idx: 0 }, ...(theme.additional_orchestrators ?? []).map((o, i) => ({ id: o.id, name: o.display_name, idx: i + 1 }))];
+    const shown = all.filter((a) => vis.has(orchestratorNodeId(a.id)));
+    return shown.length > 1 ? shown : [];
+  }, [theme, scenario]);
   const wrap = useRef<HTMLDivElement>(null);
-  const fitKey = `${theme.id}|${scenario.id}|${state?.gateways.egress.attached}|${state?.gateways.ingress.attached}`;
+  // Refit whenever the layout changes (a gateway sliding into / out of the path for any orchestrator).
+  const fitKey = `${theme.id}|${scenario.id}|${targetNodes.map((n) => `${n.id}@${Math.round(n.position.x)},${Math.round(n.position.y)}`).join(";")}`;
   return (
     <div className="diagram">
       <div className="diagram-canvas" ref={wrap}>
@@ -113,18 +123,19 @@ export function Diagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs
           maxZoom={2}
           proOptions={{ hideAttribution: true }}
           zoomOnDoubleClick={false}
+          onNodeClick={(_, n) => n.id === "registry" && onOpenRegistry?.()}
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.4} className="diagram-bg" />
           <Fitter fitKey={fitKey} wrap={wrap} />
         </ReactFlow>
       </ReactFlowProvider>
       </div>
-      <Legend />
+      <Legend agents={agents} />
     </div>
   );
 }
 
-function Legend() {
+function Legend({ agents }: { agents: { name: string; idx: number }[] }) {
   const items: { cls: string; label: string; icon?: React.ReactNode }[] = [
     { cls: "direct", label: "Direct (no gateway)" },
     { cls: "allowed", label: "Allowed" },
@@ -151,6 +162,12 @@ function Legend() {
         </svg>
         Registry discovery
       </span>
+      {agents.map((a) => (
+        <span key={a.idx} className={`legend-item legend-agent accent-${a.idx}`} title={`${a.name}'s calls: accent dot and casing on the line`}>
+          <span className="agent-swatch" />
+          {a.name}
+        </span>
+      ))}
     </div>
   );
 }

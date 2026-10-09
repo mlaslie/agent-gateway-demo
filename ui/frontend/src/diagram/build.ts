@@ -1,14 +1,24 @@
 // Builds React Flow nodes + edges from the theme, the current scenario and the edge states.
 import type { Edge, Node } from "@xyflow/react";
 import type { EdgeState, EdgeStateName, GatewayLogEntry, Scenario, Theme, ThemeState } from "../api/types";
+import { agentIndex, orchestratorNodeId, policySource, sourceEdge } from "../util";
 
 export type NodeKind = "user" | "gateway" | "orchestrator" | "registry" | "a2a" | "mcp";
+
+/** One orchestrator's state for a target (A2A agent / MCP tool) when several agents are shown (CONTRACTS §12). */
+export interface AgentState {
+  /** Accent index: 0 = primary, 1.. = additional orchestrators. */
+  idx: number;
+  name: string;
+  state: EdgeStateName;
+}
 
 export interface ToolRow {
   name: string;
   readOnly: boolean;
   edgeId: string;
   state: EdgeStateName;
+  agentStates?: AgentState[];
 }
 
 export interface DiagramNodeData extends Record<string, unknown> {
@@ -22,8 +32,16 @@ export interface DiagramNodeData extends Record<string, unknown> {
   skills?: string[];
   tools?: ToolRow[];
   state?: EdgeStateName; // for single-edge targets (A2A agents, the ingress user)
+  /** A2A target called by several orchestrators: one state per agent. */
+  agentStates?: AgentState[];
+  /** Orchestrator node: accent index when several agents are shown. */
+  accent?: number;
+  /** Egress gateway: number of orchestrator lanes routed through it (handles in-N / out-N when > 1). */
+  lanes?: number;
   inFlight?: boolean;
   direction?: "egress" | "ingress";
+  /** Registry node: open the Agent Registry browser. */
+  onOpen?: () => void;
 }
 
 export interface DiagramEdgeData extends Record<string, unknown> {
@@ -37,6 +55,8 @@ export interface DiagramEdgeData extends Record<string, unknown> {
   bus?: { x: number; y: number };
   /** Denied/blocked edge with an Agent Gateway log entry: click opens it. */
   log?: { summary: string; open: () => void };
+  /** Whose call this is, when several orchestrators are shown (accent dot + halo tint). */
+  agent?: { idx: number; name: string };
 }
 
 export type DNode = Node<DiagramNodeData>;
@@ -65,7 +85,7 @@ export const INGRESS_EDGE = "ingress:user";
 export const EGRESS_DEFAULT = ["orchestrator", "egress_gateway", "registry"];
 
 export function visibleNodeIds(theme: Theme, sc: Scenario): string[] {
-  if (sc.nodes.length) return sc.nodes;
+  if (sc.nodes.length) return sc.nodes; // additional orchestrators (`orchestrator:<id>`) only when listed
   if (sc.flow === "ingress") return ["user", "ingress_gateway", "orchestrator"];
   return [...EGRESS_DEFAULT, ...theme.components.map((c) => c.id)];
 }
@@ -83,9 +103,10 @@ interface BuildArgs {
   /** Newest gateway log entry per edge id (CONTRACTS §9). */
   edgeLogs?: Record<string, GatewayLogEntry>;
   onOpenLog?: (e: GatewayLogEntry) => void;
+  onOpenRegistry?: () => void;
 }
 
-export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog }: BuildArgs): { nodes: DNode[]; edges: DEdge[] } {
+export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry }: BuildArgs): { nodes: DNode[]; edges: DEdge[] } {
   const vis = new Set(visibleNodeIds(theme, scenario));
   const egressAttached = !!state?.gateways.egress.attached;
   const ingressAttached = !!state?.gateways.ingress.attached;
@@ -100,10 +121,44 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
   const st = (id: string) => edgeStateOf(edgeStates, id);
   const expected = (id: string) => state?.expected?.[id]?.state;
 
+  // ---------- orchestrators shown (CONTRACTS §12: primary + listed additional ones) ----------
+  interface Orch {
+    src: string | null;
+    nodeId: string;
+    label: string;
+    sublabel: string;
+    idx: number;
+    attached: boolean;
+    pending: boolean;
+  }
+  const orchs: Orch[] = [];
+  if (vis.has("orchestrator"))
+    orchs.push({ src: null, nodeId: "orchestrator", label: theme.orchestrator.display_name, sublabel: theme.orchestrator.id, idx: 0, attached: egressAttached, pending: egressPending });
+  for (const o of theme.additional_orchestrators ?? []) {
+    const nodeId = orchestratorNodeId(o.id);
+    if (!vis.has(nodeId)) continue;
+    // Per-orchestrator egress binding: gateway_attach{path: egress, source: <id>}.
+    const pid = theme.policies.find((p) => p.type === "gateway_attach" && p.params.path === "egress" && policySource(p) === o.id)?.id;
+    const ps = pid ? state?.policies[pid] : undefined;
+    orchs.push({ src: o.id, nodeId, label: o.display_name, sublabel: o.id, idx: agentIndex(theme, o.id), attached: !!ps?.applied, pending: /pending/.test(ps?.status ?? "") });
+  }
+  const multi = orchs.length > 1;
+  /** Ring/row state of a target several agents call: the in-flight one, else the common state, else neutral. */
+  const combine = (ids: string[]): { state: EdgeStateName; agentStates?: AgentState[] } => {
+    if (!multi) return { state: st(ids[0]).state };
+    const agentStates = orchs.map((o, i) => ({ idx: o.idx, name: o.label, state: st(ids[i]).state }));
+    const fly = ids.findIndex((e) => inFlight.has(e));
+    const states = new Set(agentStates.map((a) => a.state));
+    return { state: fly >= 0 ? agentStates[fly].state : states.size === 1 ? agentStates[0].state : "unknown", agentStates };
+  };
+  const perOrch = (base: string) => (orchs.length ? orchs.map((o) => sourceEdge(o.src, base)) : [base]);
+
   // ---------- target nodes (stacked vertically) ----------
   const targetData: { id: string; data: DiagramNodeData }[] = comps.map((c) => {
     if (c.kind === "a2a_agent") {
       const spec = theme.a2a_agents[c.id];
+      const ids = perOrch(c.id);
+      const cs = combine(ids);
       return {
         id: c.id,
         data: {
@@ -112,8 +167,9 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
           sublabel: c.id,
           badge: "A2A · Cloud Run",
           skills: spec?.skills.map((s) => s.name) ?? [],
-          state: st(c.id).state,
-          inFlight: inFlight.has(c.id),
+          state: cs.state,
+          agentStates: cs.agentStates,
+          inFlight: ids.some((e) => inFlight.has(e)),
         },
       };
     }
@@ -127,9 +183,10 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
         badge: "MCP · Cloud Run",
         tools: (spec?.tools ?? []).map((t) => {
           const eid = `${c.id}:${t.name}`;
-          return { name: t.name, readOnly: t.read_only, edgeId: eid, state: st(eid).state };
+          const cs = combine(perOrch(eid));
+          return { name: t.name, readOnly: t.read_only, edgeId: eid, state: cs.state, agentStates: cs.agentStates };
         }),
-        inFlight: (spec?.tools ?? []).some((t) => inFlight.has(`${c.id}:${t.name}`)),
+        inFlight: (spec?.tools ?? []).some((t) => perOrch(`${c.id}:${t.name}`).some((e) => inFlight.has(e))),
       },
     };
   });
@@ -139,7 +196,7 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
   const cols: { key: string; w: number }[] = [];
   if (hasUser) cols.push({ key: "user", w: W.user });
   if (vis.has("ingress_gateway")) cols.push({ key: "ingress_gateway", w: W.gateway });
-  if (vis.has("orchestrator")) cols.push({ key: "orchestrator", w: W.orchestrator });
+  if (orchs.length) cols.push({ key: "orchestrator", w: W.orchestrator });
   if (vis.has("egress_gateway")) cols.push({ key: "egress_gateway", w: W.gateway });
   if (targetData.length) cols.push({ key: "targets", w: Math.max(...targetData.map((t) => W[t.data.kind])) });
   const colX: Record<string, number> = {};
@@ -166,16 +223,21 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
   const targetsBottom = centerY + totalH / 2;
   const targetsTop = centerY - totalH / 2;
 
-  // ---------- orchestrator ----------
-  if (vis.has("orchestrator")) {
+  // ---------- orchestrators (stacked in their column, primary on top) ----------
+  const ORCH_GAP = 56;
+  const orchH = nodeHeight({ kind: "orchestrator", label: "" });
+  let oy = centerY - (orchs.length * orchH + (orchs.length - 1) * ORCH_GAP) / 2;
+  for (const o of orchs) {
     const d: DiagramNodeData = {
       kind: "orchestrator",
-      label: theme.orchestrator.display_name,
-      sublabel: theme.orchestrator.id,
+      label: o.label,
+      sublabel: o.sublabel,
       badge: "Agent Runtime",
       chips: [{ text: "ADK · Agent Identity", tone: "neutral" }],
+      accent: multi ? o.idx : undefined,
     };
-    nodes.push({ id: "orchestrator", type: "orchestrator", position: pos("orchestrator", colX.orchestrator, centerY - nodeHeight(d) / 2), data: d, draggable: false });
+    nodes.push({ id: o.nodeId, type: "orchestrator", position: pos(o.nodeId, colX.orchestrator, oy), data: d, draggable: false });
+    oy += orchH + ORCH_GAP;
   }
 
   // ---------- gateways ----------
@@ -195,6 +257,7 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
       chips,
       shield: attached && ma,
       direction: egress ? "egress" : "ingress",
+      lanes: egress && lanes.length > 1 ? lanes.length : undefined,
     };
     const h = nodeHeight(d);
     // When detached the gateway slides out of the call path (above it).
@@ -203,7 +266,13 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
     const py = attached || pending ? centerY - h / 2 : top;
     nodes.push({ id, type: "gateway", position: pos(id, colX[id], py), data: d, draggable: false });
   };
-  if (vis.has("egress_gateway")) gw("egress_gateway", egressAttached, egressPending);
+  // Orchestrators routed through the egress gateway: each gets its own in/out "lane" handle pair when > 1.
+  const lanes = vis.has("egress_gateway") ? orchs.filter((o) => o.attached || o.pending) : [];
+  const laneHandle = (o: Orch, dir: "in" | "out") => (lanes.length > 1 ? `${dir}-${lanes.indexOf(o)}` : dir);
+  // The egress gateway is shared (CONTRACTS §12): it's in the path when any shown orchestrator is bound to it.
+  const anyAttached = orchs.length ? orchs.some((o) => o.attached) : egressAttached;
+  const anyPending = orchs.length ? orchs.some((o) => o.pending) : egressPending;
+  if (vis.has("egress_gateway")) gw("egress_gateway", anyAttached, anyPending);
   if (vis.has("ingress_gateway")) gw("ingress_gateway", ingressAttached, ingressPending);
 
   // ---------- user (single ingress caller) ----------
@@ -223,6 +292,7 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
     const d: DiagramNodeData = {
       kind: "registry",
       label: "Agent Registry",
+      onOpen: onOpenRegistry,
       sublabel: `${theme.components.filter((c) => c.kind === "a2a_agent").length} A2A agents · ${theme.components.filter((c) => c.kind === "mcp_server").length} MCP servers`,
     };
     // Bottom of the gateway column; a dashed "bus" runs under the targets and up their right side.
@@ -232,20 +302,20 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
     nodes.push({ id: "registry", type: "registry", position: pos("registry", rx, ry), data: d, draggable: false });
     const busY = Math.max(targetsBottom, ry + RH) + 30;
     const busX = (colX.targets ?? rx + W.registry) + (targetData.length ? Math.max(...targetData.map((t) => W[t.data.kind])) : 0) + 34;
-    if (vis.has("orchestrator"))
-      edges.push({ id: "reg:orchestrator", source: "registry", sourceHandle: "left", target: "orchestrator", targetHandle: "reg", type: "registry", data: { state: "registry", label: "discovers" }, zIndex: 0 });
+    // Discovery line to the bottom orchestrator (it would cross the others when they're stacked).
+    const lastOrch = orchs[orchs.length - 1];
+    if (lastOrch)
+      edges.push({ id: `reg:${lastOrch.nodeId}`, source: "registry", sourceHandle: "left", target: lastOrch.nodeId, targetHandle: "reg", type: "registry", data: { state: "registry", label: "discovers" }, zIndex: 0 });
     comps.forEach((c, i) =>
       edges.push({ id: `reg:${c.id}`, source: "registry", sourceHandle: "bottom", target: c.id, targetHandle: "reg", type: "registry", data: { state: "registry", bus: { y: busY, x: busX }, label: i === 0 ? "registered" : undefined }, zIndex: 0 }),
     );
   }
 
   // ---------- egress call edges ----------
-  const throughEgress = vis.has("egress_gateway") && (egressAttached || egressPending);
-  const egressEdgeIds: string[] = [];
   const mkEdge = (edgeId: string, source: string, sourceHandle: string | undefined, target: string, targetHandle: string | undefined): DEdge => {
     const s = st(edgeId);
     // A fully denied MCP server is logged at the session handshake (component-level entry), not per tool.
-    const le = edgeLogs?.[edgeId] ?? (edgeId.includes(":") ? edgeLogs?.[edgeId.split(":")[0]] : undefined);
+    const le = edgeLogs?.[edgeId] ?? (edgeId.includes(":") ? edgeLogs?.[edgeId.split(":")[0]] : undefined); // "<src>/<comp>" for additional agents
     const logged = (s.state === "denied" || s.state === "blocked") && le && le.decision !== "allowed" && onOpenLog ? le : undefined;
     return {
       id: `e:${edgeId}`,
@@ -266,25 +336,31 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
       },
     };
   };
-  if (vis.has("orchestrator")) {
+  for (const o of orchs) {
+    const through = lanes.includes(o);
+    const ids: string[] = [];
     for (const c of comps) {
-      const ids = c.kind === "a2a_agent" ? [c.id] : (theme.mcp_servers[c.id]?.tools ?? []).map((t) => `${c.id}:${t.name}`);
-      for (const eid of ids) {
-        egressEdgeIds.push(eid);
-        const th = c.kind === "a2a_agent" ? "in" : `tool-${eid.split(":")[1]}`;
-        edges.push(throughEgress ? mkEdge(eid, "egress_gateway", "out", c.id, th) : mkEdge(eid, "orchestrator", "out", c.id, th));
+      const bases = c.kind === "a2a_agent" ? [c.id] : (theme.mcp_servers[c.id]?.tools ?? []).map((t) => `${c.id}:${t.name}`);
+      for (const base of bases) {
+        const eid = sourceEdge(o.src, base);
+        ids.push(eid);
+        // A2A targets get one entry handle per orchestrator so the agents' lines stay apart (MCP tool rows are too short).
+        const th = c.kind === "a2a_agent" ? (multi ? `in-${orchs.indexOf(o)}` : "in") : `tool-${base.split(":")[1]}`;
+        const e = through ? mkEdge(eid, "egress_gateway", laneHandle(o, "out"), c.id, th) : mkEdge(eid, o.nodeId, "out", c.id, th);
+        if (multi) e.data = { ...e.data!, agent: { idx: o.idx, name: o.label } };
+        edges.push(e);
       }
     }
-    if (throughEgress && comps.length)
+    if (through && comps.length)
       edges.push({
-        id: "seg:orch-egress",
-        source: "orchestrator",
+        id: o.src ? `seg:${o.src}-egress` : "seg:orch-egress",
+        source: o.nodeId,
         sourceHandle: "out",
         target: "egress_gateway",
-        targetHandle: "in",
+        targetHandle: laneHandle(o, "in"),
         type: "state",
         zIndex: 1,
-        data: { state: "neutral", inFlight: egressEdgeIds.some((e) => inFlight.has(e)) },
+        data: { state: "neutral", inFlight: ids.some((e) => inFlight.has(e)), agent: multi ? { idx: o.idx, name: o.label } : undefined },
       });
   }
 

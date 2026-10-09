@@ -13,7 +13,7 @@ from collections import deque
 from datetime import datetime, timezone
 from typing import Any
 
-from agdemo_core.themes import Theme
+from agdemo_core.themes import Theme, split_source
 
 POLICY = {"denied": "agdemo-egress-iap-policy", "blocked": "agdemo-egress-ma-policy"}
 
@@ -44,7 +44,7 @@ class SimLogBook:
 
     @staticmethod
     def _entry(theme: Theme, edge: str, decision: str, ts: float, prefix: str, gateway: str) -> dict[str, Any]:
-        comp, _, tool = edge.partition(":")
+        comp, _, tool = split_source(edge)[1].partition(":")     # '<orchestrator>/' prefix: same destination
         host = f"{prefix}-{theme.id}-{comp}-000000000000.us-east4.run.app"
         status = 200 if decision == "allowed" else 403
         url = f"https://{host}/mcp" if tool else f"https://{host}/"

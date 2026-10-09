@@ -16,8 +16,10 @@ def teardown_theme(cfg: DemoConfig, theme_id: str) -> None:
     r = c.client(cfg)
     st = load_state()
     ts = st.get("themes", {}).get(theme_id, {})
-    o = ts.get("orchestrator", {})
-    if o.get("engine"):
+    # The primary orchestrator and every additional one (CONTRACTS §12).
+    for o in [ts.get("orchestrator", {}), *(ts.get("orchestrators") or {}).values()]:
+        if not o.get("engine"):
+            continue
         c.log(f"  deleting engine {o['engine']}")
         try:
             op = r.delete(f"{aiplatform(cfg.region)}/{o['engine']}", params={"force": "true"})

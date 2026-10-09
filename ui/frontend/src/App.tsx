@@ -4,6 +4,7 @@ import { Header } from "./components/Header";
 import { SidePanel } from "./components/SidePanel";
 import { TestResults } from "./components/TestResults";
 import { GatewayLogViewer } from "./components/GatewayLogs";
+import { RegistrySheet } from "./components/RegistrySheet";
 import { CheckIcon, CloseIcon, WarnIcon } from "./components/Icons";
 import { useDemo } from "./useDemo";
 
@@ -62,12 +63,13 @@ export default function App({ api }: { api: Api }) {
             </div>
           )}
           {!d.themeError && (!d.theme || !sc) && <div className="stage-msg">Loading…</div>}
-          {d.theme && sc && <Diagram theme={d.theme} scenario={sc} state={d.state} edgeStates={d.edgeStates} inFlight={d.inFlight} edgeLogs={d.edgeLogs} onOpenLog={d.openLog} />}
+          {d.theme && sc && <Diagram theme={d.theme} scenario={sc} state={d.state} edgeStates={d.edgeStates} inFlight={d.inFlight} edgeLogs={d.edgeLogs} onOpenLog={d.openLog} onOpenRegistry={d.openRegistry} />}
           {d.resultsOpen && d.testRun && <TestResults d={d} />}
           {d.state && <ModeBadge mode={d.mode} mock={d.isMock} replayed={d.fallbackShown || Object.values(d.edgeStates).some((e) => e.source === "replayed")} />}
         </section>
         <SidePanel d={d} api={api} />
       </main>
+      {d.registryOpen && <RegistrySheet d={d} api={api} onClose={d.closeRegistry} />}
       {d.viewLog && <GatewayLogViewer key={d.viewLog.id} entry={d.viewLog} onClose={d.closeLog} />}
       {d.toast && (
         <div key={d.toast.id} className={`glass toast toast-${d.toast.tone}`} role={d.toast.tone === "error" ? "alert" : "status"}>

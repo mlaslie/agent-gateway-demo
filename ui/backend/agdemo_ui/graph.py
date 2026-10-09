@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from agdemo_core.config import DemoConfig
-from agdemo_core.themes import INGRESS_EDGE, Theme
+from agdemo_core.themes import INGRESS_EDGE, Theme, source_edge
 
 
 def _pos(theme: Theme, node_id: str) -> dict[str, Any]:
@@ -28,6 +28,11 @@ def build_graph(theme: Theme, cfg: DemoConfig | None = None, state: dict | None 
         {"id": "registry", "type": "registry", "label": "Agent Registry",
          "sublabel": cfg.region if cfg else "regional"},
     ]
+    # Additional orchestrators (CONTRACTS §12): node "orchestrator:<id>", same gateways, own Agent Identity.
+    for o in theme.additional_orchestrators:
+        nodes.insert(3 + theme.additional_orchestrators.index(o),
+                     {"id": f"orchestrator:{o.id}", "type": "orchestrator", "label": o.display_name,
+                      "sublabel": f"Agent Runtime · {o.id}"})
     for n in nodes:
         n.update(_pos(theme, n["id"]))
 
@@ -50,5 +55,8 @@ def build_graph(theme: Theme, cfg: DemoConfig | None = None, state: dict | None 
             for t in spec.tools:
                 edges.append({"id": f"{c.id}:{t.name}", "source": "orchestrator", "target": c.id,
                               "tool": t.name, "kind": "mcp"})
+    primary = list(edges)
+    for o in theme.additional_orchestrators:
+        edges += [{**e, "id": source_edge(o.id, e["id"]), "source": f"orchestrator:{o.id}"} for e in primary]
     edges.append({"id": INGRESS_EDGE, "source": "user", "target": "orchestrator", "kind": "ingress"})
     return {"theme": theme.model_dump(mode="json"), "nodes": nodes, "edges": edges}

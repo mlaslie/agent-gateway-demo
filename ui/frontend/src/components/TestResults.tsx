@@ -155,6 +155,11 @@ export function TestResults({ d }: { d: Demo }) {
         <h2 id={titleId} className="tr-title" title={label}>
           {label}
         </h2>
+        {run.agent && (
+          <div className="tr-agent">
+            Running as <span className={`agent-chip accent-${run.agentIdx ?? 0}`}>{run.agent}</span>
+          </div>
+        )}
         {run.prompt && <div className="tr-prompt">“{run.prompt}”</div>}
         <LogList log={entries} live={false} label="Test results log" className="tr-log" empty="Waiting for the first event…" onOpenLog={d.openLog} />
         <Footer run={run} entries={entries} watching={watching} />
@@ -168,6 +173,7 @@ export function TestResults({ d }: { d: Demo }) {
             <>
               <StatusPill status={run.status} />
               <ModeTag mode={run.mode} />
+              {run.agent && <span className={`agent-chip accent-${run.agentIdx ?? 0}`}>as {run.agent}</span>}
               {run.prompt && <span className="tr-sheet-prompt">“{run.prompt}”</span>}
             </>
           }

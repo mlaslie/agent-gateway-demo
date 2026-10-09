@@ -6,6 +6,17 @@ import { LogIcon, ShieldIcon } from "./Icons";
 
 type OpenLog = (g: NonNullable<LogEntry["gw"]>) => void;
 
+/** Edge id, or "HR Assistant → HR Records Agent" for an additional orchestrator's edge (CONTRACTS §12). */
+function EdgeName({ e }: { e: LogEntry }) {
+  return e.edgeLabel ? (
+    <span className="log-edge log-edge-agent" title={e.edge}>
+      {e.edgeLabel}
+    </span>
+  ) : (
+    <span className="mono log-edge">{e.edge}</span>
+  );
+}
+
 export function LogLine({ e, onOpenLog }: { e: LogEntry; onOpenLog?: OpenLog }) {
   const s = e.edgeState?.state;
   return (
@@ -23,10 +34,10 @@ export function LogLine({ e, onOpenLog }: { e: LogEntry; onOpenLog?: OpenLog }) 
             <LogIcon size={11} /> Gateway log
           </span>
         )}
-        {e.kind === "gwlog" && e.edge && <span className="mono log-edge">{e.edge}</span>}
+        {e.kind === "gwlog" && e.edge && <EdgeName e={e} />}
         {e.kind === "edge" && (
           <>
-            <span className="mono log-edge">{e.edge}</span>
+            <EdgeName e={e} />
             <span className={`state-pill sp-${s}`}>
               {s === "blocked" && <ShieldIcon size={11} />}
               {s}

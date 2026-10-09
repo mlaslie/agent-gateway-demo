@@ -1,5 +1,7 @@
 """./agdemo deploy-theme <t> — images (Cloud Build), Cloud Run targets, Agent Registry entries, and the
-orchestrator on Agent Runtime with Agent Identity and NO gateway (wide-open start). Idempotent."""
+orchestrator on Agent Runtime with Agent Identity and NO gateway (wide-open start), plus every additional
+orchestrator of the theme (docs/CONTRACTS.md §12: own engine + Agent Identity, same package and topology).
+Idempotent: existing engines are reused unless --update-engine / --recreate-engine."""
 from __future__ import annotations
 
 import importlib.util
@@ -157,8 +159,9 @@ def register_component(cfg: DemoConfig, r: Rest, theme: Theme, cid: str, url: st
 
 
 # ---------------------------------------------------------------- Agent Runtime
-def engine_display_name(cfg: DemoConfig, theme: Theme) -> str:
-    return cfg.name(theme.id, "orchestrator")
+def engine_display_name(cfg: DemoConfig, theme: Theme, orchestrator_id: str | None = None) -> str:
+    """Primary: <prefix>-<theme>-orchestrator; additional orchestrator: <prefix>-<theme>-<id> (CONTRACTS §12)."""
+    return cfg.name(theme.id, orchestrator_id or "orchestrator")
 
 
 def find_engine(r: Rest, cfg: DemoConfig, display: str) -> dict | None:
@@ -169,20 +172,28 @@ def find_engine(r: Rest, cfg: DemoConfig, display: str) -> dict | None:
     return None
 
 
-def create_engine(cfg: DemoConfig, theme: Theme, urls: dict[str, str], ms) -> str:
+def _engine_env(cfg: DemoConfig, theme: Theme, urls: dict[str, str], ms, ds, orchestrator_id: str | None):
+    spec = ms.orchestrator_spec(theme, urls, cfg.models.default, orchestrator_id)
+    auth_mode = "none" if cfg.cloud_run.public_targets else "id_token"
+    return ds.env_vars(ms.encode_spec(spec), spec["model"], auth_mode)
+
+
+def create_engine(cfg: DemoConfig, theme: Theme, urls: dict[str, str], ms,
+                  orchestrator_id: str | None = None) -> str:
+    """Create an orchestrator engine (Agent Identity, no gateway). `orchestrator_id`: an additional orchestrator."""
     import vertexai
     from vertexai.agent_engines import AdkApp
 
     ds = _load_module("agdemo_deploy_spec", RUNTIMES / "orchestrator" / "deploy_spec.py")
-    spec = ms.orchestrator_spec(theme, urls, cfg.models.default)
-    auth_mode = "none" if cfg.cloud_run.public_targets else "id_token"
-    env = ds.env_vars(ms.encode_spec(spec), spec["model"], auth_mode)
+    env = _engine_env(cfg, theme, urls, ms, ds, orchestrator_id)
+    o = theme.orchestrator_for(orchestrator_id)
     vertexai.init(project=cfg.project, location=cfg.region, staging_bucket=f"gs://{c.staging_bucket(cfg)}")
     client = vertexai.Client(project=cfg.project, location=cfg.region)
+    labels = {**cfg.labels, "demo-theme": theme.id, **({"demo-agent": orchestrator_id} if orchestrator_id else {})}
     with ds.staged(env) as (root_agent, conf):
-        conf.update(display_name=engine_display_name(cfg, theme),
-                    description=f"{theme.orchestrator.display_name} ({cfg.prefix} demo, theme {theme.id})",
-                    staging_bucket=f"gs://{c.staging_bucket(cfg)}", labels={**cfg.labels, "demo-theme": theme.id})
+        conf.update(display_name=engine_display_name(cfg, theme, orchestrator_id),
+                    description=f"{o.display_name} ({cfg.prefix} demo, theme {theme.id})",
+                    staging_bucket=f"gs://{c.staging_bucket(cfg)}", labels=labels)
         c.log(f"  creating Agent Runtime engine {conf['display_name']} (identity_type={conf.get('identity_type')}, "
               "no gateway) — ~5-10 min")
         remote = client.agent_engines.create(agent=AdkApp(agent=root_agent), config=conf)
@@ -191,16 +202,15 @@ def create_engine(cfg: DemoConfig, theme: Theme, urls: dict[str, str], ms) -> st
     return name
 
 
-def update_engine_code(cfg: DemoConfig, theme: Theme, urls: dict[str, str], ms, engine: str) -> None:
+def update_engine_code(cfg: DemoConfig, theme: Theme, urls: dict[str, str], ms, engine: str,
+                       orchestrator_id: str | None = None) -> None:
     """Redeploy the orchestrator package + spec into the existing engine. The engine keeps its name,
     Agent Identity principal, gateway binding and IAM, so applied policies stay valid."""
     import vertexai
     from vertexai.agent_engines import AdkApp
 
     ds = _load_module("agdemo_deploy_spec", RUNTIMES / "orchestrator" / "deploy_spec.py")
-    spec = ms.orchestrator_spec(theme, urls, cfg.models.default)
-    auth_mode = "none" if cfg.cloud_run.public_targets else "id_token"
-    env = ds.env_vars(ms.encode_spec(spec), spec["model"], auth_mode)
+    env = _engine_env(cfg, theme, urls, ms, ds, orchestrator_id)
     vertexai.init(project=cfg.project, location=cfg.region, staging_bucket=f"gs://{c.staging_bucket(cfg)}")
     client = vertexai.Client(project=cfg.project, location=cfg.region)
     with ds.staged(env) as (root_agent, conf):
@@ -227,6 +237,46 @@ def grant_agent_roles(cfg: DemoConfig, r: Rest, member: str, theme: Theme) -> No
             svc = c.service_name(cfg, theme.id, comp.id)
             gcloud.run(["run", "services", "add-iam-policy-binding", svc, f"--region={cfg.region}",
                         f"--project={cfg.project}", f"--member={member}", "--role=roles/run.invoker", "--quiet"])
+
+
+def deploy_orchestrator(cfg: DemoConfig, r: Rest, theme: Theme, urls: dict[str, str], ms, orchestrator_id: str | None,
+                        prev: dict[str, Any], recreate_engine: bool = False, update_engine: bool = False
+                        ) -> dict[str, Any]:
+    """Create (or reuse / update / recreate) one orchestrator engine, grant its Agent Identity the agent roles,
+    and find its auto-registered Agent Registry entry. Returns its state.json record. No gateway is attached."""
+    display = engine_display_name(cfg, theme, orchestrator_id)
+    existing = get_engine(r, cfg, prev["engine"]) if prev.get("engine") else None
+    if existing is None:
+        existing = find_engine(r, cfg, display)
+    if existing is not None and recreate_engine:
+        c.log(f"  deleting {existing['name']}")
+        op = r.delete(f"{aiplatform(cfg.region)}/{existing['name']}", params={"force": "true"})
+        r.wait(op, aiplatform(cfg.region), timeout=900)
+        existing = None
+    if existing is not None and update_engine:
+        update_engine_code(cfg, theme, urls, ms, existing["name"], orchestrator_id)
+    if existing is not None and not update_engine:
+        c.log(f"  reusing {existing['name']} ({display})")
+    engine = existing["name"] if existing else create_engine(cfg, theme, urls, ms, orchestrator_id)
+    eng = get_engine(r, cfg, engine)
+    member = principal(cfg, eng, engine)
+    rec: dict[str, Any] = {"engine": engine, "principal": member, "display_name": display,
+                           "identity_type": (eng or {}).get("spec", {}).get("identityType")}
+    grant_agent_roles(cfg, r, member, theme)
+    a = None
+    for _ in range(20):
+        a = registry.find_runtime_agent(r, f"projects/{cfg.project}/locations/{cfg.region}", engine)
+        if a:
+            break
+        time.sleep(6)
+    if a:
+        rec["registry"] = a["name"]
+    else:
+        c.log("  [yellow]engine not yet auto-registered in Agent Registry (re-run later for ingress policy)[/]")
+        if prev.get("registry") and prev.get("engine") == engine:
+            rec["registry"] = prev["registry"]
+    c.log(f"  orchestrator {engine}\n  principal {member}")
+    return rec
 
 
 # ---------------------------------------------------------------- main
@@ -268,35 +318,16 @@ def run(cfg: DemoConfig, theme_id: str, skip_build: bool = False, only: str | No
 
     if "engine" in steps:
         c.log("[bold]Agent Runtime orchestrator[/]")
-        orch = tstate.get("orchestrator", {})
-        existing = get_engine(r, cfg, orch["engine"]) if orch.get("engine") else None
-        if existing is None:
-            existing = find_engine(r, cfg, engine_display_name(cfg, theme))
-        if existing is not None and recreate_engine:
-            c.log(f"  deleting {existing['name']}")
-            op = r.delete(f"{aiplatform(cfg.region)}/{existing['name']}", params={"force": "true"})
-            r.wait(op, aiplatform(cfg.region), timeout=900)
-            existing = None
-        if existing is not None and update_engine:
-            update_engine_code(cfg, theme, urls, ms, existing["name"])
-        engine = existing["name"] if existing else create_engine(cfg, theme, urls, ms)
-        eng = get_engine(r, cfg, engine)
-        member = principal(cfg, eng, engine)
-        orch = {"engine": engine, "principal": member, "display_name": engine_display_name(cfg, theme),
-                "identity_type": (eng or {}).get("spec", {}).get("identityType")}
-        grant_agent_roles(cfg, r, member, theme)
-        a = None
-        for _ in range(20):
-            a = registry.find_runtime_agent(r, f"projects/{cfg.project}/locations/{cfg.region}", engine)
-            if a:
-                break
-            time.sleep(6)
-        if a:
-            orch["registry"] = a["name"]
-        else:
-            c.log("  [yellow]engine not yet auto-registered in Agent Registry (re-run later for ingress policy)[/]")
+        prev = tstate.get("orchestrator", {})
+        orch = deploy_orchestrator(cfg, r, theme, urls, ms, None, prev, recreate_engine, update_engine)
         update_state("themes", theme.id, "orchestrator", value=orch)
-        c.log(f"  orchestrator {engine}\n  principal {member}")
+        if theme.additional_orchestrators:
+            extra = dict(tstate.get("orchestrators") or {})
+            for o in theme.additional_orchestrators:
+                c.log(f"[bold]Agent Runtime orchestrator {o.id}[/] (additional, CONTRACTS §12)")
+                extra[o.id] = deploy_orchestrator(cfg, r, theme, urls, ms, o.id, extra.get(o.id, {}),
+                                                  recreate_engine, update_engine)
+                update_state("themes", theme.id, "orchestrators", value=extra)
     st = load_state()
     c.console.print_json(data=st["themes"][theme.id])
     return st["themes"][theme.id]

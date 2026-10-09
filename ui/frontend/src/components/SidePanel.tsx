@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import type { Api } from "../api/client";
 import type { Policy, PolicyStatus } from "../api/types";
 import type { Demo } from "../useDemo";
-import { logToText } from "../util";
+import { agentIndex, agentName, logToText, policySource } from "../util";
+import type { Theme } from "../api/types";
 import { CodeFull, CodeInline } from "./CodeView";
 import { CopyButton, GlassModal } from "./Glass";
 import { GatewayLogsSheet } from "./GatewayLogs";
+import { TerraformSheet } from "./TerraformSheet";
 import { LogList } from "./LogList";
-import { ChevronIcon, ClockIcon, CloseIcon, CopyIcon, ExpandIcon, EyeIcon, LogIcon, OpenInNewIcon, PopupIcon, PlayIcon, RefreshIcon, ShieldIcon, SparkIcon, WarnIcon } from "./Icons";
+import { ChevronIcon, ClockIcon, CloseIcon, CodeIcon, CopyIcon, ExpandIcon, EyeIcon, LogIcon, OpenInNewIcon, PopupIcon, PlayIcon, RefreshIcon, ShieldIcon, SparkIcon, WarnIcon } from "./Icons";
 import { PendingProgress, SettledPop, useSettled } from "./Progress";
 
 const STATUS_TEXT: Record<string, string> = {
@@ -17,6 +19,18 @@ const STATUS_TEXT: Record<string, string> = {
   pending_removal: "Removing",
   error: "Error",
 };
+
+/** Small accent chip naming an additional orchestrator (CONTRACTS §12). Renders nothing for the primary. */
+function AgentChip({ theme, source, prefix = "", title }: { theme: Theme | null; source: string | null | undefined; prefix?: string; title?: string }) {
+  if (!source || !theme) return null;
+  const name = agentName(theme, source);
+  return (
+    <span className={`agent-chip accent-${agentIndex(theme, source)}`} title={title ?? `Applies to ${name} (its own Agent Identity)`}>
+      {prefix}
+      {name}
+    </span>
+  );
+}
 
 function Pill({ st, settled }: { st?: PolicyStatus; settled?: boolean }) {
   const s = st?.status ?? "removed";
@@ -75,6 +89,7 @@ function PolicyCard({ d, api, policy }: { d: Demo; api: Api; policy: Policy }) {
           onChange={(v) => d.setPolicy(policy.id, v ? "apply" : "remove")}
         />
         <div className="policy-text">
+          <AgentChip theme={d.theme} source={policySource(policy)} />
           {policy.text}
         </div>
         <Pill st={st} settled={!!settled} />
@@ -145,6 +160,7 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [logExpanded, setLogExpanded] = useState(false);
   const [gwOpen, setGwOpen] = useState(false);
+  const [tfOpen, setTfOpen] = useState(false);
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
   }, [sc?.id]);
@@ -183,7 +199,10 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
                 const st = d.state?.policies[p.id];
                 return (
                   <li key={p.id}>
-                    <span className="precond-text">{p.text}</span>
+                    <span className="precond-text">
+                      <AgentChip theme={theme} source={policySource(p)} />
+                      {p.text}
+                    </span>
                     <Pill st={st} />
                   </li>
                 );
@@ -200,7 +219,12 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
         <section className="card">
           <div className="card-head">
             <h3>Policies</h3>
-            <span className="muted small">{isDemo ? "simulated" : "real GCP changes"}</span>
+            <div className="policies-head-tools">
+              <span className="muted small">{isDemo ? "simulated" : "real GCP changes"}</span>
+              <button className="mini-btn" onClick={() => setTfOpen(true)} aria-label="Export the current policy state as Terraform" title="Generate Terraform (HCL) for the policies currently in place">
+                <CodeIcon size={13} /> Export Terraform
+              </button>
+            </div>
           </div>
           {policies.length === 0 && <div className="muted">No policies for this scenario.</div>}
           {policies.map((p) => (
@@ -277,6 +301,7 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
                     <span className="test-text">
                       <span className="test-label">
                         {t.label}
+                        {t.agent && <AgentChip theme={theme} source={t.agent} prefix="as " title={`Runs as ${agentName(theme, t.agent)}`} />}
                         {t.malicious && <span className="tag tag-orange">malicious</span>}
                       </span>
                       <span className="test-prompt">“{t.prompt}”</span>
@@ -353,6 +378,7 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
         </GlassModal>
       )}
       {gwOpen && <GatewayLogsSheet d={d} api={api} onClose={() => setGwOpen(false)} />}
+      {tfOpen && <TerraformSheet d={d} api={api} onClose={() => setTfOpen(false)} />}
     </aside>
   );
 }

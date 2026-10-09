@@ -1,6 +1,6 @@
 # Demo Script: IT / HR Helpdesk theme
 
-A presenter runbook for the `helpdesk` theme. The full version takes **10–15 minutes**; the [5-minute variant](#5-minute-variant) is at the end. The `retail` theme has the same six tabs, so this script works for it too: swap the names using the table in [Retail mapping](#retail-mapping).
+A presenter runbook for the `helpdesk` theme. The full version takes **10–15 minutes**; the [5-minute variant](#5-minute-variant) is at the end. The `retail` theme has the same seven tabs, so this script works for it too: swap the names using the table in [Retail mapping](#retail-mapping).
 
 **The story in one line:** an agent on Agent Runtime starts out able to reach anything. Agent Gateway plus Agent Registry turn that into explicit, identity-based policy, per agent and per MCP tool, in both directions, with Model Armor screening the traffic.
 
@@ -25,6 +25,7 @@ IAM and gateway changes take about 1–7 minutes to take effect, so stage the "a
 - [ ] Set **Mode** to **Live with fallback**.
 - [ ] Apply `gw-egress`, `allow-kb`, `tickets-readonly` (leave `allow-hr`, `tickets-all` and `allow-directory` off).
 - [ ] Apply `gw-ingress` (the ingress gateway for scenario 5).
+- [ ] For scenario 7: apply `gw-egress-hr` (HR Assistant's engine on the same egress gateway) and `hr-assistant-allow-hr`. Leave `hr-assistant-allow-kb` off.
 - [ ] Leave the **Model Armor** checkbox **off** (also a gateway change, so either pre-test it now and turn it off again, or rely on fallback for that one).
 - [ ] Wait until nothing shows *pending*, then click **Probe** once on the Model Armor tab to confirm green edges.
 
@@ -76,6 +77,8 @@ After the salary test:
 
 **Optional live toggle:** apply `allow-hr` to show it goes *pending*, then explain propagation time. Remove it again before moving on.
 
+**Show the grant:** click the **Agent Registry** node and stay on *Agents*: KB Agent lists *Helpdesk Agent (Agent Identity) · unconditional · allow-kb*, HR Records Agent says *No one — default deny*. Open Agent Registry to show the binding appear when you apply `allow-hr` (it refreshes every 10 s).
+
 ## Scenario 4: MCP tools (about 3 min)
 
 **Click:** the *MCP tools* tab. `tickets-readonly` on; `tickets-all` and `allow-directory` off. Run **Read a ticket**, then **Delete a ticket**, then **Probe every tool**.
@@ -86,6 +89,8 @@ After the salary test:
 **Audience sees:** on the Tickets node, the `list_tickets` and `get_ticket` rows are green and the `close_ticket` and `delete_ticket` rows are red; both Directory rows are red.
 
 **Optional, the same result from MCP hints:** turn `tickets-readonly` off and `tickets-readonly-hints` on (allow ~6 minutes), then run **Probe every tool** again. Same outcome, but open **Under the hood** on both: the first policy lists tool names (`mcp.toolName in ['list_tickets', 'get_ticket', '']`), the second has no names at all (`mcp.tool.isReadOnly == true`). The gateway reads `readOnlyHint` from the tool spec in Agent Registry, so a new read-only tool is allowed automatically, while with the name list it stays blocked until someone adds it.
+
+**Show the condition:** click the **Agent Registry** node → *MCP servers*. Tickets MCP shows its tools with READ / WRITE badges (hover for the raw MCP annotations) and a *conditional* binding with the CEL expression and the policy id (`tickets-readonly` or `tickets-readonly-hints`); Directory MCP says *No one — default deny*. With the sheet open, apply a policy and watch the binding appear.
 
 > "Two ways to say 'read-only'. Name the tools, which is explicit but needs updating as the server grows, or trust the tools' own MCP annotations as registered in Agent Registry."
 
@@ -112,6 +117,22 @@ After the salary test:
 **Audience sees:** edges that were green turn orange with a shield (`blocked`); a shield badge appears on the gateway node.
 
 **Recovery:** turning Model Armor on is also a gateway change and can be `pending`. Live with fallback replays the recording. Mention that the checkbox applies to every scenario and every theme.
+
+## Scenario 7: Same gateway, different agents (about 2 min)
+
+**Click:** the *Same gateway, different agents* tab. The diagram shows **two** agents on Agent Runtime, Helpdesk Agent and HR Assistant, both behind the same egress gateway. `gw-egress` and `gw-egress-hr` are on (preconditions), `allow-kb` and `hr-assistant-allow-hr` are on, `allow-hr` and `hr-assistant-allow-kb` are off. Run **Helpdesk Agent: ask for a salary**, then **HR Assistant: ask for a salary**, then **Probe both agents**.
+
+**Say:**
+> "Two agents, one shared egress gateway: GCP has one per project and region, so every agent goes through the same one. What's different is the identity. Each agent on Agent Runtime has its own Agent Identity, and the grants are per identity. Helpdesk Agent is allowed to reach KB Agent; HR Assistant is allowed to reach HR Records Agent."
+
+After the two salary tests:
+> "Same question, same gateway, same destination. Helpdesk Agent gets a 403, HR Assistant gets the answer. Nothing about the network path is different; access follows the identity of the agent asking, not where it runs."
+
+**Audience sees:** Helpdesk Agent → HR Records Agent red (`denied`); HR Assistant → HR Records Agent green with the salary answer. **Probe both agents** shows the mirror image: Helpdesk Agent → KB Agent green, HR Assistant → KB Agent red.
+
+**Show the grant:** click the **Agent Registry** node: HR Records Agent lists *HR Assistant (Agent Identity) · hr-assistant-allow-hr*, KB Agent lists *Helpdesk Agent (Agent Identity) · allow-kb*. Two different principals, each with its own `roles/iap.egressor` grant. The gateway log entries for the two salary calls show the same destination and gateway with opposite decisions.
+
+**Recovery:** attaching HR Assistant's engine to the gateway is an engine redeploy (~5 min), so pre-apply `gw-egress-hr` (checklist). Live with fallback replays or simulates if it's still pending.
 
 ## Wrap-up (about 1 min)
 
@@ -180,4 +201,5 @@ Talk track: "This isn't the UI's opinion: it's the gateway's own audit trail, wi
 | Tickets MCP: `list_tickets`, `get_ticket` / `close_ticket`, `delete_ticket` | Inventory MCP: `list_stock`, `get_item` / `adjust_stock`, `delete_item` |
 | Directory MCP: `lookup_user` / `reset_password` | Orders MCP: `lookup_order` / `issue_refund` (`orders-lookup` allows only the lookup) |
 | Pre-apply: `allow-kb`, `tickets-readonly` | Pre-apply: `allow-merch`, `inventory-readonly`, `orders-lookup` |
+| Scenario 7: HR Assistant (`hr-assistant`): `gw-egress-hr`, `hr-assistant-allow-hr`, `hr-assistant-allow-kb`; "What does jdoe earn?" | Scenario 7: Pricing Analyst (`pricing-analyst`): `gw-egress-pricing`, `pricing-analyst-allow-pricing`, `pricing-analyst-allow-merch`; "What is our margin on the Trailhead 2-Person Tent?" (Store Ops Agent denied, Pricing Analyst allowed) |
 | Users → agent: `gw-ingress`; Normal request "What is the password policy?" / Prompt injection + PII (SSN) | Users → agent: `gw-ingress`; Normal request "What promotions are running this week?" / Prompt injection + PII (refund-everything injection plus a card number) |

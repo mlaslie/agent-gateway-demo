@@ -18,6 +18,21 @@ orchestrator:
     Every tool returns an "outcome". If the outcome is "denied" or "blocked", tell the user plainly
     that access was blocked by policy (name the agent or tool) and do not retry another way.
 
+# A second Agent Runtime agent on the same shared Agent Gateway (scenario 7, docs/CONTRACTS.md §12).
+# Its own engine and Agent Identity; policies with params.source: hr-assistant apply to it.
+additional_orchestrators:
+  - id: hr-assistant
+    display_name: HR Assistant
+    description: HR-staff-facing assistant on Agent Runtime (employee records)
+    instruction: |
+      You are the HR assistant for the company's HR staff. Help them with employee records:
+      job titles, managers, salaries and performance ratings.
+      Use list_capabilities to see which remote agents and MCP tools exist.
+      - Use call_agent("hr-records-agent", ...) for employee record questions.
+      - You may also use call_agent("kb-agent", ...) for HR policy and how-to questions.
+      Every tool returns an "outcome". If the outcome is "denied" or "blocked", tell the user plainly
+      that access was blocked by policy (name the agent or tool) and do not retry another way.
+
 components:
   - {id: kb-agent, kind: a2a_agent, role_label: "A2A agent"}
   - {id: hr-records-agent, kind: a2a_agent, role_label: "A2A agent"}
@@ -60,3 +75,18 @@ policies:
     text: "Helpdesk Agent can use the Directory MCP server."
     type: mcp_server_allow
     params: {target: directory-mcp}
+  # ---- HR Assistant (additional orchestrator, scenario 7): same gateway, its own Agent Identity
+  - id: gw-egress-hr
+    text: "All of HR Assistant's outbound traffic goes through the same Agent Gateway (default: deny everything)."
+    type: gateway_attach
+    params: {path: egress, source: hr-assistant}
+    explain: Binds HR Assistant's Agent Runtime engine to the same shared egress gateway as Helpdesk Agent.
+  - id: hr-assistant-allow-hr
+    text: "HR Assistant can talk to HR Records Agent over A2A."
+    type: a2a_allow
+    params: {target: hr-records-agent, source: hr-assistant}
+    explain: Grants roles/iap.egressor to HR Assistant's Agent Identity (not Helpdesk Agent's) on HR Records Agent's Agent Registry entry.
+  - id: hr-assistant-allow-kb
+    text: "HR Assistant can talk to KB Agent over A2A."
+    type: a2a_allow
+    params: {target: kb-agent, source: hr-assistant}

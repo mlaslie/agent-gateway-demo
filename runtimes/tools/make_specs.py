@@ -5,7 +5,9 @@ The CLI (`./agdemo deploy-theme`) uses the same functions:
     encode_spec(obj)                      -> base64(JSON) string for the COMPONENT_SPEC / ORCHESTRATOR_SPEC env var
     component_spec(theme, component_id)   -> McpServerSpec / A2AAgentSpec as a plain dict
     topology(theme, urls)                 -> the orchestrator's `topology` list
-    orchestrator_spec(theme, urls)        -> Orchestrator fields + `topology` + resolved `model`
+    orchestrator_spec(theme, urls[, default_model, orchestrator_id])
+                                          -> Orchestrator fields + `topology` + resolved `model`
+                                             (orchestrator_id: an additional orchestrator, CONTRACTS §12)
 
 `urls` maps component id -> base URL of its Cloud Run service (no trailing slash, no /mcp);
 MCP entries get "/mcp" appended here.
@@ -57,8 +59,11 @@ def topology(theme: Theme, urls: dict[str, str]) -> list[dict[str, Any]]:
     return out
 
 
-def orchestrator_spec(theme: Theme, urls: dict[str, str], default_model: str = "gemini-2.5-flash") -> dict[str, Any]:
-    spec = theme.orchestrator.model_dump(mode="json")
+def orchestrator_spec(theme: Theme, urls: dict[str, str], default_model: str = "gemini-2.5-flash",
+                      orchestrator_id: str | None = None) -> dict[str, Any]:
+    """ORCHESTRATOR_SPEC for the primary orchestrator, or for the additional one `orchestrator_id`
+    (docs/CONTRACTS.md §12: its own fields, the same topology)."""
+    spec = theme.orchestrator_for(orchestrator_id).model_dump(mode="json")
     spec["model"] = spec.get("model") or default_model
     spec["topology"] = topology(theme, urls)
     return spec

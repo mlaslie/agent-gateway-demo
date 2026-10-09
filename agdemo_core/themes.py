@@ -128,6 +128,9 @@ class Theme(BaseModel):
     name: str
     description: str = ""
     orchestrator: Orchestrator
+    # More Agent Runtime agents on the same shared gateways (docs/CONTRACTS.md §12). Each is its own engine with
+    # its own Agent Identity; policies name it with params.source, its edges are "<id>/<edge>".
+    additional_orchestrators: list[Orchestrator] = Field(default_factory=list)
     components: list[Component]
     policies: list[Policy]
     layout: dict[str, tuple[float, float]] = Field(default_factory=dict)   # optional node positions
@@ -139,14 +142,41 @@ class Theme(BaseModel):
     @model_validator(mode="after")
     def _check(self) -> "Theme":
         ids = {c.id for c in self.components}
+        extra = [o.id for o in self.additional_orchestrators]
+        if len(set(extra)) != len(extra):
+            raise ValueError("additional_orchestrators: duplicate id")
+        for oid in extra:
+            if not oid or "/" in oid or ":" in oid or oid in ids:
+                raise ValueError(f"additional orchestrator {oid!r}: id must be non-empty, without '/' or ':', "
+                                 "and different from every component id")
         for p in self.policies:
             t = p.params.get("target")
             if t is not None and t not in ids:
                 raise ValueError(f"policy {p.id}: unknown target {t}")
+            src = p.params.get("source")
+            if src is not None:
+                if src not in extra:
+                    raise ValueError(f"policy {p.id}: unknown source {src} (not in additional_orchestrators)")
+                if p.type == "gateway_attach" and p.params.get("path", "egress") != "egress":
+                    raise ValueError(f"policy {p.id}: ingress gateway policies are primary-only (no source)")
+        nodes = {f"orchestrator:{o}" for o in extra}
+        for sc in self.scenarios:
+            for n in sc.nodes:
+                if n.startswith("orchestrator:") and n not in nodes:
+                    raise ValueError(f"scenario {sc.id}: unknown node {n}")
+            for t in sc.tests:
+                if t.agent is not None and t.agent not in extra:
+                    raise ValueError(f"scenario {sc.id} test {t.id}: unknown agent {t.agent}")
         return self
 
     def component(self, cid: str) -> Component:
         return next(c for c in self.components if c.id == cid)
+
+    def orchestrator_for(self, source: str | None) -> Orchestrator:
+        """The primary orchestrator (source None) or the additional one with that id."""
+        if source is None:
+            return self.orchestrator
+        return next(o for o in self.additional_orchestrators if o.id == source)
 
     def policy(self, pid: str) -> Policy:
         return next(p for p in self.policies if p.id == pid)
@@ -163,6 +193,7 @@ class Probe(BaseModel):
 class ScenarioTest(BaseModel):
     id: str
     label: str
+    agent: str | None = None                    # additional orchestrator id that runs this test (None = primary)
     prompt: str                                 # natural-language prompt sent to the orchestrator (or ingress call)
     probes: list[Probe] = Field(default_factory=list)   # deterministic edge checks run alongside / instead of the LLM
     malicious: bool = False                     # Model Armor should block this when enabled
@@ -216,13 +247,41 @@ def list_themes(themes_dir: Path = THEMES_DIR) -> list[str]:
     return sorted(p.parent.name for p in themes_dir.glob("*/theme.yaml") if not p.parent.name.startswith("_"))
 
 
-def edge_ids(theme: Theme) -> list[str]:
-    """All egress + ingress edge ids for a theme (see docs/CONTRACTS.md#edges)."""
+def split_source(edge: str) -> tuple[str | None, str]:
+    """'hr-assistant/hr-records-agent' -> ('hr-assistant', 'hr-records-agent'); 'kb-agent' -> (None, 'kb-agent')."""
+    if "/" in edge:
+        a, b = edge.split("/", 1)
+        return a, b
+    return None, edge
+
+
+def source_edge(orchestrator_id: str | None, base_edge: str) -> str:
+    """Inverse of split_source: (None, e) -> e; ('hr-assistant', e) -> 'hr-assistant/e'."""
+    return f"{orchestrator_id}/{base_edge}" if orchestrator_id else base_edge
+
+
+def orchestrator_ids(theme: Theme) -> list[str | None]:
+    """[None (the primary), <additional orchestrator ids>...]."""
+    return [None, *(o.id for o in theme.additional_orchestrators)]
+
+
+def base_egress_edges(theme: Theme) -> list[str]:
+    """Egress edge ids of one orchestrator, unprefixed (the same set for every orchestrator)."""
     out: list[str] = []
     for c in theme.components:
         if c.kind == "a2a_agent":
             out.append(c.id)
         else:
             out += [f"{c.id}:{t.name}" for t in theme.mcp_servers[c.id].tools]
+    return out
+
+
+def edge_ids(theme: Theme) -> list[str]:
+    """All egress + ingress edge ids for a theme (see docs/CONTRACTS.md#edges, §12): the primary's egress
+    edges, then every additional orchestrator's (prefixed '<id>/'), then the ingress edge."""
+    base = base_egress_edges(theme)
+    out: list[str] = []
+    for oid in orchestrator_ids(theme):
+        out += [source_edge(oid, e) for e in base]
     out.append(INGRESS_EDGE)
     return out

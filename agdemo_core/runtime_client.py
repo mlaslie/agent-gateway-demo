@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 import uuid
 from typing import Any, AsyncIterator
 
@@ -29,6 +30,7 @@ class RuntimeCallError(Exception):
 
 # ------------------------------------------------------------------ auth
 _creds = None
+_creds_lock = threading.Lock()     # probes to several engines run in parallel (CONTRACTS §12)
 
 
 def _token() -> str:
@@ -36,11 +38,12 @@ def _token() -> str:
     import google.auth
     import google.auth.transport.requests
 
-    if _creds is None:
-        _creds, _ = google.auth.default(scopes=_SCOPES)
-    if not _creds.valid:
-        _creds.refresh(google.auth.transport.requests.Request())
-    return _creds.token
+    with _creds_lock:
+        if _creds is None:
+            _creds, _ = google.auth.default(scopes=_SCOPES)
+        if not _creds.valid:
+            _creds.refresh(google.auth.transport.requests.Request())
+        return _creds.token
 
 
 async def _auth_headers() -> dict[str, str]:

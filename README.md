@@ -41,6 +41,7 @@ Use cases are pluggable **themes** (YAML only). Two ship with the repo: *IT / HR
 | 4 | MCP tools | Per-tool policy: read-only MCP tools allowed, write and delete tools denied, either by listing tool names or by the tools' MCP `readOnlyHint` annotations |
 | 5 | Users → agent | Every call into the agent goes through the ingress gateway; with Model Armor on, a prompt injection or PII is blocked (403) before it reaches the agent |
 | 6 | Model Armor | Prompt injection and sensitive data in MCP tool calls blocked by the egress gateway, even where policy allows the tool |
+| 7 | Same gateway, different agents | Two Agent Runtime agents share one egress gateway; each has its own Agent Identity and its own grants, so the same question to the same destination is allowed for one agent and denied for the other. Access follows identity, not network location |
 
 ## Architecture
 
@@ -132,7 +133,7 @@ In `config/demo.yaml` set at least:
 ./agdemo deploy-theme retail
 ```
 
-Each theme gets its A2A agents and MCP servers on Cloud Run, their Agent Registry entries, and an orchestrator on Agent Runtime with Agent Identity and **no gateway**: the wide-open starting point.
+Each theme gets its A2A agents and MCP servers on Cloud Run, their Agent Registry entries, and an orchestrator on Agent Runtime with Agent Identity and **no gateway**: the wide-open starting point. Themes with `additional_orchestrators` (both shipped themes, for scenario 7) also get a second Agent Runtime agent, with its own Agent Identity and no gateway.
 
 **6. Optional: publish the agents to Gemini Enterprise** (needed for GE Demo mode)
 
@@ -143,7 +144,7 @@ Agents are **not** added to Gemini Enterprise automatically. Set `gemini_enterpr
 ./agdemo publish-ge retail       # adds "Store Ops Agent (Agent Gateway demo)"
 ```
 
-This is an ADK registration (Gemini Enterprise calls the Agent Runtime agent directly), so it uses the same agent and the same gateways as the UI. It's idempotent; re-run it if you recreate a theme's agent (`deploy-theme --recreate-engine`). Presenters need `roles/aiplatform.user`, which bootstrap grants to `ui.admin_access`.
+Only the primary agent is published; `./agdemo publish-ge <theme> --agent <id>` publishes a second agent (e.g. `--agent hr-assistant`) instead. This is an ADK registration (Gemini Enterprise calls the Agent Runtime agent directly), so it uses the same agent and the same gateways as the UI. It's idempotent; re-run it if you recreate a theme's agent (`deploy-theme --recreate-engine`). Presenters need `roles/aiplatform.user`, which bootstrap grants to `ui.admin_access`.
 
 **7. Deploy the UI**
 
@@ -160,6 +161,8 @@ Open the UI, pick a theme, choose **Live** and click **Verify** to confirm the w
 Everything (project, region, names, principals) comes from `config/demo.yaml`. Every resource is named `<prefix>-…` and labeled, so several copies can share a project. Commands are idempotent: if a step fails, fix the cause and run it again.
 
 No Google Cloud project? `./agdemo ui local --mode demo` runs the whole UI in simulated mode.
+
+To take a policy state to production, `./agdemo export-terraform <theme> [--out DIR] [--include-shared]` writes Terraform for the theme's current Live policy state (default `config/generated/terraform/<theme>`; read-only). The same export is in the UI (**Export Terraform** on the Policies card).
 
 ## What gets created
 
@@ -189,13 +192,14 @@ Each theme deploys the same four kinds of resources. Cloud Run services and Agen
 | Service | Resource | `helpdesk` (IT / HR Helpdesk) | `retail` (Retail Store Operations) |
 |---|---|---|---|
 | **Agent Runtime** | Orchestrator (reasoning engine, ADK, Agent Identity, no gateway at first) | `agdemo-helpdesk-orchestrator` (Helpdesk Agent) | `agdemo-retail-orchestrator` (Store Ops Agent) |
+| | Second agent for scenario 7 (`additional_orchestrators`: same package and topology, its own Agent Identity, no gateway at first) | `agdemo-helpdesk-hr-assistant` (HR Assistant) | `agdemo-retail-pricing-analyst` (Pricing Analyst) |
 | **Cloud Run** | A2A agent: the one allowed in step 3 | `agdemo-helpdesk-kb-agent` | `agdemo-retail-merchandising-agent` |
 | | A2A agent: the sensitive one | `agdemo-helpdesk-hr-records-agent` | `agdemo-retail-pricing-agent` |
 | | MCP server with read + write tools | `agdemo-helpdesk-tickets-mcp` (`list_tickets`, `get_ticket` / `close_ticket`, `delete_ticket`) | `agdemo-retail-inventory-mcp` (`list_stock`, `get_item` / `adjust_stock`, `delete_item`) |
 | | Second MCP server | `agdemo-helpdesk-directory-mcp` (`lookup_user` / `reset_password`) | `agdemo-retail-orders-mcp` (`lookup_order` / `issue_refund`) |
 | **Agent Registry** | One service per component (A2A agents with their agent card and skills, MCP servers with their tool list) | Same names as the Cloud Run services | Same names as the Cloud Run services |
-| | Orchestrator | Registered automatically by Agent Runtime as an agent | Same |
-| **IAM** | Project roles for the orchestrator's Agent Identity principal | `aiplatform.user`, `agentregistry.viewer`, `logging.logWriter`, `monitoring.metricWriter`, `cloudtrace.agent`, `browser`, `serviceusage.serviceUsageConsumer` | Same |
+| | Orchestrators | Each one (primary and second agent) is registered automatically by Agent Runtime as an agent | Same |
+| **IAM** | Project roles for each orchestrator's Agent Identity principal (primary and second agent) | `aiplatform.user`, `agentregistry.viewer`, `logging.logWriter`, `monitoring.metricWriter`, `cloudtrace.agent`, `browser`, `serviceusage.serviceUsageConsumer` | Same |
 | **Gemini Enterprise** (optional, `./agdemo publish-ge`) | Agent registration in your GE app | "Helpdesk Agent (Agent Gateway demo)" | "Store Ops Agent (Agent Gateway demo)" |
 
 The A2A agents and MCP servers are the same two generic images configured from the theme's YAML (`agents.yaml`, `tools.yaml`); they return mock data only.
@@ -206,15 +210,16 @@ These are created or removed only while the demo runs; **Reset** removes all of 
 
 | Control | Example (helpdesk) | GCP change |
 |---|---|---|
-| Egress gateway policy | `gw-egress` | PATCH the orchestrator's `agentGatewayConfig.agentToAnywhereConfig` → `agdemo-egress` (the agent redeploys, ~5 min) |
+| Egress gateway policy | `gw-egress`, `gw-egress-hr` | PATCH that agent's engine `agentGatewayConfig.agentToAnywhereConfig` → `agdemo-egress` (the agent redeploys, ~5 min). `gw-egress-hr` binds HR Assistant's engine to the same gateway |
 | Ingress gateway policy | `gw-ingress` | PATCH `agentGatewayConfig.clientToAgentConfig` → `agdemo-ingress` (~2½ min) |
 | Allow an A2A agent | `allow-kb`, `allow-hr` | `roles/iap.egressor` for the orchestrator's Agent Identity on that agent's Agent Registry entry |
+| Allow an A2A agent, per agent | `hr-assistant-allow-hr`, `hr-assistant-allow-kb` | The same grant for the **second agent's** Agent Identity (the policy's `source`), so each agent's access is decided by its own identity |
 | Allow a whole MCP server | `tickets-all`, `allow-directory` | `roles/iap.egressor` on that MCP server's Agent Registry entry |
 | Allow read-only MCP tools, by name | `tickets-readonly` | The same binding with an IAM condition listing the allowed tool names: `iap.googleapis.com/mcp.toolName in ['list_tickets', 'get_ticket', '']` |
 | Allow read-only MCP tools, by MCP hint | `tickets-readonly-hints` | The same binding with an IAM condition on the tool's annotation: `iap.googleapis.com/mcp.tool.isReadOnly == true`, which the gateway takes from `readOnlyHint` in the tool spec registered in Agent Registry. No tool names in the policy |
 | **Model Armor** checkbox | (all themes) | Creates `agdemo-egress-ma-policy` and `agdemo-ingress-ma-policy` (`CONTENT_AUTHZ`, via `agdemo-ma-authz` and template `agdemo-shield`); unticking deletes them (~4 min) |
 
-Retail uses the same patterns with its own ids (`allow-merch`, `allow-pricing`, `inventory-readonly`, `inventory-readonly-hints`, `inventory-all`, `orders-lookup`, `allow-orders`). **Under the hood** in each policy shows the exact commands.
+Retail uses the same patterns with its own ids (`allow-merch`, `allow-pricing`, `inventory-readonly`, `inventory-readonly-hints`, `inventory-all`, `orders-lookup`, `allow-orders`, and for Pricing Analyst `gw-egress-pricing`, `pricing-analyst-allow-pricing`, `pricing-analyst-allow-merch`). **Under the hood** in each policy shows the exact commands.
 
 ## Using the UI
 
@@ -245,7 +250,7 @@ Use **Live + fallback** when presenting.
 ### Side panel
 
 - **Scenario tabs and talk track:** one tab per step, with a description to read from.
-- **Policies:** each policy in plain English with an apply/remove toggle and its status. **Under the hood** shows the exact gcloud / REST calls, with Expand and Copy.
+- **Policies:** each policy in plain English with an apply/remove toggle and its status. **Under the hood** shows the exact gcloud / REST calls, with Expand and Copy. **Export Terraform** generates Terraform (HCL, `hashicorp/google` >= 8.1.0) for the policies currently in place: IAP egressor grants with the same conditions the demo applies, the gateway binding (a `terraform_data` PATCH, since no resource binds an existing engine) and the Model Armor authz policies. Tabs for `main.tf` / `variables.tf` / `README.md`, an **Include shared infrastructure** toggle (gateways, authz extensions, Model Armor template, Agent Registry entries, IAM), Copy and Download (.zip). The Agent Runtime engine and Cloud Run services are referenced, not managed. Read-only: nothing is changed in GCP.
 - **Tests:** each test sends a prompt to the agent. With **Use Gemini** off, the agent makes a fixed, repeatable set of calls (fast and predictable); with it on, Gemini decides which tools to call and writes the answer (realistic, may vary). **Record** saves a Live run for replay. **Probe all connections** checks every connection.
 - **Activity:** a live log of each prompt, call and answer. **Gateway logs** opens a live feed of the gateway's own allow/deny decisions from Cloud Logging, each linked to the entry in Cloud Logging; denied lines on the diagram get a log badge. **Expand** and **Copy** work on the whole log.
 
@@ -253,12 +258,14 @@ Use **Live + fallback** when presenting.
 
 Each line is a call, colored by outcome: **direct** (no gateway), **allowed**, **denied** (403 from the gateway), **blocked** (Model Armor), **pending** (a policy change in progress), **error** or **not tested**. MCP servers show each tool as its own row, so tool-level policy is visible per tool.
 
+Click the **Agent Registry** node on the diagram to browse what's registered: the theme's A2A agents with their skills, the MCP servers with each tool's READ / WRITE annotations, and the platform endpoints. Each entry lists who can call it (the `roles/iap.egressor` bindings, with any condition and the policy that created it) or "No one — default deny". In Live it reads Agent Registry and IAP (read-only) and refreshes every 10 s, so applying a policy shows the new binding appear.
+
 ## Themes
 
 | Theme | Orchestrator | A2A agents | MCP servers |
 |---|---|---|---|
-| `helpdesk`: IT / HR Helpdesk | `helpdesk-agent` | `kb-agent` (allowed), `hr-records-agent` (denied) | `tickets-mcp` (read: list/get; write: close/delete), `directory-mcp` |
-| `retail`: Retail Store Operations | `store-ops-agent` | `merchandising-agent` (allowed), `pricing-agent` (denied) | `inventory-mcp` (read: list_stock/get_item; write: adjust_stock/delete_item), `orders-mcp` (lookup_order / issue_refund) |
+| `helpdesk`: IT / HR Helpdesk | `helpdesk-agent`, plus `hr-assistant` (scenario 7) | `kb-agent` (allowed), `hr-records-agent` (denied) | `tickets-mcp` (read: list/get; write: close/delete), `directory-mcp` |
+| `retail`: Retail Store Operations | `store-ops-agent`, plus `pricing-analyst` (scenario 7) | `merchandising-agent` (allowed), `pricing-agent` (denied) | `inventory-mcp` (read: list_stock/get_item; write: adjust_stock/delete_item), `orders-mcp` (lookup_order / issue_refund) |
 
 A new theme is a folder of YAML. Start from `themes/_template/` and follow [docs/ADDING_A_THEME.md](docs/ADDING_A_THEME.md).
 
@@ -294,7 +301,7 @@ docs/                  documentation (below)
 ## Cleanup
 
 ```bash
-./agdemo teardown <theme>   # one theme's Cloud Run services, registry entries and Agent Runtime agent
+./agdemo teardown <theme>   # one theme's Cloud Run services, registry entries and Agent Runtime agents
 ./agdemo teardown --all     # everything with the configured prefix and labels, including the gateways
 ```
 

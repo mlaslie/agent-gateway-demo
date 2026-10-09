@@ -8,7 +8,8 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable
 
-from .themes import INGRESS_EDGE, Policy, ScenarioTest, Theme, edge_ids
+from .themes import (INGRESS_EDGE, Policy, ScenarioTest, Theme, base_egress_edges, edge_ids, orchestrator_ids,
+                     source_edge, split_source)
 
 EdgeState = dict[str, Any]
 
@@ -27,9 +28,20 @@ def _applied_policies(theme: Theme, applied: Iterable[str]) -> list[Policy]:
     return [p for p in theme.policies if p.id in ids]
 
 
-def gateway_applied(theme: Theme, applied: Iterable[str], path: str) -> bool:
-    return any(p.type == "gateway_attach" and p.params.get("path", "egress") == path
+def policy_source(policy: Policy) -> str | None:
+    """The orchestrator a policy applies to: params.source, or None for the primary (CONTRACTS §12)."""
+    return policy.params.get("source") or None
+
+
+def gateway_applied(theme: Theme, applied: Iterable[str], path: str, source: str | None = None) -> bool:
+    """Is orchestrator `source`'s (default: the primary's) `path` gateway_attach applied?"""
+    return any(p.type == "gateway_attach" and p.params.get("path", "egress") == path and policy_source(p) == source
                for p in _applied_policies(theme, applied))
+
+
+def orchestrator_egress_edges(theme: Theme, source: str | None = None) -> list[str]:
+    """Egress edge ids of one orchestrator (prefixed for an additional one)."""
+    return [source_edge(source, e) for e in base_egress_edges(theme)]
 
 
 def is_ingress_edge(edge: str) -> bool:
@@ -78,12 +90,19 @@ def edge_label(theme: Theme, edge: str) -> str:
 
 
 def _label(theme: Theme, edge: str) -> str:
-    target, tool = split_edge(edge)
+    src, base = split_source(edge)
+    target, tool = split_edge(base)
     if target == "ingress":
         return "User"
     spec = theme.a2a_agents.get(target) or theme.mcp_servers.get(target)
     name = spec.display_name if spec else target
-    return f"{name} · {tool}" if tool else name
+    label = f"{name} · {tool}" if tool else name
+    if src:   # an additional orchestrator's edge: say who is calling, e.g. "HR Assistant → HR Records Agent"
+        try:
+            label = f"{theme.orchestrator_for(src).display_name} → {label}"
+        except StopIteration:
+            label = f"{src} → {label}"
+    return label
 
 
 # ---------------------------------------------------------------- §3 evaluate
@@ -93,7 +112,6 @@ def evaluate(theme: Theme, applied: Iterable[str], model_armor: bool,
     applied = set(applied)
     pols = _applied_policies(theme, applied)
     malicious = bool(test and test.malicious)
-    egress_on = gateway_applied(theme, applied, "egress")
     ingress_on = gateway_applied(theme, applied, "ingress")
     out: dict[str, EdgeState] = {}
 
@@ -104,32 +122,36 @@ def evaluate(theme: Theme, applied: Iterable[str], model_armor: bool,
                                      "(prompt injection / sensitive data)")
         return st
 
-    for e in edge_ids(theme):
-        if is_ingress_edge(e):
-            # Ingress gateways screen content (Model Armor); they never deny a request on other grounds.
-            if not ingress_on:
+    # Each orchestrator is evaluated on its own (CONTRACTS §12): its own gateway binding, its own allows.
+    for src in orchestrator_ids(theme):
+        egress_on = gateway_applied(theme, applied, "egress", src)
+        mine = [p for p in pols if policy_source(p) == src]
+        for base in base_egress_edges(theme):
+            e = source_edge(src, base)
+            if not egress_on:
                 out[e] = edge_state("direct", governed=False, http_status=200,
-                                    detail="User calls the agent directly; no ingress gateway")
+                                    detail="Direct call; no Agent Gateway attached")
+            elif (p := _egress_allowing_policy(theme, mine, base)):
+                st = edge_state("allowed", governed=True, http_status=200,
+                                detail=f"Allowed by Agent Gateway ({p.id})")
+                # Verified behaviour: egress Model Armor screens MCP tools/call traffic, not A2A messages.
+                out[e] = armor(st, "egress") if ":" in base else st
             else:
-                out[e] = armor(edge_state("allowed", governed=True, http_status=200,
-                                          detail="Through the ingress gateway"
-                                                 + (" (screened by Model Armor)" if model_armor else "")),
-                               "ingress")
-            continue
+                who = theme.orchestrator_for(src).display_name
+                out[e] = edge_state("denied", governed=True, http_status=403,
+                                    detail="403 from gateway: iap.egressor missing for "
+                                           f"{_label(theme, base)}" + (f" ({who}'s Agent Identity)" if src else ""))
 
-        if not egress_on:
-            out[e] = edge_state("direct", governed=False, http_status=200,
-                                detail="Direct call; no Agent Gateway attached")
-        elif (p := _egress_allowing_policy(theme, pols, e)):
-            st = edge_state("allowed", governed=True, http_status=200,
-                            detail=f"Allowed by Agent Gateway ({p.id})")
-            # Verified behaviour: egress Model Armor screens MCP tools/call traffic, not A2A messages.
-            out[e] = armor(st, "egress") if ":" in e else st
-        else:
-            out[e] = edge_state("denied", governed=True, http_status=403,
-                                detail="403 from gateway: iap.egressor missing for "
-                                       f"{_label(theme, e)}")
-    return out
+    # Ingress gateways screen content (Model Armor); they never deny a request on other grounds.
+    if not ingress_on:
+        out[INGRESS_EDGE] = edge_state("direct", governed=False, http_status=200,
+                                       detail="User calls the agent directly; no ingress gateway")
+    else:
+        out[INGRESS_EDGE] = armor(edge_state("allowed", governed=True, http_status=200,
+                                             detail="Through the ingress gateway"
+                                                    + (" (screened by Model Armor)" if model_armor else "")),
+                                  "ingress")
+    return {e: out[e] for e in edge_ids(theme)}
 
 
 # ---------------------------------------------------------------- §8 signature
@@ -152,7 +174,6 @@ def test_signature(theme: Theme, scenario: Any, test: ScenarioTest, applied: Ite
          -> "allow-hr+gw-egress+ma-any"; at step 1 -> "none+ma-any".
     """
     edges = test_edges(theme, scenario, test)
-    egress = any(not is_ingress_edge(e) for e in edges)
     ingress = any(is_ingress_edge(e) for e in edges)
     keep = []
     for pid in set(applied):
@@ -160,13 +181,16 @@ def test_signature(theme: Theme, scenario: Any, test: ScenarioTest, applied: Ite
             p = theme.policy(pid)
         except StopIteration:
             continue
-        prm = p.params
+        prm, src = p.params, policy_source(p)
         if p.type == "gateway_attach":
-            hit = egress if prm.get("path", "egress") == "egress" else ingress
+            if prm.get("path", "egress") == "egress":
+                hit = any(not is_ingress_edge(e) and split_source(e)[0] == src for e in edges)
+            else:
+                hit = ingress
         elif p.type == "a2a_allow":
-            hit = prm.get("target") in edges
+            hit = source_edge(src, prm.get("target")) in edges
         else:   # mcp_server_allow / mcp_tool_allow
-            hit = any(e.startswith(f"{prm.get('target')}:") for e in edges)
+            hit = any(e.startswith(f"{source_edge(src, prm.get('target'))}:") for e in edges)
         if hit:
             keep.append(pid)
     ids = sorted(keep) or ["none"]
@@ -197,7 +221,26 @@ def test_edges(theme: Theme, scenario: Any, test: ScenarioTest) -> list[str]:
         return [p.edge for p in test.probes]
     if test_is_ingress(scenario, test):
         return [INGRESS_EDGE]
-    return egress_edge_ids(theme)
+    return orchestrator_egress_edges(theme, test.agent)
+
+
+def test_agents(theme: Theme, scenario: Any, test: ScenarioTest) -> list[str | None]:
+    """Orchestrators a test calls (None = primary), in order: its `agent`, then any other source of its edges."""
+    srcs: list[str | None] = []
+    for e in test_edges(theme, scenario, test):
+        if not is_ingress_edge(e) and (src := split_source(e)[0]) not in srcs:
+            srcs.append(src)
+    if not srcs:
+        return [test.agent]
+    return sorted(srcs, key=lambda x: x != test.agent)      # stable: the test's own agent first
+
+
+def calling_text(theme: Theme, scenario: Any, test: ScenarioTest) -> str:
+    """Status line for the start of a run, naming the agent(s) that are called."""
+    if test_is_ingress(scenario, test):
+        return f"Calling {theme.orchestrator.display_name} through the ingress path..."
+    names = [theme.orchestrator_for(a).id for a in test_agents(theme, scenario, test)]
+    return f"Calling {' and '.join(names)} via Agent Runtime..."
 
 
 def _render(value: Any, args: dict[str, Any]) -> Any:
@@ -215,7 +258,7 @@ def _render(value: Any, args: dict[str, Any]) -> Any:
 
 def mock_result(theme: Theme, edge: str) -> Any:
     """The mock payload a successful call on `edge` returns (MCP tool response rendered with probe_args)."""
-    target, tool = split_edge(edge)
+    target, tool = split_edge(split_source(edge)[1])
     if tool and target in theme.mcp_servers:
         t = next((t for t in theme.mcp_servers[target].tools if t.name == tool), None)
         if t is not None:
@@ -236,7 +279,7 @@ def edge_sentence(theme: Theme, edge: str, st: EdgeState) -> str:
     if state in ("direct", "allowed"):
         via = "through Agent Gateway" if state == "allowed" else "directly (no gateway)"
         res = mock_result(theme, edge)
-        tail = f": {_short(res)}" if res is not None and split_edge(edge)[1] else "."
+        tail = f": {_short(res)}" if res is not None and split_edge(split_source(edge)[1])[1] else "."
         return f"✓ {name} responded {via}{tail}"
     if state == "denied":
         return f"✕ {name}: access was blocked by Agent Gateway policy (403)."
@@ -247,14 +290,17 @@ def edge_sentence(theme: Theme, edge: str, st: EdgeState) -> str:
     return f"! {name}: call failed ({st.get('detail') or state})."
 
 
-def synth_message(theme: Theme, scenario: Any, test: ScenarioTest, edges: dict[str, EdgeState]) -> str:
-    """A short agent reply summarizing the outcome of each exercised edge."""
-    agent = theme.orchestrator.display_name
+def synth_message(theme: Theme, scenario: Any, test: ScenarioTest, edges: dict[str, EdgeState],
+                  samples: bool = True) -> str:
+    """A short agent reply summarizing the outcome of each exercised edge.
+    `samples=False` (Live runs, which have real replies) leaves out the theme's canned sample_replies."""
+    agent = theme.orchestrator_for(test.agent).display_name if not test_is_ingress(scenario, test) \
+        else theme.orchestrator.display_name
     if test_is_ingress(scenario, test):
         st = edges.get(INGRESS_EDGE, {}).get("state")
         if st in ("allowed", "direct"):
             via = "through the ingress gateway" if st == "allowed" else "directly (no gateway)"
-            answer = test.sample_replies.get(INGRESS_EDGE)
+            answer = test.sample_replies.get(INGRESS_EDGE) if samples else None
             return (f"{agent} received the request {via} and answered: {answer}" if answer
                     else f"{agent} received the request {via} and answered: “{test.prompt}” → handled.")
         if st == "blocked":
@@ -267,7 +313,8 @@ def synth_message(theme: Theme, scenario: Any, test: ScenarioTest, edges: dict[s
             if len(lines) > 1 else "")
     # What the remote agents said (simulated): only for calls that went through.
     replies = [f"{_label(theme, e)} replied: {test.sample_replies[e]}" for e in test_edges(theme, scenario, test)
-               if e in edges and edges[e].get("state") in ("direct", "allowed") and test.sample_replies.get(e)]
+               if samples and e in edges and edges[e].get("state") in ("direct", "allowed")
+               and test.sample_replies.get(e)]
     return "\n".join([h for h in [head] if h] + lines + replies)
 
 
@@ -277,13 +324,7 @@ def synth_events(theme: Theme, scenario: Any, test: ScenarioTest, applied: Itera
     full = evaluate(theme, applied, model_armor, test)
     edges = test_edges(theme, scenario, test)
     result: dict[str, EdgeState] = {}
-    ev: list[tuple[float, dict[str, Any]]] = []
-    agent = theme.orchestrator.display_name
-    if test_is_ingress(scenario, test):
-        ev.append((0.0, {"type": "status",
-                         "text": f"Calling {agent} through the ingress path..."}))
-    else:
-        ev.append((0.0, {"type": "status", "text": f"Calling {theme.orchestrator.id} via Agent Runtime..."}))
+    ev: list[tuple[float, dict[str, Any]]] = [(0.0, {"type": "status", "text": calling_text(theme, scenario, test)})]
     ev.append((0.3, {"type": "message", "role": "user", "text": test.prompt}))
     first = True
     for e in edges:

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Api } from "./api/client";
 import type { AppConfig, EdgeState, GatewayLogEntry, Mode, PolicyStatus, Scenario, SseEvent, Theme, ThemeState } from "./api/types";
-import { copyText } from "./util";
+import { agentIndex, agentName, copyText, edgeLabel, splitSource } from "./util";
 
 export interface LogEntry {
   id: number;
@@ -10,6 +10,8 @@ export interface LogEntry {
   kind: "status" | "agent" | "tool" | "user" | "edge" | "fallback" | "error" | "system" | "done" | "ge" | "gwlog";
   text: string;
   edge?: string;
+  /** Readable edge name for edges from an additional orchestrator ("HR Assistant → HR Records Agent", CONTRACTS §12). */
+  edgeLabel?: string;
   edgeState?: EdgeState;
   replayed?: boolean;
   testLabel?: string;
@@ -27,6 +29,10 @@ export interface TestRun {
   testId: string;
   label: string;
   prompt: string;
+  /** Display name of the additional orchestrator running this test (CONTRACTS §12); absent = the primary. */
+  agent?: string;
+  /** Accent index of that agent (1.. for additional orchestrators). */
+  agentIdx?: number;
   kind: "run" | "record";
   mode: Mode;
   status: TestRunStatus;
@@ -119,6 +125,9 @@ export function useDemo(api: Api) {
   const gwWatches = useRef<Map<string, () => void>>(new Map());
   const [edgeLogs, setEdgeLogs] = useState<Record<string, GatewayLogEntry>>({});
   const [viewLog, setViewLog] = useState<GatewayLogEntry | null>(null);
+  // Agent Registry browser sheet (opened from the diagram's registry node or the Activity card).
+  const [registryOpen, setRegistryOpen] = useState(false);
+  const openRegistry = useCallback(() => setRegistryOpen(true), []);
   const reqSeq = useRef(0);
   // Test results popup: the latest run, whether the popup is open, and a counter that asks it to take focus.
   const [testRun, setTestRun] = useState<TestRun | null>(null);
@@ -129,8 +138,11 @@ export function useDemo(api: Api) {
   const runSeq = useRef(0);
   const currentRun = useRef<number | null>(null);
 
+  const themeRef = useRef<Theme | null>(null);
+  themeRef.current = theme;
   const addLog = useCallback((e: Omit<LogEntry, "id" | "ts">) => {
-    const entry = { ...e, id: ++logSeq, ts: Date.now() };
+    const label = e.edge && !e.edgeLabel ? edgeLabel(themeRef.current, e.edge) : e.edgeLabel;
+    const entry = { ...e, ...(label && label !== e.edge ? { edgeLabel: label } : {}), id: ++logSeq, ts: Date.now() };
     setLog((l) => [...l.slice(-300), entry]);
   }, []);
 
@@ -216,7 +228,7 @@ export function useDemo(api: Api) {
     const policies = { ...serverState.policies, ...overrides };
     let gateways = serverState.gateways;
     if (theme) {
-      const gwFor = (path: string) => theme.policies.find((p) => p.type === "gateway_attach" && p.params.path === path)?.id;
+      const gwFor = (path: string) => theme.policies.find((p) => p.type === "gateway_attach" && p.params.path === path && !p.params.source)?.id;
       const g = { ...gateways };
       for (const path of ["egress", "ingress"] as const) {
         const pid = gwFor(path);
@@ -560,10 +572,24 @@ export function useDemo(api: Api) {
 
   /** Start a Test results run; opens the popup (when enabled) and returns the run id for tagging log entries. */
   const beginRun = useCallback(
-    (test: { id: string; label: string; prompt: string }, kind: TestRun["kind"], runMode: Mode, focus: boolean) => {
+    (test: { id: string; label: string; prompt: string; agent?: string | null; probes?: { edge: string }[]; multiAgent?: boolean }, kind: TestRun["kind"], runMode: Mode, focus: boolean) => {
       const id = ++runSeq.current;
       currentRun.current = id;
-      setTestRun({ id, testId: test.id, label: test.label, prompt: test.prompt, kind, mode: runMode, status: "running", startedAt: Date.now(), results: {} });
+      // Which agent runs it (CONTRACTS §12): the test's `agent`, else (themes with several agents) the probes' orchestrators.
+      const th = themeRef.current;
+      let agent: string | undefined;
+      let agentIdx: number | undefined;
+      if (test.agent) {
+        agent = agentName(th, test.agent);
+        agentIdx = agentIndex(th, test.agent);
+      } else if (test.multiAgent && test.probes?.length) {
+        const srcs = [...new Set(test.probes.filter((p) => !p.edge.startsWith("ingress:")).map((p) => splitSource(p.edge)[0]))];
+        if (srcs.length) {
+          agent = srcs.map((x) => agentName(th, x)).join(" + ");
+          agentIdx = srcs.length === 1 ? agentIndex(th, srcs[0]) : 0;
+        }
+      }
+      setTestRun({ id, testId: test.id, label: test.label, prompt: test.prompt, agent, agentIdx, kind, mode: runMode, status: "running", startedAt: Date.now(), results: {} });
       if (testPopup) {
         setResultsOpen(true);
         if (focus) setResultsFocus((n) => n + 1);
@@ -598,8 +624,8 @@ export function useDemo(api: Api) {
       let finished = false;
       let failed = false;
       setFallbackShown(false);
-      const runId = beginRun(test, "run", mode, !!opts.focus);
-      addLog({ kind: "system", text: `▶ ${test.label}`, testLabel: test.label, runId });
+      const runId = beginRun({ ...test, multiAgent: scenario.nodes.some((n) => n.startsWith("orchestrator:")) }, "run", mode, !!opts.focus);
+      addLog({ kind: "system", text: `▶ ${test.label}${test.agent ? ` (as ${agentName(themeRef.current, test.agent)})` : ""}`, testLabel: test.label, runId });
       addLog({ kind: "user", text: test.prompt, runId });
       const onEvent = (ev: SseEvent) => {
         switch (ev.type) {
@@ -879,6 +905,9 @@ export function useDemo(api: Api) {
     viewLog,
     openLog: setViewLog,
     closeLog: () => setViewLog(null),
+    registryOpen,
+    openRegistry,
+    closeRegistry: () => setRegistryOpen(false),
   };
 }
 

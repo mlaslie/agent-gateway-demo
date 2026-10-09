@@ -52,6 +52,7 @@ themes/<id>/
 | `name` | str | yes | Display name in the Theme drop-down. |
 | `description` | str | | One or two sentences about the use case. |
 | `orchestrator` | Orchestrator | yes | The Agent Runtime agent (below). |
+| `additional_orchestrators` | list[Orchestrator] | | More Agent Runtime agents on the same shared gateways, each with its own engine and Agent Identity ([section 4.6](#46-more-than-one-agent-additional_orchestrators)). Default `[]`. |
 | `components` | list[Component] | yes | Every Cloud Run A2A agent and MCP server. |
 | `policies` | list[Policy] | yes | The policy catalog. Scenarios refer to it by id. |
 | `layout` | {node id: [x, y]} | | Optional fixed diagram positions. Omitted nodes are placed automatically. |
@@ -82,7 +83,7 @@ themes/<id>/
 | `id` | str | yes | Referenced from scenarios. It's also part of recording signatures, so don't rename it after recording. |
 | `text` | str | yes | Plain-English sentence next to the Apply/Remove toggle. |
 | `type` | PolicyType | yes | See [section 5](#5-policy-types). |
-| `params` | dict | | Type-specific. A `target` must be an existing component id; the loader checks this. |
+| `params` | dict | | Type-specific. A `target` must be an existing component id; the loader checks this. Optional `source: <additional orchestrator id>` makes the policy apply to that agent instead of the primary ([section 4.6](#46-more-than-one-agent-additional_orchestrators)). |
 | `explain` | str | | Optional summary for the "under the hood" panel. The handler's `describe()` adds the exact gcloud/REST equivalents. |
 
 ### 4.2 `agents.yaml` (`{component_id: A2AAgentSpec}`)
@@ -146,14 +147,16 @@ One file per tab. The file name is only for humans; `order` sets the tab order.
 | `prompt` | str | yes | Natural-language prompt sent to the orchestrator. For ingress tests, it's sent through the ingress gateway with the backend's own credentials. |
 | `probes` | list[{edge}] | | Edges checked deterministically, without the LLM (CONTRACTS §6). List every edge the test is meant to show. |
 | `malicious` | bool | | If Model Armor is on, edges that would be `allowed` become `blocked` (egress: MCP edges only; ingress: `ingress:user`). |
+| `agent` | str | | Id of an additional orchestrator that runs this test (`use_llm` prompts go to its engine). Default: the primary. |
+| `sample_replies` | {edge id: str} | | Canned answers shown in simulated runs when that call goes through, e.g. `{hr-assistant/hr-records-agent: "jdoe earns $182,000."}`. |
 
-**Node ids** (for `nodes` and `layout`): `user`, `ingress_gateway`, `orchestrator`, `egress_gateway`, `registry`, and your component ids.
+**Node ids** (for `nodes` and `layout`): `user`, `ingress_gateway`, `orchestrator`, `orchestrator:<additional orchestrator id>`, `egress_gateway`, `registry`, and your component ids.
 
-**Edge ids** (for `probes`): `<a2a component id>`, `<mcp component id>:<tool name>`, `ingress:user`. `agdemo_core.themes.edge_ids(theme)` lists them all.
+**Edge ids** (for `probes`): `<a2a component id>`, `<mcp component id>:<tool name>`, `ingress:user`, and for an additional orchestrator the same egress ids prefixed with `<orchestrator id>/` (e.g. `hr-assistant/hr-records-agent`, `hr-assistant/tickets-mcp:get_ticket`). `agdemo_core.themes.edge_ids(theme)` lists them all.
 
 ### 4.5 Recommended scenario set
 
-The two shipped themes use the same six tabs. Copy this structure so presenters can switch themes without relearning the flow:
+The two shipped themes use the same seven tabs (the seventh needs an additional orchestrator). Copy this structure so presenters can switch themes without relearning the flow:
 
 | # | Tab | Flow | Toggles | Point it makes |
 |---|---|---|---|---|
@@ -163,6 +166,7 @@ The two shipped themes use the same six tabs. Copy this structure so presenters 
 | 4 | MCP tools | egress | `mcp_tool_allow`, `mcp_server_allow` | Read-only tools allowed, write and delete tools denied |
 | 5 | Users → agent | ingress | `gw-ingress` (+ Model Armor checkbox) | Every call into the agent is governed; with Model Armor on, a prompt injection or PII is blocked at the ingress gateway (403) before it reaches the agent |
 | 6 | Model Armor | egress | allowed paths as preconditions | Injection or PII is blocked even on allowed paths |
+| 7 | Same gateway, different agents (optional) | egress | `a2a_allow` per agent (`source`) | Two agents share one gateway; the same destination is allowed for one identity and denied for the other |
 
 The ingress tab is the same in every theme apart from the prompts. The ingress gateway enforces Model Armor only, not caller identity, so there is one `user` node and no caller policy:
 
@@ -189,6 +193,34 @@ tests:
     malicious: true
     probes: [{edge: "ingress:user"}]
 ```
+
+### 4.6 More than one agent (`additional_orchestrators`)
+
+A theme can deploy more Agent Runtime agents next to the primary `orchestrator` (CONTRACTS §12). Each is its own engine (`<prefix>-<theme>-<id>`) with its own Agent Identity, built from the same orchestrator package with its own `ORCHESTRATOR_SPEC` and the same topology. They're bound to the **same** shared gateways (GCP allows one egress and one ingress gateway per project and region), so the point they make is that access follows the agent's identity.
+
+```yaml
+additional_orchestrators:
+  - id: hr-assistant              # short; unique; not a component id; no '/' or ':'
+    display_name: HR Assistant
+    description: HR-staff-facing assistant on Agent Runtime
+    instruction: |
+      ... same rules as the primary's instruction ...
+
+policies:
+  - id: gw-egress-hr              # this agent's egress gateway binding
+    text: "All of HR Assistant's outbound traffic goes through the same Agent Gateway (default: deny everything)."
+    type: gateway_attach
+    params: {path: egress, source: hr-assistant}
+  - id: hr-assistant-allow-hr     # roles/iap.egressor for HR Assistant's Agent Identity
+    text: "HR Assistant can talk to HR Records Agent over A2A."
+    type: a2a_allow
+    params: {target: hr-records-agent, source: hr-assistant}
+```
+
+- **`source`**: a policy without it applies to the primary, so existing policies are unchanged. `gateway_attach{path: egress, source}` binds that agent's engine; the allow types grant to that agent's principal. Ingress policies are primary-only (the loader rejects `source` on them).
+- **Edges**: the additional agent's edges are `<id>/<edge>`; it is evaluated on its own (its edges are `direct` until *its* gateway policy is applied, then allowed only by policies with the same `source`).
+- **Scenarios**: show it with node `orchestrator:<id>`; a test runs on it with `agent: <id>` and probes its prefixed edges. A test may probe several agents' edges; the backend sends each group to the right engine.
+- **Deploy**: `./agdemo deploy-theme` creates every additional engine too (and `--update-engine` / `--recreate-engine` apply to all of them); `./agdemo publish-ge <theme> --agent <id>` publishes one to Gemini Enterprise (the default is the primary only).
 
 ## 5. Policy types
 

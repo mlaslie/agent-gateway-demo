@@ -32,7 +32,7 @@ sys.path[:0] = [str(RUNTIMES / "tools"), str(RUNTIMES / "orchestrator")]
 
 from make_specs import component_spec, encode_spec, orchestrator_spec  # noqa: E402
 
-from agdemo_core.themes import edge_ids, load_theme  # noqa: E402
+from agdemo_core.themes import base_egress_edges, load_theme  # noqa: E402
 
 THEME = load_theme("helpdesk")
 _cfg = yaml.safe_load((ROOT / "config" / "demo.yaml").read_text())
@@ -215,7 +215,7 @@ def _final_text(events) -> str:
 
 
 def test_probe_all_edges_ok(stack):
-    egress = [e for e in edge_ids(THEME) if not e.startswith("ingress:")]
+    egress = base_egress_edges(THEME)      # an orchestrator probes its own (unprefixed) edges, CONTRACTS §12
     probe = {"probes": [{"edge": e} for e in egress] + [{"edge": "denied-mcp:get_ticket"}], "malicious": False}
     events = asyncio.run(_ask("__PROBE__ " + json.dumps(probe)))
     text = _final_text(events)

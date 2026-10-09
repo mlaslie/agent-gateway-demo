@@ -1,4 +1,5 @@
-"""gateway_attach{path: egress|ingress}: bind/unbind the theme's Agent Runtime engine to the shared gateway.
+"""gateway_attach{path: egress|ingress}: bind/unbind the theme's Agent Runtime engine to the shared gateway
+(the engine of the orchestrator named by params.source, else the primary's; docs/CONTRACTS.md §12).
 
 PATCH spec.deploymentSpec.agentGatewayConfig (each direction preserved independently). The PATCH is a
 long-running operation that redeploys the engine; apply/remove return once it is accepted and status()
@@ -20,19 +21,32 @@ def _path(policy: Policy) -> str:
 class GatewayAttach:
     def apply(self, ctx: Ctx, theme: Theme, policy: Policy) -> None:
         p = _path(policy)
-        engines.set_gateways(L.r(ctx), ctx.config, L.engine(ctx, theme), p, gw.gateway_resource(ctx.config, p))
+        engines.set_gateways(L.r(ctx), ctx.config, L.engine(ctx, theme, L.source(policy)), p,
+                             gw.gateway_resource(ctx.config, p))
 
     def remove(self, ctx: Ctx, theme: Theme, policy: Policy) -> None:
-        engines.set_gateways(L.r(ctx), ctx.config, L.engine(ctx, theme), _path(policy), None)
+        engines.set_gateways(L.r(ctx), ctx.config, L.engine(ctx, theme, L.source(policy)), _path(policy), None)
 
     def remove_many(self, ctx: Ctx, theme: Theme, policies: list[Policy]) -> None:
-        """Detach several directions in ONE engine PATCH (used by reset)."""
-        engines.set_gateway_paths(L.r(ctx), ctx.config, L.engine(ctx, theme), {_path(p): None for p in policies})
+        """Detach several directions in ONE PATCH per engine (used by reset). Policies are grouped by their
+        orchestrator (params.source); different engines are detached in parallel."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        groups: dict[str | None, list[Policy]] = {}
+        for p in policies:
+            groups.setdefault(L.source(p), []).append(p)
+
+        def one(src: str | None) -> None:
+            engines.set_gateway_paths(L.r(ctx), ctx.config, L.engine(ctx, theme, src),
+                                      {_path(p): None for p in groups[src]})
+
+        with ThreadPoolExecutor(max(1, len(groups))) as ex:
+            list(ex.map(one, list(groups)))
 
     def status(self, ctx: Ctx, theme: Theme, policy: Policy) -> PolicyStatus:
         try:
             r, cfg, p = L.r(ctx), ctx.config, _path(policy)
-            e = L.engine(ctx, theme)
+            e = L.engine(ctx, theme, L.source(policy))
             eng = engines.get_engine(r, cfg, e)
             if eng is None:
                 return L.status(False, f"engine {e} not found", "error")
@@ -60,11 +74,12 @@ class GatewayAttach:
         cfg, p = ctx.config, _path(policy)
         key = engines.KEYS[p]
         try:
-            e = L.engine(ctx, theme)
+            e = L.engine(ctx, theme, L.source(policy))
         except Exception:
             e = f"projects/{cfg.project}/locations/{cfg.region}/reasoningEngines/ENGINE_ID"
         return [
-            f"# Attach the {p} Agent Gateway to {theme.orchestrator.display_name}",
+            f"# Attach the {p} Agent Gateway to {theme.orchestrator_for(L.source(policy)).display_name}"
+            + (" (its own engine and Agent Identity; same shared gateway)" if L.source(policy) else ""),
             f"curl -X PATCH -H \"Authorization: Bearer $(gcloud auth print-access-token)\" \\",
             f"  -H 'Content-Type: application/json' \\",
             f"  'https://{cfg.region}-aiplatform.googleapis.com/v1/{e}?updateMask={engines.MASK}' \\",

@@ -33,6 +33,18 @@ orchestrator:
   # model: gemini-2.5-flash         # optional; defaults to models.default in config/demo.yaml
   # malicious_payload: "..."        # optional; text added to probes when a test is `malicious: true`
 
+# Optional: more Agent Runtime agents on the same shared gateways, each with its own engine and Agent
+# Identity (docs/CONTRACTS.md §12, docs/ADDING_A_THEME.md §4.6). Policies apply to one of them with
+# params.source: <id>; its edges are "<id>/<edge>" and its diagram node is "orchestrator:<id>".
+additional_orchestrators: []
+#  - id: second-agent               # short; not a component id
+#    display_name: Second Agent
+#    description: Another agent on Agent Runtime, same gateway, its own identity
+#    instruction: |
+#      You are ... Use call_agent("faq-agent", ...) for general questions.
+#      Every tool returns an "outcome". If the outcome is "denied" or "blocked", tell the user plainly
+#      that access was blocked by policy (name the agent or tool) and do not retry another way.
+
 # Every remote component. `id` must be unique in the theme and have a matching entry in
 # agents.yaml (kind a2a_agent) or tools.yaml (kind mcp_server). Each becomes a Cloud Run service.
 components:
@@ -46,6 +58,8 @@ components:
 #   a2a_allow        {target: <a2a component id>}     allow one A2A agent
 #   mcp_server_allow {target: <mcp component id>}     allow every tool on one MCP server
 #   mcp_tool_allow   {target: <mcp id>, read_only: true}  or  {target: <mcp id>, tools: [names]}
+# Any egress policy may add `source: <additional orchestrator id>` to apply to that agent instead of the
+# primary, e.g. {path: egress, source: second-agent} or {target: faq-agent, source: second-agent}.
 policies:
   - id: gw-egress
     text: "All of Starter Agent's outbound traffic goes through Agent Gateway (default: deny everything)."
@@ -65,6 +79,6 @@ policies:
     params: {target: notes-mcp, read_only: true}
 
 # Optional: fixed diagram positions {node id: [x, y]}. Leave empty for automatic layout.
-# Node ids: user, ingress_gateway, orchestrator, egress_gateway,
+# Node ids: user, ingress_gateway, orchestrator, orchestrator:<additional id>, egress_gateway,
 # registry, and your component ids.
 layout: {}

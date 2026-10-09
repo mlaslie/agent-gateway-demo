@@ -1,0 +1,38 @@
+id: two-agents
+order: 7
+title: "Same gateway, different agents"
+subtitle: "Two Agent Runtime agents → one Agent Gateway"
+description: |
+  Two agents on Agent Runtime, Store Ops Agent and Pricing Analyst, share one egress Agent Gateway. Each
+  has its own Agent Identity, and the policies are granted per identity: Store Ops Agent may reach
+  Merchandising Agent, Pricing Analyst may reach Pricing Agent. Ask both the same margin question: same
+  gateway, same destination, a different answer depending on who's asking. Access follows the agent's
+  identity, not its network location.
+flow: egress
+nodes: [orchestrator, "orchestrator:pricing-analyst", egress_gateway, registry, merchandising-agent, pricing-agent]
+preconditions: [gw-egress, gw-egress-pricing]
+policies: [allow-merch, allow-pricing, pricing-analyst-allow-pricing, pricing-analyst-allow-merch]
+tests:
+  - id: storeops-margin
+    label: "Store Ops Agent: ask for a margin"
+    prompt: "What is our margin on the Trailhead 2-Person Tent?"
+    probes: [{edge: pricing-agent}]
+    sample_replies:
+      "pricing-agent": "Trailhead 2-Person Tent: unit cost $61.20, shelf $149.99, gross margin 59.2%."
+  - id: analyst-margin
+    label: "Pricing Analyst: ask for a margin"
+    agent: pricing-analyst
+    prompt: "What is our margin on the Trailhead 2-Person Tent?"
+    probes: [{edge: "pricing-analyst/pricing-agent"}]
+    sample_replies:
+      "pricing-analyst/pricing-agent": "Trailhead 2-Person Tent: unit cost $61.20, shelf $149.99, gross margin 59.2%."
+  - id: both-agents
+    label: "Probe both agents"
+    prompt: "Check whether you can reach the merchandising agent and the pricing agent."
+    probes: [{edge: merchandising-agent}, {edge: pricing-agent},
+             {edge: "pricing-analyst/merchandising-agent"}, {edge: "pricing-analyst/pricing-agent"}]
+    sample_replies:
+      "merchandising-agent": "Merchandising Agent here: I can help with products and promotions."
+      "pricing-agent": "Pricing Agent here: I hold cost and margin data."
+      "pricing-analyst/merchandising-agent": "Merchandising Agent here: I can help with products and promotions."
+      "pricing-analyst/pricing-agent": "Pricing Agent here: I hold cost and margin data."

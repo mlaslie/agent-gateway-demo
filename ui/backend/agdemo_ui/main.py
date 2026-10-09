@@ -5,6 +5,7 @@ Run locally:  uv run uvicorn agdemo_ui.main:app --app-dir ui/backend --port 8080
 from __future__ import annotations
 
 import asyncio
+import time
 import os
 import json
 import logging
@@ -289,6 +290,75 @@ async def gateway_logs(theme_id: str, mode: Mode = "demo", since: str | None = N
     return out
 
 
+REGISTRY_TTL = 15.0
+_registry_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+@app.get("/api/themes/{theme_id}/registry")
+async def registry_view(theme_id: str, mode: Mode = "demo", refresh: bool = False) -> dict[str, Any]:
+    """The theme's Agent Registry entries and who holds roles/iap.egressor on each (CONTRACTS §10). Read-only."""
+    from agdemo_core.gcp import registry_view as rv
+
+    theme = _theme(theme_id)
+    cfg, err = settings.get_config()
+    state = settings.get_state()
+
+    def simulated(reason: str | None = None) -> dict[str, Any]:
+        return rv.simulate(theme, set(engine.demo.applied_for(theme.id)), cfg, state, reason)
+
+    if mode == "demo":
+        return simulated()
+    live_ok, why = settings.live_available()
+    if not cfg or not live_ok or not settings.theme_deployed(state, theme.id):
+        reason = f"Live mode unavailable: {why or err or 'theme not deployed'}"
+        if mode == "live_with_fallback":
+            return simulated(reason)
+        raise HTTPException(409, reason)
+    hit = _registry_cache.get(theme.id)
+    if hit and not refresh and time.monotonic() - hit[0] < REGISTRY_TTL:
+        return hit[1]
+    try:
+        from agdemo_core.gcp.rest import project_number, rest
+
+        out = await asyncio.get_running_loop().run_in_executor(
+            None, lambda: rv.fetch(rest(cfg.project), cfg, state, theme, lambda: project_number(cfg.project)))
+    except Exception as e:  # noqa: BLE001
+        if mode == "live_with_fallback":
+            return simulated(f"{type(e).__name__}: {e}")
+        raise HTTPException(502, f"Agent Registry read failed: {type(e).__name__}: {e}") from e
+    _registry_cache[theme.id] = (time.monotonic(), out)
+    return out
+
+
+@app.get("/api/themes/{theme_id}/terraform")
+async def terraform_export(theme_id: str, mode: Mode = "demo", include_shared: bool = False) -> dict[str, Any]:
+    """Terraform for the theme's current policy state (CONTRACTS §11). Read-only: nothing is changed in GCP."""
+    from agdemo_core import terraform as tf
+
+    theme = _theme(theme_id)
+    cfg, _ = settings.get_config()
+    state = settings.get_state()
+    source, error = "simulated", None
+    if mode == "demo":
+        applied, ma = set(engine.demo.applied_for(theme.id)), engine.demo.model_armor
+    else:
+        try:
+            engine.live.check_available(theme)
+            applied, ma = await engine.live.signature_now(theme)   # desired applied set + Model Armor status
+            source = "live"
+        except LiveUnavailable as e:
+            if mode == "live":
+                raise HTTPException(409, f"Live mode unavailable: {e}") from e
+            applied, ma, error = set(engine.demo.applied_for(theme.id)), engine.demo.model_armor, str(e)
+    files = tf.render(cfg, state, theme, applied, ma, include_shared)
+    out: dict[str, Any] = {"theme": theme.id, "files": files, "applied": [p.id for p in theme.policies if p.id in applied],
+                           "model_armor": ma, "include_shared": include_shared, "source": source,
+                           "state_line": tf.state_line(theme, applied, ma)}
+    if error:
+        out["error"] = error
+    return out
+
+
 @app.post("/api/themes/{theme_id}/sync")
 async def sync(theme_id: str, body: ModeBody) -> dict[str, Any]:
     """Re-read policies and Model Armor from GCP, clear pending states GCP shows as done (CONTRACTS §7)."""
@@ -364,7 +434,7 @@ async def explain(theme_id: str, pid: str) -> dict[str, Any]:
 
 def _generic_explain(theme: Theme, policy) -> list[str]:
     t, p = policy.type, policy.params
-    orch = theme.orchestrator.id
+    orch = theme.orchestrator_for(p.get("source") or None).id      # CONTRACTS §12: the policy's agent
     if t == "gateway_attach":
         kind = "AGENT_TO_ANYWHERE (egress)" if p.get("path", "egress") == "egress" else "CLIENT_TO_AGENT (ingress)"
         return [f"PATCH reasoningEngines/<{orch}> spec.deploymentSpec.agentGatewayConfig -> {kind} gateway",
