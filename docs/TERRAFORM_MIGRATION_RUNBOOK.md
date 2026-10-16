@@ -139,7 +139,7 @@ Expected: no `legacy resource still present` and no `not live, Terraform will cr
 Expected:
 
 ```
-plan: 68 to add, 8 to change, 0 to replace, 0 to destroy, 35 to import (migration mode: imports.tf present)
+plan: 69 to add, 8 to change, 0 to replace, 0 to destroy, 35 to import (migration mode: imports.tf present)
 plan-safety: OK
 ```
 
@@ -150,10 +150,10 @@ jq -r '.resource_changes[] | select(.mode=="managed") | "\(if .change.importing 
 ```
 
 ```bash
-diff config/generated/tf-migration/plan-actions.txt config/generated/tf-migration/live-actions.txt && echo SAME
+diff config/generated/tf-migration/plan-actions.txt config/generated/tf-migration/live-actions.txt
 ```
 
-Expected: `SAME`. By type:
+Expected: exactly one added line, `> create terraform_data.teardown_guard` (the T3 destroy guard, `infra/terraform/guards.tf`; the saved plan predates it). Re-checked read-only on 2026-10-16 with T3's code: 69 to add, the same 8 changes and 35 imports, plan-safety (migration mode) OK. By type:
 
 | Action | Type | Count |
 |---|---|---|
@@ -164,6 +164,7 @@ Expected: `SAME`. By type:
 | create (additive, already live) | `google_project_iam_member` (UI SA 9, targets SA 2, presenters 1, Model Armor roles × 3 service agents 9) | 21 |
 | create (additive, already live) | `google_iap_agent_registry_endpoint_iam_member` (`roles/iap.egressor` on the 25 platform entries) | 25 |
 | create (new) | `google_storage_bucket_iam_member` (UI SA `roles/storage.objectUser` on the recordings bucket) | 1 |
+| create (new, Terraform-only) | `terraform_data.teardown_guard` (destroy guard; no GCP resource, allowed in migration mode) | 1 |
 
 **The 8 in-place updates are harmless:**
 - **`labels` / `terraform_labels` (all 8):** an import leaves `labels` empty in state (the provider only reads back keys the configuration has), so Terraform "adds" them. `effective_labels`, the field the provider compares to build the update mask, is unchanged, so the update mask is empty and **no API call is made** (the provider skips the PATCH when the mask is empty). The live labels already equal the configured ones.
@@ -209,7 +210,7 @@ Expected: equal counts and equal byte totals. The staging copies stay where they
 It re-runs the plan and the migration-mode check, prints the same summary as step c, and asks `Apply to acme-prod/us-east4 (prefix agdemo)?`. Answer `y`. There is no `created recordings bucket` line (step d made it). Expected end:
 
 ```
-Apply complete! Resources: 35 imported, 68 added, 8 changed, 0 destroyed.
+Apply complete! Resources: 35 imported, 69 added, 8 changed, 0 destroyed.
 merged 16 shared keys into config/state.json
 ```
 
@@ -244,7 +245,7 @@ plan: 0 to add, 0 to change, 0 to replace, 0 to destroy
 plan-safety: OK
 ```
 
-(Terraform itself prints `No changes. Your infrastructure matches the configuration.`) From now on `./agdemo bootstrap` refuses this environment unless `--legacy` is passed (state.json has `tf_environment`).
+(Terraform itself prints `No changes. Your infrastructure matches the configuration.`) From now on `./agdemo bootstrap` refuses this environment unless `--legacy` is passed (state.json has `tf_environment`), and `./agdemo up` / `./agdemo down` accept it: `up` is a no-op Terraform run plus idempotent redeploys; **`down` would delete the live demo** (it asks you to type `<project>/<prefix>` first). `./agdemo reset --all` is the command for "back to the start state".
 
 ## f. Redeploy the UI and verify it uses the recordings bucket
 
@@ -282,7 +283,7 @@ Expected: the shared table matches `status.before.txt` (both gateways, `REQUEST_
 
 Nothing in steps b–e recreates or deletes a resource, so rollback is about ownership, not infrastructure.
 
-- **Never run `terraform destroy`** to undo the migration: it deletes the live gateways and everything else.
+- **Never run `terraform destroy` or `./agdemo down`** to undo the migration: they delete the live gateways and everything else. (A bare `terraform destroy` is stopped by the guard while engines, grants or the UI still exist, but `down` removes those first.)
 - **Before step e:** nothing to undo except step a. A deleted SA can be restored within 30 days (`gcloud iam service-accounts undelete <unique id>`; the id is in `config/generated/tf-migration/snapshot/sa_agdemo-*.json`). The legacy policy and extension can be re-created from their snapshot JSON, but they had no effect, so there's no reason to.
 - **Apply failed halfway:** the imported resources stay in state and nothing was deleted. Fix the cause and re-run `./agdemo tf apply` (keep `imports.tf` until it succeeds).
 - **Hand ownership back to bootstrap:** restore the old state.json and stop using Terraform; GCP is untouched:

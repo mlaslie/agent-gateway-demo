@@ -68,10 +68,16 @@ gcloud auth login && gcloud auth application-default login
 Shows a pass/fail table (auth, billing, roles, APIs, region support, quotas, gateway conflicts) with the fix for each failure. You can let it enable missing APIs.
 
 ```bash
-./agdemo bootstrap
+./agdemo up
 ```
 
-Creates the shared resources: APIs, service accounts, Artifact Registry, gateways, IAP and Model Armor authz extensions, and platform allowlist entries in the registry. **Expect about 10–20 minutes**, mostly gateway creation.
+Does everything below in one go (Terraform foundation, every `themes.enabled` theme, the UI, a verify; about 40–55 minutes) and is idempotent. Step by step instead:
+
+```bash
+./agdemo tf init && ./agdemo tf apply
+```
+
+Creates the shared resources with Terraform: APIs, service accounts, Artifact Registry, gateways, IAP and Model Armor authz extensions, and platform allowlist entries in the registry. **Expect about 10–20 minutes**, mostly gateway creation. (`./agdemo bootstrap` is deprecated and points here; `--legacy` runs the old path.)
 
 ```bash
 ./agdemo deploy-theme helpdesk
@@ -137,10 +143,10 @@ Costs come from the gateways, the Agent Runtime agents (which run continuously),
 ```
 
 ```bash
-./agdemo teardown --all
+./agdemo down
 ```
 
-`--all` removes every resource carrying the configured prefix and labels, including the gateways. It does **not** turn off APIs or touch resources it didn't create.
+`down` resets every theme, unregisters the agents from Gemini Enterprise, deletes the engines, Cloud Run services, registry entries and the UI, checks that nothing else is left (`./agdemo check-clean --strict`), then runs `terraform destroy`. You type `<project>/<prefix>` to confirm. It does **not** turn off APIs, delete the state or recordings buckets, or touch resources it didn't create. (`./agdemo teardown --all` is the old non-Terraform path.)
 
 ## 10. Troubleshooting (quick list)
 

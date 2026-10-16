@@ -120,11 +120,21 @@ In `config/demo.yaml` set at least:
 ./agdemo preflight          # auth, billing, roles, APIs, region support, gateway conflicts (--fix enables APIs)
 ```
 
-**4. Create the shared resources** (about 10–20 minutes)
+**4. Create everything in one go** (about 40–55 minutes)
 
 ```bash
-./agdemo bootstrap          # gateways, IAP + Model Armor authz, registry allowlist, service accounts, repo, bucket
+./agdemo up                 # Terraform foundation, every themes.enabled theme, the UI, then a verify
 ```
+
+`up` runs steps 4b, 5 and 7 below: `tf init`, a plan with the plan-safety check (no deletes or replaces), apply, `output-sync`, the images once, `deploy-theme` for each theme, `ui deploy`, then a read-only verify. It's idempotent; `--theme`, `--no-ui`, `--skip-build` and `--ge` narrow or extend it. To go step by step instead:
+
+**4b. Create the shared resources** (about 10–20 minutes)
+
+```bash
+./agdemo tf init && ./agdemo tf apply   # gateways, IAP + Model Armor authz, registry allowlist, SAs, repo, bucket
+```
+
+(`./agdemo bootstrap` is deprecated: it points at `up`, and `bootstrap --legacy` runs the old non-Terraform path.)
 
 **5. Deploy the themes** (about 10–15 minutes each)
 
@@ -144,7 +154,7 @@ Agents are **not** added to Gemini Enterprise automatically. Set `gemini_enterpr
 ./agdemo publish-ge retail       # adds "Store Ops Agent (Agent Gateway demo)"
 ```
 
-Only the primary agent is published; `./agdemo publish-ge <theme> --agent <id>` publishes a second agent (e.g. `--agent hr-assistant`) instead. This is an ADK registration (Gemini Enterprise calls the Agent Runtime agent directly), so it uses the same agent and the same gateways as the UI. It's idempotent; re-run it if you recreate a theme's agent (`deploy-theme --recreate-engine`). Presenters need `roles/aiplatform.user`, which bootstrap grants to `ui.admin_access`.
+Only the primary agent is published; `./agdemo publish-ge <theme> --agent <id>` publishes a second agent (e.g. `--agent hr-assistant`) instead. This is an ADK registration (Gemini Enterprise calls the Agent Runtime agent directly), so it uses the same agent and the same gateways as the UI. It's idempotent; re-run it if you recreate a theme's agent (`deploy-theme --recreate-engine`). Presenters need `roles/aiplatform.user`, which the foundation grants to `ui.admin_access`.
 
 **7. Deploy the UI**
 
@@ -164,9 +174,23 @@ No Google Cloud project? `./agdemo ui local --mode demo` runs the whole UI in si
 
 To take a policy state to production, `./agdemo export-terraform <theme> [--out DIR] [--include-shared]` writes Terraform for the theme's current Live policy state (default `config/generated/terraform/<theme>`; read-only). The same export is in the UI (**Export Terraform** on the Policies card).
 
-### Terraform (preview)
+### Terraform and the environment lifecycle
 
-The foundation `bootstrap` creates can also be built with Terraform (`infra/terraform/`, `hashicorp/google` >= 8.7.0, Terraform >= 1.7; [docs/TERRAFORM_PLAN.md](docs/TERRAFORM_PLAN.md)). A fresh environment uses `tf init` + `tf apply` directly. An environment created by `bootstrap` is adopted with `./agdemo tf import` first (phase T2; `tf apply` refuses it until then): follow [docs/TERRAFORM_MIGRATION_RUNBOOK.md](docs/TERRAFORM_MIGRATION_RUNBOOK.md). `bootstrap` is deprecated: it still works for environments Terraform doesn't manage, and refuses (unless `--legacy`) once `output-sync` has recorded Terraform ownership in state.json.
+The foundation is Terraform (`infra/terraform/`, `hashicorp/google` >= 8.7.0, Terraform >= 1.7; [docs/TERRAFORM_PLAN.md](docs/TERRAFORM_PLAN.md)); the CLI keeps everything built from code and every live toggle. An environment created by the old `bootstrap` (the original live demo) is adopted with `./agdemo tf import` first: follow [docs/TERRAFORM_MIGRATION_RUNBOOK.md](docs/TERRAFORM_MIGRATION_RUNBOOK.md). Until then `up` and `down` refuse it.
+
+```bash
+./agdemo up                      # tf init, plan + safety check, apply, output-sync, deploy-theme each theme, ui deploy, verify
+./agdemo reset --all             # every theme back to wide open, Model Armor off, prefix-owned Policy Studio leftovers removed
+./agdemo check-clean [--strict]  # read-only: is anything left besides the foundation? exit 1 with a list
+./agdemo down                    # reset --all, GE unregister, delete engines/Cloud Run/registry/UI, check-clean --strict, terraform destroy
+```
+
+- **`reset --all`** keeps the foundation and every deployed engine and service. Per theme it removes the applied policies (one gateway PATCH per engine) and waits for the engine updates. Then Model Armor goes off, and leftovers on prefix resources are removed: authz policies on our gateways named `<prefix>-*` *and* labelled `demo-prefix=<prefix>`, the Terraform IAP policy pointed back at its extension, the IAP enforcement mode back to `demo.yaml`, unused prefix extension copies, and IAP grants on prefix registry entries (platform entries keep only the project-wide egressor). Anything that isn't ours is reported, never changed. `--dry-run` prints the plan; a second run does nothing.
+- **`check-clean`** fails (exit 1) on blocking findings: engine bindings to this environment's gateways (any owner), theme engines, theme Cloud Run services, prefix registry entries, grants on them, CONTENT_AUTHZ or other authz policies on our gateways, non-foundation prefix extensions and Model Armor templates. `--strict` also fails on warnings: the UI service, Gemini Enterprise registrations, foundation drift, legacy resources, a stale state.json and any check it couldn't read. `--json` for scripts.
+- **`down`** asks you to type `<project>/<prefix>` (or `--yes --prefix <prefix>`), and warns that nobody may be presenting. `--dry-run` prints the inventory and the reset plan. It keeps the APIs, the state bucket, the recordings bucket and the project-wide shared grants (presenters' `aiplatform.user`, the service agents' Model Armor roles), which other environments in the project may rely on.
+- **Destroy guard:** `terraform_data.teardown_guard` (`infra/terraform/guards.tf`) runs `./agdemo check-clean --strict` when it's destroyed, before anything else, so a bare `terraform destroy` stops while anything still uses the gateways. `-target`, `terraform state rm` or removing the block bypass it.
+
+Single Terraform steps, for the runbook and debugging:
 
 ```bash
 ./agdemo tf init                 # tfvars from config/demo.yaml, state bucket <project>-agdemo-tfstate (versioned), terraform init
@@ -178,13 +202,13 @@ The foundation `bootstrap` creates can also be built with Terraform (`infra/terr
 ./agdemo tf recordings-bucket    # create the recordings bucket (outside Terraform) before copying recordings into it
 ```
 
-Each environment has its own state prefix (`<prefix>/<project>/<region>`). `tf init --local-state PATH` uses a local scratch state instead, and `output-sync --state PATH` writes to another state file. For a second environment in a project that already has one, set `terraform.shared_project_grants: false` in its config.
+Each environment has its own state prefix (`<prefix>/<project>/<region>`). `config/state.json` belongs to one environment per checkout: use a separate checkout for a second environment, and set `terraform.shared_project_grants: false` in its config when the project already has one. `tf init --local-state PATH` (also `up`/`down --local-state`) uses a local scratch state.
 
 ## What gets created
 
-Names below use the default prefix `agdemo` (`environment.resource_prefix`); `<project>` and `<region>` come from `config/demo.yaml`. Everything is in that one region and labeled `app=agent-gateway-demo, demo-prefix=agdemo`. `./agdemo status` lists what exists; `./agdemo teardown --all` removes it.
+Names below use the default prefix `agdemo` (`environment.resource_prefix`); `<project>` and `<region>` come from `config/demo.yaml`. Everything is in that one region and labeled `app=agent-gateway-demo, demo-prefix=agdemo`. `./agdemo status` lists what exists; `./agdemo down` removes it.
 
-### Shared (created once by `./agdemo bootstrap` and `./agdemo ui deploy`)
+### Shared (created once by `./agdemo up`: Terraform, then `./agdemo ui deploy`)
 
 | Service | Resource | Name | Purpose |
 |---|---|---|---|
@@ -291,7 +315,7 @@ A new theme is a folder of YAML. Start from `themes/_template/` and follow [docs
 agdemo                 CLI entry point (preflight, bootstrap, deploy-theme, publish-ge, ui, status, reset, teardown)
 agdemo_core/           shared Python: config loader, state, theme schema, simulator, policy handlers
 agdemo_core/infra/     step implementations used by the CLI (gateways, registry, IAM, Model Armor, IAP)
-infra/terraform/       Terraform foundation (preview): root + modules/base; driven by ./agdemo tf
+infra/terraform/       Terraform foundation: root + modules/base + guards.tf; driven by ./agdemo up/down and ./agdemo tf
 runtimes/
   orchestrator/        generic ADK agent for Agent Runtime, configured per theme
   a2a_agent/           generic ADK A2A agent image for Cloud Run
@@ -318,11 +342,12 @@ docs/                  documentation (below)
 ## Cleanup
 
 ```bash
+./agdemo reset --all        # back to the start state for presenting; keeps everything deployed
 ./agdemo teardown <theme>   # one theme's Cloud Run services, registry entries and Agent Runtime agents
-./agdemo teardown --all     # everything with the configured prefix and labels, including the gateways
+./agdemo down               # the whole environment, Terraform foundation included (see above)
 ```
 
-Teardown doesn't disable APIs or touch resources it didn't create.
+`teardown --all` is the old non-Terraform path; on a Terraform-managed environment it refuses (use `down`) unless `--legacy`. None of them disable APIs or touch resources they didn't create.
 
 ## Disclaimer
 

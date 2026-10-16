@@ -1,6 +1,6 @@
 # Terraform foundation plan (base + private egress)
 
-**Status:** T1 built (2026-10-16; see §7a). **T2: the read-only part is done** (2026-10-16; see §7d): the `tf import` generator, a migration-mode plan-safety check and a read-only plan against the live demo with only imports and additive creates. The live steps (legacy cleanup, state bucket, recordings copy, apply, UI redeploy) are in [TERRAFORM_MIGRATION_RUNBOOK.md](TERRAFORM_MIGRATION_RUNBOOK.md) and haven't been run. T3–T5 not started. Nothing in GCP was changed while writing it: the only calls were read-only lists and GETs against the demo project, plus a read of the provider schema and source.
+**Status:** T1 built (2026-10-16; see §7a). **T2: the read-only part is done** (2026-10-16; see §7d): the `tf import` generator, a migration-mode plan-safety check and a read-only plan against the live demo with only imports and additive creates. The live steps (legacy cleanup, state bucket, recordings copy, apply, UI redeploy) are in [TERRAFORM_MIGRATION_RUNBOOK.md](TERRAFORM_MIGRATION_RUNBOOK.md) and haven't been run. **T3 built** (2026-10-16; see §7e): `up`, `down`, `reset --all`, `check-clean`, the destroy guard; unit-tested on fakes, plan-only and read-only checks, never run live. T4–T5 not started. Nothing in GCP was changed while writing it: the only calls were read-only lists and GETs against the demo project, plus a read of the provider schema and source.
 
 **Goal:** deploy the demo's whole foundation with Terraform, for both the public (non-VPC) setup and the private-egress (VPC) test bed. Clean up in two steps: first a **reset** through the API/CLI that removes everything that isn't base, then `terraform destroy` for the foundation.
 
@@ -303,7 +303,7 @@ infra/terraform/
 - `input` references both gateway ids, the extension ids, and the path of `./agdemo`;
 - it has a `when = destroy` local-exec running `./agdemo tf check-clean --strict`.
 
-Because the guard **depends on** the gateways, Terraform destroys it **first**. A non-zero exit aborts the destroy before anything is deleted. The message names what's still bound or attached and says "run ./agdemo down (or reset --all)".
+Because the guard **depends on** the gateways, Terraform destroys it **first**. (As built, it depends on all of `module.base`, §7e: depending only on the gateways would let the IAM, registry and other deletes run in parallel with the guard.) A non-zero exit aborts the destroy before anything is deleted. The message names what's still bound or attached and says "run ./agdemo down (or reset --all)".
 
 Caveats:
 - `-target` or `terraform state rm` can bypass the guard.
@@ -444,7 +444,7 @@ The provider has no gateway data source, so this reads it with the `http` provid
 |---|---|---|
 | T1 **(built)** | Scaffold: `versions`, backend + `tf init` (state bucket), tfvars generator, `base` module for a **fresh** environment, outputs → state.json, CI validate, unit tests | 2–3 d |
 | T2 **(read-only part built; live steps in the runbook)** | Import the live demo: legacy cleanup (after asking), `tf import` generator, plan-safety check, iterate to a zero-diff plan, apply, deprecate `bootstrap` | 1–2 d |
-| T3 | Lifecycle: `up`, `reset --all`, `down`, `tf check-clean`, guard resource, teardown additions (GE unregister, Policy Studio leftovers) | 2 d |
+| T3 **(built; live runs pending)** | Lifecycle: `up`, `reset --all`, `down`, `check-clean`, guard resource, teardown additions (GE unregister, Policy Studio leftovers) | 2 d |
 | T4 | `private_egress` module, `migrate-gateway`, preconditions, env var in `deploy-theme`, private MCP component (internal ingress, both URLs registered), status/UI showing private egress | 2–3 d |
 | T5 | E2E up/down ×2 in us-west1 + negative tests, then the in-place migration of `agdemo-egress` (§5.2) in a quiet window; docs (SETUP, TROUBLESHOOTING, README, TESTBED pointer) | 1–2 d |
 
@@ -569,6 +569,46 @@ Live steps: [TERRAFORM_MIGRATION_RUNBOOK.md](TERRAFORM_MIGRATION_RUNBOOK.md) (a 
 
 **Legacy safety findings** (runbook step a): `agdemo-ingress-iap-policy` is attached to `agdemo-ingress` but CLIENT_TO_AGENT doesn't evaluate REQUEST_AUTHZ (§10 of ARCHITECTURE.md), and `agdemo-ingress-iap-authz` is referenced only by it. The two caller SAs have only Google-managed keys, project `roles/aiplatform.user`, and their own `serviceAccountTokenCreator` IAM; nothing runs as them and no IAP policy names them; their last use was the 2026-10-08 ingress test. The only code references are `teardown`'s cleanup by name. All four are safe to delete.
 
+## 7e. T3 as built (2026-10-16)
+
+No GCP writes were made: unit tests on fakes, plan-only Terraform runs with a local scratch state, and read-only lists/GETs (`check-clean` and `reset --all --dry-run` against the live demo).
+
+**What exists:**
+- `agdemo_core/infra/check_clean.py` + `./agdemo check-clean [--strict] [--expect P/R/X] [--json]`. `collect()` is read-only; `classify()` is pure. Levels:
+  - **BLOCK** (exit 1 by default): engine bindings to this environment's gateways (any owner, id or number form), our engines, prefix Cloud Run services other than the UI, prefix registry entries other than the platform ones, any grant on them, grants beyond the platform egressor on platform entries, our principals in the region-wide registry policy, CONTENT_AUTHZ and other authz policies on our gateways, non-foundation prefix extensions and Model Armor templates.
+  - **WARN** (exit 1 with `--strict`): the UI service, Gemini Enterprise registrations of our engines, foundation drift (IAP extension not in the demo.yaml enforcement mode, IAP policy pointed at another extension), legacy resources, prefix Cloud Run services without the label, a stale or foreign state.json, and every check that couldn't be read (strict can't pass blind).
+  - **INFO** (never fails): grants that aren't ours in the region-wide policy, dangling GE registrations of deleted engines.
+  - "Ours" = named `<prefix>-*` and, where the type has labels, `demo-prefix=<prefix>`; engines in state.json count too.
+- `agdemo_core/infra/reset_all.py` + `./agdemo reset --all [--dry-run] [--yes]`: theme resets (all themes in state.json, gateway detaches started in parallel, one PATCH per engine), Model Armor off, then leftovers planned from a fresh snapshot (`plan_leftovers`, pure) and executed in a fixed order: policies → IAP policy repoint (labels re-sent) → IAP enforcement restore → extension copies (only once unreferenced) → IAP grant pruning → unbinding our stray engines; then one wait for every engine update (30 min timeout). Not ours: reported. Idempotent; a clean environment plans nothing.
+- `agdemo_core/infra/lifecycle.py` + `./agdemo up` / `./agdemo down` (sequencing over an `ops` object; `LiveUpOps` / `LiveDownOps`), the write-command safety checks, the typed confirmation, `plan_teardown` (pure) and the shared-grant handling.
+- `infra/terraform/guards.tf`: `terraform_data.teardown_guard`, `depends_on = [module.base]`, destroy-time `local-exec` running `${var.agdemo_cli} check-clean --strict --expect <project>/<region>/<prefix>` (default `../../agdemo`, relative to `infra/terraform`). New variable `agdemo_cli`.
+- GE helpers in `publish_ge.py` (`list_agents`, `unregister`): the Discovery Engine `v1alpha …/assistants/default_assistant/agents` list and `DELETE`, the API agents-cli's publish uses (agents-cli has no unregister); matched on the ADK registration's reasoning engine id.
+- `status.reset_theme` / `wait_engines`: `./agdemo reset <theme>` now detaches with one PATCH per engine (`remove_many`, as the UI's reset does) and its wait loop ends on failed PATCHes and a timeout.
+- Tests: `ui/backend/tests/test_lifecycle.py` (33): every check-clean category and level, strict vs default, `--expect`; `plan_leftovers` (actions, order, reports, idempotency, no platform pruning without the principalSet); `prune`; `reset --all` sequencing, dry run, error handling; `wait_engines`; one detach per theme; up/down refusals; the confirmation; shared-grant addresses; `plan_teardown`; up/down ordering and every early stop; the guard file and the exact guard command through the CLI; migration mode allows the guard.
+
+**Read-only results:**
+- Fresh environment plan (us-east1, prefix `agdtest`, local scratch state): **97 to add** (§7d's 96 + the guard), 0 change, 0 destroy; plan-safety OK. The guard plans with `input.environment = <project>/us-east1/agdtest`, unknown gateway ids, `depends_on = ["module.base"]` and the destroy provisioner.
+- Live migration plan (generated imports, local scratch state): **69 to add, 8 to change, 0 to destroy, 35 to import**, plan-safety (migration mode) OK; the only difference from T2's saved `plan-actions.txt` is `create terraform_data.teardown_guard`. The runbook's expected counts are updated.
+- `check-clean` on the live demo: 25 blocking (4 engines, 8 Cloud Run, 8 registry entries, a helpdesk egress binding and 4 helpdesk grants: the live helpdesk state at the time), 8 warnings (UI, 2 GE registrations, 4 legacy resources, state.json); every check readable. `reset --all --dry-run` planned the 4 helpdesk policy removals, no Model Armor change, and reported the legacy ingress policy and extension.
+- `terraform fmt -check`, `terraform validate`: OK. `ui/backend/tests`: 156 passed; `runtimes/tests`: 9 passed.
+
+**Decisions and deviations:**
+1. **Shared grants on `down` (the §7a note): not destroyed.** Before the destroy, `down` runs `terraform state rm` on the presenters' `aiplatform.user` and the static service agents' Model Armor grants (the `shared_project_grants` set), and on the egress gateway agent's grants only when another gateway in the project uses the same agent (`locations/-` list; read failures count as shared). They stay in IAM and the next `up` re-adopts them with no-op additive creates. After the destroy a read-only re-check reports whether the static agents still hold the 3 roles; it never writes. Rejected: destroy then re-add (a window where the other environment's Model Armor callouts fail, and "what does the live demo still need" isn't knowable from this state). Read live: each AGENT_TO_ANYWHERE gateway in the project has its own service-extensions agent, so the egress agent's grants are normally destroyed with the gateway.
+2. **Guard depends on all of `module.base`**, not only the gateways (§4.4), so nothing is deleted while it runs; `--expect` makes it fail (exit 2) when the config on the machine isn't the environment being destroyed. It fails closed without `./agdemo`/uv. Bypasses: `-target`, `terraform state rm`, removing the block, a tainted guard; the deliberate one is `terraform state rm terraform_data.teardown_guard`.
+3. **`check-clean` is top-level** (`./agdemo check-clean`, not `tf check-clean`), with the BLOCK/WARN/INFO levels above; `--strict` is what `down` and the guard run.
+4. **`reset --all` goes beyond §4.2 in three places:** grants on platform entries other than the project principalSet's egressor are removed (§4.2 said report only; they're grants on prefix resources); the IAP extension's enforcement mode and the IAP policy's provider are restored when Policy Studio changed them; our engines bound to our gateways but not in state.json are unbound. Legacy resources are never touched by `reset --all` (`down` deletes them), and nothing that isn't both prefix-named and labelled is deleted.
+5. **Waiting:** one wait for all engines at the end of `reset --all`, not per theme (the detaches run in parallel; same result, faster).
+6. **`up` deploys engines one at a time.** In-process parallelism is unsafe (`deploy_spec.staged` changes `os.environ`, the cwd and `sys.modules`), and so are parallel processes: the vertexai SDK stages every engine's pickle under the same default `gcs_dir_name` (`agent_engine`) in the staging bucket, and `update_state` has no cross-process lock. Images are built once for all themes. A per-engine `gcs_dir_name` plus subprocesses plus a state.json file lock would allow it; that needs a live test.
+7. **`down` deletes** every Cloud Run service named `<prefix>-*` and labelled (themes, a private MCP server, the UI), every non-platform `<prefix>-*` registry entry (including Policy Studio-made ones), the legacy resources (policy, extension, the two caller SAs and their project grants), and non-foundation prefix Model Armor templates. Engines and Cloud Run services are deleted in parallel.
+8. **Presenting check:** a warning plus the typed `<project>/<prefix>` confirmation (`--yes` needs a matching `--prefix`); the UI has no busy flag to read.
+9. **Write-command safety:** `up` refuses a live egress gateway without `tf_environment` (the bootstrap-created live demo), a state.json of another environment, and a gateway that the Terraform state doesn't hold. `down` needs `tf_environment` matching the config, an existing state bucket (it never creates one), a Terraform `environment` output matching the config, the egress gateway in state, and no `imports.tf`. After the T2 migration the live demo **is** a valid `down` target (runbook updated).
+10. **`bootstrap` is a pointer** (exit 2, names `up` and the runbook); `--legacy` runs the old path. `teardown --all` refuses a Terraform-managed environment unless `--legacy`.
+11. **One state.json per checkout.** `agdemo_core` always uses `config/state.json`, so a second environment (the T5 us-west1 run) needs its own checkout; `check-clean` ignores (and warns about) a state.json that describes another environment, and `up`/`down` refuse it.
+12. **Migration mode** allows `terraform_data` creates (Terraform-only).
+13. **`up`'s verify** is a CLI read-only check (gateways, IAP policy, template, platform count, every engine exists and is unbound, components deployed, UI URL), not the UI's probe-based Verify.
+
+**Needs a live run (T5):** everything that writes: `reset --all` for real (repoint PATCH, enforcement restore, IAM pruning, stray unbind, the wait), `down` end to end (GE `DELETE`, the Cloud Run v2 REST delete, engine deletes, `state rm`, the destroy with the guard passing, the re-check), the guard **aborting** a bare `terraform destroy` with nothing deleted (ordering included), `up` end to end and its timing, and a second `up`/`down` for idempotency.
+
 ## 8. Open questions
 
 1. **Enforce / dry run ownership:** should Terraform own `iap_enforcement` from demo.yaml, or `ignore_changes` on the extension's `fail_open` and `metadata` so Policy Studio's toggle sticks? (Recommended: ignore.) The same question applies to the IAP policy's `custom_provider`, which Policy Studio's "own extension" flow repoints.
@@ -584,7 +624,7 @@ Live steps: [TERRAFORM_MIGRATION_RUNBOOK.md](TERRAFORM_MIGRATION_RUNBOOK.md) (a 
 
    To be settled by a fresh-project run.
 8. **UI Cloud Run in Terraform?** (Recommended: no; it depends on state.json and the image.)
-9. **Should `down` unregister the demo agents from the GE app** (today nothing removes them)? Is the GE app itself always pre-existing and out of scope?
+9. **Should `down` unregister the demo agents from the GE app** (today nothing removes them)? Is the GE app itself always pre-existing and out of scope? **T3: yes, `down` unregisters registrations of its own engines; the GE app itself is out of scope.**
 10. **State bucket:** the name `<project>-agdemo-tfstate`, kept forever. Or one shared bucket for both repos?
 11. **Minimum Terraform version** 1.7 (`for_each` imports). Fine for presenters on other machines?
-12. **APIs on `down`:** keep them enabled. (Recommended: yes; the project is shared.)
+12. **APIs on `down`:** keep them enabled. (Recommended: yes; the project is shared.) **T3: kept.**

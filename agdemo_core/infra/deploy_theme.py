@@ -287,7 +287,7 @@ def run(cfg: DemoConfig, theme_id: str, skip_build: bool = False, only: str | No
     ms = make_specs()
     st = load_state()
     if not st.get("shared", {}).get("egress_gateway"):
-        c.log("[yellow]shared resources missing — run ./agdemo bootstrap first[/]")
+        c.log("[yellow]shared resources missing — run ./agdemo up first[/]")
     tstate: dict[str, Any] = st.setdefault("themes", {}).setdefault(theme.id, {})
     comps: dict[str, Any] = tstate.setdefault("components", {})
     steps = {only} if only else {"images", "run", "registry", "engine"}

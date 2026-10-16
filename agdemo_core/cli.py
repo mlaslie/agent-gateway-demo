@@ -14,7 +14,7 @@ app = typer.Typer(help="Agent Gateway & Agent Registry demo CLI", no_args_is_hel
                   pretty_exceptions_show_locals=False)
 ui_app = typer.Typer(help="Demo UI: deploy to Cloud Run behind IAP, or run locally")
 app.add_typer(ui_app, name="ui")
-tf_app = typer.Typer(help="Terraform foundation (preview, docs/TERRAFORM_PLAN.md T1). bootstrap stays the default.",
+tf_app = typer.Typer(help="Terraform foundation steps (docs/TERRAFORM_PLAN.md); ./agdemo up / down run them.",
                      no_args_is_help=True)
 app.add_typer(tf_app, name="tf")
 
@@ -54,30 +54,33 @@ def preflight(fix: bool = typer.Option(False, "--fix", help="Enable missing APIs
 
 
 def bootstrap_refusal(state: dict) -> str | None:
-    """Deprecation (docs/TERRAFORM_PLAN.md §5.1 step 6, T2): once `tf output-sync` has recorded that Terraform
-    owns this environment (state.json shared.tf_environment), bootstrap needs --legacy. Offline check."""
+    """The message bootstrap prints once `tf output-sync` has recorded that Terraform owns this environment
+    (state.json shared.tf_environment); docs/TERRAFORM_PLAN.md §5.1 step 6. Offline check."""
     env = (state.get("shared") or {}).get("tf_environment")
     if env:
         return (f"Terraform manages this environment ({env.get('project_id')}/{env.get('region')}, prefix "
-                f"{env.get('prefix')}): use ./agdemo tf plan / tf apply. bootstrap is deprecated; "
+                f"{env.get('prefix')}): use ./agdemo up (or tf plan / tf apply). bootstrap is deprecated; "
                 "./agdemo bootstrap --legacy runs the old path anyway.")
     return None
 
 
+BOOTSTRAP_POINTER = ("bootstrap is replaced by ./agdemo up (Terraform foundation, then every theme and the UI; "
+                     "docs/TERRAFORM_PLAN.md). An environment bootstrap created (the live demo) is adopted with "
+                     "docs/TERRAFORM_MIGRATION_RUNBOOK.md. ./agdemo bootstrap --legacy runs the old path for one "
+                     "more release.")
+
+
 @app.command()
-def bootstrap(legacy: bool = typer.Option(False, "--legacy", help="Run the deprecated bootstrap path even "
-                                          "when Terraform manages this environment")):
-    """DEPRECATED (use ./agdemo tf init + tf apply). Create shared resources (idempotent): APIs, SAs, Artifact
-    Registry, gateways, IAP + Model Armor authz, platform endpoint allowlist. Writes ids to config/state.json."""
+def bootstrap(legacy: bool = typer.Option(False, "--legacy", help="Run the deprecated bootstrap path")):
+    """DEPRECATED: points at ./agdemo up. --legacy runs the old path (APIs, SAs, Artifact Registry, gateways,
+    IAP + Model Armor authz, platform endpoint allowlist; writes ids to config/state.json)."""
     from .infra import bootstrap as b
     from .state import load_state
-    msg = bootstrap_refusal(load_state())
-    if msg and not legacy:
-        c.console.print(f"[red]{msg}[/]")
+    if not legacy:
+        msg = bootstrap_refusal(load_state())
+        c.console.print(f"[yellow]{msg or BOOTSTRAP_POINTER}[/]")
         raise typer.Exit(2)
-    c.console.print("[yellow]bootstrap is deprecated: the foundation is built with ./agdemo tf init && "
-                    "./agdemo tf apply (docs/TERRAFORM_PLAN.md). It still works for environments Terraform "
-                    "doesn't manage yet.[/]")
+    c.console.print("[yellow]bootstrap --legacy: deprecated path (use ./agdemo up for new environments).[/]")
     shared = b.run(_cfg(), me=_me())
     c.console.print_json(data=shared)
 
@@ -114,10 +117,119 @@ def status(theme: Optional[str] = typer.Argument(None)):
 
 
 @app.command()
-def reset(theme: str, wait: bool = typer.Option(False, help="Wait for gateway detach PATCHes to finish")):
-    """Return a theme to wide open: remove every policy and detach the gateways."""
+def reset(theme: Optional[str] = typer.Argument(None),
+          all_: bool = typer.Option(False, "--all", help="Every theme, Model Armor off, and prefix-owned Policy "
+                                    "Studio leftovers (grants, policies, extension copies); waits for the engines"),
+          wait: bool = typer.Option(False, help="Wait for gateway detach PATCHes to finish (always on with --all)"),
+          dry_run: bool = typer.Option(False, "--dry-run", help="--all: print what would change; change nothing"),
+          yes: bool = typer.Option(False, "--yes", "-y", help="--all: don't ask")):
+    """Return a theme to wide open (remove every policy, detach the gateways), or everything with --all
+    (docs/TERRAFORM_PLAN.md §4.2). Keeps the foundation and every deployed engine and service."""
+    from .infra import reset_all
     from .infra import status as s
-    s.reset(_cfg(), theme, wait=wait)
+    cfg = _cfg()
+    if not all_:
+        if not theme:
+            c.console.print("[red]give a theme or --all[/]")
+            raise typer.Exit(2)
+        s.reset(cfg, theme, wait=wait)
+        return
+    if theme:
+        c.console.print("[red]--all resets every theme; don't name one[/]")
+        raise typer.Exit(2)
+    if not yes and not dry_run:
+        typer.confirm(f"Reset EVERY theme in {cfg.project}/{cfg.region} (prefix {cfg.prefix}), turn Model Armor "
+                      "off and remove prefix-owned Policy Studio leftovers? Nobody should be presenting.", abort=True)
+    rep = reset_all.run(cfg, reset_all.LiveOps(cfg), dry_run=dry_run)
+    raise typer.Exit(0 if rep.ok else 1)
+
+
+@app.command("check-clean")
+def check_clean(strict: bool = typer.Option(False, "--strict", help="Also fail on warnings (UI, GE "
+                                            "registrations, drift, legacy, unreadable checks): down and the "
+                                            "destroy guard use it"),
+                expect: Optional[str] = typer.Option(None, "--expect", help="PROJECT/REGION/PREFIX that "
+                                                     "config/demo.yaml must describe (the destroy guard passes it)"),
+                json_out: bool = typer.Option(False, "--json", help="Print the findings as JSON")):
+    """Read-only: is anything left besides the Terraform foundation? Exit 1 with a list when something is
+    (BLOCK; with --strict also WARN), 2 when config/demo.yaml isn't the expected environment."""
+    import json
+    from dataclasses import asdict
+
+    from .infra import check_clean as cc
+    from .state import load_state
+    cfg = _cfg()
+    msg = cc.expect_matches(cfg, expect)
+    if msg:
+        c.console.print(f"[red]check-clean: {msg}[/]")
+        raise typer.Exit(2)
+    _, findings = cc.run(cfg, c.client(cfg), load_state())
+    bad = cc.failed(findings, strict)
+    if json_out:
+        print(json.dumps({"clean": not bad, "strict": strict, "findings": [asdict(x) for x in findings]}, indent=2))
+        raise typer.Exit(1 if bad else 0)
+    if findings:
+        t = Table(title=f"check-clean: {cfg.project} / {cfg.region} / prefix {cfg.prefix}"
+                  + (" (strict)" if strict else ""))
+        for col in ("Level", "Category", "Resource", "Detail", "Fix"):
+            t.add_column(col, overflow="fold")
+        color = {cc.BLOCK: "red", cc.WARN: "yellow", cc.INFO: "dim"}
+        for x in findings:
+            t.add_row(f"[{color[x.level]}]{x.level}[/]", x.category, x.resource, x.detail, x.fix)
+        c.console.print(t)
+    n = cc.counts(findings)
+    c.console.print(f"{n['BLOCK']} blocking, {n['WARN']} warnings, {n['INFO']} info: "
+                    + ("[red]NOT CLEAN[/]" + (" (run ./agdemo down, or reset --all for live toggles)") if bad
+                       else "[green]CLEAN[/]" + ("" if strict else " (default mode; --strict also fails on warnings)")))
+    if bad and expect:
+        c.console.print("[red]Destroy aborted by the teardown guard: run ./agdemo down (or reset --all) first. "
+                        "Nothing was deleted.[/]")
+    raise typer.Exit(1 if bad else 0)
+
+
+@app.command()
+def up(yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask before applying"),
+       allow_replace: bool = typer.Option(False, "--allow-replace", help="Allow replaces (never deletes)"),
+       skip_build: bool = typer.Option(False, "--skip-build", help="Reuse the images in Artifact Registry"),
+       skip_preflight: bool = typer.Option(False, "--skip-preflight", help="Go on when preflight fails"),
+       theme: Optional[list[str]] = typer.Option(None, "--theme", help="Deploy only these themes "
+                                                  "(repeatable; default themes.enabled)"),
+       no_ui: bool = typer.Option(False, "--no-ui", help="Skip ui deploy"),
+       ge: bool = typer.Option(False, "--ge", help="Also publish each theme's orchestrator to Gemini Enterprise"),
+       local_state: Optional[str] = typer.Option(None, "--local-state", help="Local scratch Terraform state")):
+    """Build an environment: tf init, plan + plan-safety, apply, output-sync, deploy-theme for each theme,
+    ui deploy, verify (docs/TERRAFORM_PLAN.md §4.1). Idempotent. Refuses the bootstrap-created live demo."""
+    from . import tf_foundation as tfm
+    from .infra import lifecycle as lc
+    cfg = _cfg()
+    ops = lc.LiveUpOps(cfg, local_state=local_state, allow_replace=allow_replace, skip_build=skip_build)
+    try:
+        rc = lc.up(cfg, ops, yes=yes, skip_preflight=skip_preflight, themes=theme or None, ui=not no_ui, ge=ge,
+                   ask=lambda q: typer.confirm(q))
+    except tfm.TfError as e:
+        _tf_err(e)
+    raise typer.Exit(rc)
+
+
+@app.command()
+def down(yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask (needs --prefix)"),
+         prefix: Optional[str] = typer.Option(None, "--prefix",
+                                              help="This environment's prefix (required with --yes)"),
+         dry_run: bool = typer.Option(False, "--dry-run",
+                                      help="Print the inventory and the reset plan; change nothing"),
+         local_state: Optional[str] = typer.Option(None, "--local-state", help="Local scratch Terraform state")):
+    """Delete an environment: reset --all, Gemini Enterprise unregister, CLI teardown (engines, Cloud Run,
+    registry, UI), check-clean --strict, terraform destroy (docs/TERRAFORM_PLAN.md §4.3). Keeps APIs, the
+    state and recordings buckets and the project-wide shared grants. Terraform-managed environments only."""
+    from . import tf_foundation as tfm
+    from .infra import lifecycle as lc
+    cfg = _cfg()
+    try:
+        rc = lc.down(cfg, lc.LiveDownOps(cfg, local_state=local_state), yes=yes, prefix_arg=prefix,
+                     dry_run=dry_run, ask=lambda q: typer.prompt(q, default="", show_default=False))
+    except tfm.TfError as e:
+        _tf_err(e)
+    raise typer.Exit(rc)
 
 
 @app.command("export-terraform")
@@ -161,12 +273,20 @@ def export_terraform(theme: str,
 @app.command()
 def teardown(theme: Optional[str] = typer.Argument(None),
              all_: bool = typer.Option(False, "--all", help="Remove every theme AND the shared resources"),
-             yes: bool = typer.Option(False, "--yes", "-y")):
-    """Delete a theme's resources, or everything with --all (only resources carrying the prefix)."""
+             yes: bool = typer.Option(False, "--yes", "-y"),
+             legacy: bool = typer.Option(False, "--legacy", help="--all on a Terraform-managed environment "
+                                         "(deletes the foundation behind Terraform's back; use down instead)")):
+    """Delete a theme's resources, or everything with --all (only resources carrying the prefix). For a
+    Terraform-managed environment use ./agdemo down."""
     from .infra import teardown as t
+    from .state import load_state
     cfg = _cfg()
     if not theme and not all_:
         c.console.print("[red]give a theme or --all[/]")
+        raise typer.Exit(2)
+    if all_ and not legacy and (load_state().get("shared") or {}).get("tf_environment"):
+        c.console.print("[red]Terraform manages this environment's foundation: use ./agdemo down "
+                        "(teardown --all --legacy deletes it outside Terraform).[/]")
         raise typer.Exit(2)
     if not yes:
         typer.confirm(f"Delete {'ALL ' + cfg.prefix + ' resources' if all_ else 'theme ' + theme} "

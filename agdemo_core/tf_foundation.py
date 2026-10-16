@@ -178,7 +178,10 @@ def run_tf(args: list[str], d: Path | None = None, capture: bool = False) -> str
 
 
 def init(cfg: DemoConfig, r=None, local_state: str | None = None, log: Callable[[str], None] = c.log,
-         organization_id: str = "", existing_platform: dict[str, str] | None = None) -> None:
+         organization_id: str = "", existing_platform: dict[str, str] | None = None,
+         create_bucket: bool = True) -> None:
+    """create_bucket=False (down): refuse instead of creating a missing state bucket (an empty new state
+    can't describe the environment being destroyed)."""
     d = tf_dir()
     write_tfvars(cfg, d, organization_id=organization_id, existing_platform=existing_platform)
     log(f"  wrote {d / TFVARS_NAME}")
@@ -193,7 +196,10 @@ def init(cfg: DemoConfig, r=None, local_state: str | None = None, log: Callable[
     if override.exists():
         override.unlink()
     bucket = state_bucket(cfg)
-    if ensure_bucket(r, cfg.project, bucket, cfg.region, cfg.labels, versioning=True):
+    if not create_bucket:
+        if r.get(f"{STORAGE}/b/{bucket}", ok404=True) is None:
+            raise TfError(f"state bucket gs://{bucket} doesn't exist: this environment has no Terraform state")
+    elif ensure_bucket(r, cfg.project, bucket, cfg.region, cfg.labels, versioning=True):
         log(f"  created state bucket gs://{bucket} (versioning on)")
     run_tf(["init", "-input=false", "-reconfigure", f"-backend-config=bucket={bucket}",
             f"-backend-config=prefix={state_prefix(cfg)}"], d)
@@ -227,3 +233,22 @@ def state_addresses() -> set[str]:
 
 def outputs() -> dict[str, Any]:
     return json.loads(run_tf(["output", "-json"], capture=True) or "{}")
+
+
+def environment_output() -> dict[str, Any] | None:
+    """The `environment` output of the current state (None when nothing is applied)."""
+    try:
+        return (outputs().get("environment") or {}).get("value")
+    except (TfError, ValueError):
+        return None
+
+
+def state_rm(addresses: list[str]) -> None:
+    """Forget resources without deleting them (down keeps shared project grants this way)."""
+    if addresses:
+        run_tf(["state", "rm", *addresses])
+
+
+def destroy() -> None:
+    """terraform destroy (the guard resource re-runs check-clean --strict first)."""
+    run_tf(["destroy", "-input=false", "-auto-approve"])

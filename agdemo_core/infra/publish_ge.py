@@ -22,6 +22,39 @@ def app_resource(cfg: DemoConfig) -> str:
             f"/collections/default_collection/engines/{ge.app_id}")
 
 
+# ------------------------------------------------------------------ registrations (read / unregister, T3 down)
+# Same Discovery Engine API agents-cli uses (publish/cmd_publish.py: _upsert_agent / _match_adk_agent):
+#   {base}/v1alpha/<app>/assistants/default_assistant/agents   list (paged), DELETE {base}/v1alpha/<agent name>
+# base = https://discoveryengine.googleapis.com (global) or https://<location>-discoveryengine.googleapis.com.
+def ge_base(location: str) -> str:
+    return "https://discoveryengine.googleapis.com" if location == "global" else \
+        f"https://{location}-discoveryengine.googleapis.com"
+
+
+def agents_url(cfg: DemoConfig) -> str:
+    return f"{ge_base(cfg.gemini_enterprise.location)}/v1alpha/{app_resource(cfg)}/assistants/default_assistant/agents"
+
+
+def list_agents(cfg: DemoConfig, r) -> list[dict]:
+    """Every agent registered in the GE app (read-only)."""
+    return r.list_all(agents_url(cfg), "agents")
+
+
+def unregister(cfg: DemoConfig, r, agents: list[dict], log=c.log) -> list[str]:
+    """Delete these GE registrations (from check_clean.ge_matches). 404 = already gone. Returns the names."""
+    from ..gcp.rest import GcpError
+    done = []
+    for a in agents:
+        try:
+            r.delete(f"{ge_base(cfg.gemini_enterprise.location)}/v1alpha/{a['name']}")
+            log(f"  unregistered {a.get('displayName', a['name'])} from Gemini Enterprise")
+        except GcpError as e:
+            if not e.not_found:
+                raise
+        done.append(a["name"])
+    return done
+
+
 def run(cfg: DemoConfig, theme_id: str, agent: str | None = None) -> None:
     """Publish the theme's primary orchestrator, or the additional orchestrator `agent` (CONTRACTS §12)."""
     if not cfg.gemini_enterprise.app_id:

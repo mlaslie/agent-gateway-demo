@@ -8,7 +8,7 @@ resource prefix. `./agdemo status [theme]` shows the live state of everything li
 | Symptom | Usual cause | Fix |
 |---|---|---|
 | Every egress call returns 403, even allowed ones, right after a change | IAP policy changes take time to propagate (registrations take about 4 min, IAM bindings 1 to 7 min) | Wait, or use **Live with fallback** |
-| Agent can't reach Gemini / sessions / logging once the egress gateway is attached | A platform hostname variant isn't registered or allowed | Find it in the gateway log (below), then add it to `platform_endpoints()` in `agdemo_core/infra/common.py` and re-run `./agdemo bootstrap` |
+| Agent can't reach Gemini / sessions / logging once the egress gateway is attached | A platform hostname variant isn't registered or allowed | Find it in the gateway log (below), then add it to `platform_endpoints()` in `agdemo_core/infra/common.py` and re-run `./agdemo tf apply` |
 | Engine PATCH fails after ~13 min with "The Reasoning Engine failed to be updated" | The container boots behind a default-deny gateway and can't reach a platform endpoint | Same as above. Check `reasoning_engine_stderr` for the host |
 | `gateway_attach` stays *pending* for many minutes | The PATCH redeploys the engine container (5 to 15 min) | Expected. Attach the gateways before presenting |
 | Binding the gateway fails with `FAILED_PRECONDITION` | Another engine in the same project + region is bound to a different gateway, or the engine was created before 2026-04-29, or it has revisions or traffic split | `./agdemo preflight` lists conflicting bindings |
@@ -69,4 +69,5 @@ gcloud beta service-extensions authz-extensions list --location=R --project=P
 
 - `./agdemo reset <theme>` removes every policy for that theme and detaches its gateways. Detaching runs as a background engine PATCH.
 - `./agdemo teardown <theme>` deletes the engine (force), the Cloud Run services and the registry entries. It also removes the engine principal's project roles.
-- `./agdemo teardown --all` also deletes the authz policies, the extensions, both gateways, the Model Armor template, the `PFX-plat-*` registry entries, the demo service accounts, the Artifact Registry repo and the staging bucket. It never deletes anything without the prefix, and it never disables APIs.
+- `./agdemo down` (Terraform-managed environments) resets everything, deletes the code-deployed resources, checks with `./agdemo check-clean --strict` and runs `terraform destroy`; a bare `terraform destroy` is stopped by the guard while anything still uses the gateways. `./agdemo reset --all` only returns every theme to the start state.
+- `./agdemo teardown --all` (old non-Terraform path; refuses a Terraform-managed environment unless `--legacy`) also deletes the authz policies, the extensions, both gateways, the Model Armor template, the `PFX-plat-*` registry entries, the demo service accounts, the Artifact Registry repo and the staging bucket. It never deletes anything without the prefix, and it never disables APIs.

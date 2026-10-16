@@ -22,8 +22,9 @@ from typing import Any
 TEMPLATE_TYPE = "google_network_services_agent_connectivity_template"
 REPLACE = (["delete", "create"], ["create", "delete"])
 # Creating these over an existing live grant/API is a no-op (additive), so a migration plan may create them.
+# terraform_data is Terraform-only (the T3 destroy guard, infra/terraform/guards.tf): no GCP resource.
 MIGRATION_CREATE_OK = ("google_project_service", "google_project_iam_member", "google_storage_bucket_iam_member",
-                       "google_iap_agent_registry_endpoint_iam_member")
+                       "google_iap_agent_registry_endpoint_iam_member", "terraform_data")
 
 
 @dataclass

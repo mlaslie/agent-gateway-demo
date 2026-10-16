@@ -148,3 +148,9 @@ variable "private_networking" {
     error_message = "private_networking is not built yet (phase T4 of docs/TERRAFORM_PLAN.md)."
   }
 }
+
+variable "agdemo_cli" {
+  description = "Path of ./agdemo for the destroy guard (guards.tf): relative to infra/terraform, or absolute."
+  type        = string
+  default     = "../../agdemo"
+}
