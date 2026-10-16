@@ -117,7 +117,13 @@ gcloud run deploy SVC --source=. --region=REGION --ingress=internal --no-allow-u
 
 **Cost while it exists:** about USD 8/month, almost all of it the PSC endpoint. Cloud Run idle costs nothing.
 
-## What's left to decide (review items)
+## Decided (2026-10-16)
+
+- The test bed becomes a **Private Networking mode** in the demo, in **us-west1**, with a dedicated VPC-enabled gateway created with the template from the start. The live `agdemo-egress` gateway is **not** changed and no in-place migration is needed. See `TERRAFORM_PLAN.md` §7c.
+- **Content:** Helpdesk-style orchestrator, **Payroll MCP** (private) plus one public MCP for side-by-side contrast.
+- **Built by Terraform** (`up` / `down`), with the CLI deploying the code.
+
+## Superseded review items
 
 - Whether to build this into the demo as `./agdemo private up|status|down`, or as part of the Terraform foundation (see `docs/TERRAFORM_PLAN.md` once written).
 - Whether to update `agdemo-egress` in place (option a, recommended) or use a separate region (option b).

@@ -458,7 +458,49 @@ The provider has no gateway data source, so this reads it with the `http` provid
 - **Q4, legacy cleanup:** yes. Delete the legacy `agdemo-ingress-iap-*` resources and the two unused caller service accounts before importing.
 - **Q11, Terraform 1.7+:** yes, it's acceptable.
 - **Q5a, private MCP:** Helpdesk theme, "Payroll MCP" (internal-only Cloud Run).
-- **Q5b, gateway approach:** a separate VPC-enabled gateway in another region vs updating `agdemo-egress` in place is under discussion (see §5).
+- **Q5b, gateway approach:** a **dedicated Private Networking mode in a second region (us-west1)**. `agdemo-egress` is **not** changed, so the one-time migration in §5 (`private migrate-gateway`) is dropped. See §7c.
+
+## 7c. Private Networking mode (user decision, 2026-10-16)
+
+**Why a second region:** a project can have only one egress gateway per region serving agents, and an Agent Runtime agent must be in its gateway's region. The VPC-enabled gateway and its agent therefore live in a **second region, us-west1**. us-central1 holds an unrelated gateway.
+
+| Mode | Region | Gateway | Content |
+|---|---|---|---|
+| Internet (today) | us-east4 | `agdemo-egress` (no template, unchanged) | Existing themes, public Cloud Run destinations |
+| Private Networking (new) | us-west1 | `agdemo-pn-egress`, **created with the connectivity template from the start** (verified path, no migration) | New theme "Private networking": a dedicated orchestrator, **Payroll MCP** (Cloud Run, ingress internal) and **one public MCP** for side-by-side contrast |
+
+**Terraform:** `base` gains a second-region instance. The `private_egress` module is always on in us-west1. Contents:
+- VPC, /28 subnet (PGA), attachment;
+- PSC endpoint for Google APIs and the `run.app.` zone;
+- service-agent roles and the template;
+- `agdemo-pn-egress` referencing the template by project number;
+- that region's IAP extension and policy, Model Armor template and extension;
+- the 25 platform registry entries for us-west1, with their grant.
+
+It's still created by `up` and destroyed by `down`, with the same guard and order. The us-east4 base is unchanged.
+
+**CLI:**
+- **The theme carries its region.** `deploy-theme`, policies, gateway logs and Verify follow the theme's region instead of the global config region.
+- **Deploys:** Payroll MCP (internal ingress) and the public MCP. The theme's orchestrator is deployed with the token-sharing env var.
+- **Registry and grants:** the theme's registry entries are created in us-west1. Grants stay live toggles.
+
+**Demo UI:**
+- a **mode switch** (Internet / Private Networking) that selects the theme set and region;
+- a VPC diagram view (agent → VPC-enabled gateway → attachment / PSC endpoint / DNS → Payroll MCP, with the public MCP alongside);
+- an "Under the hood" panel showing the pre-built network pieces and the template;
+- gateway log entries highlight a private `serverIp`.
+
+**Demo steps in Private Networking mode** (toggles and tests):
+1. Payroll MCP is internal-only: a direct call is rejected with 404.
+2. Through the gateway (route exists, no permission): 403.
+3. Registered in Agent Registry: still 403. Reachable and registered isn't the same as allowed.
+4. Grant (optionally read-only tools): 200, and the gateway log shows the private 10.x IP.
+5. Contrast: the public MCP follows the same policy over the internet path.
+6. Optional: the diagram explains a "direct VPC access" agent (PSC interface) that bypasses the gateway. It's explained only, not deployed.
+
+**Effort:** about 3–4 days on top of T1–T5 (region-aware themes, the mode switch, the new theme and scenarios, the VPC diagram, log highlight). T4 changes accordingly: no gateway migration, so the second-region module plus the theme.
+
+**Standing cost:** PSC endpoint about USD 8/month, plus the extra orchestrator's idle cost and the second gateway. Gateway pricing isn't checked.
 
 ## 8. Open questions
 
