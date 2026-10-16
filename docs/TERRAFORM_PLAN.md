@@ -457,7 +457,8 @@ The provider has no gateway data source, so this reads it with the `http` provid
 - **Q3, recordings:** keep them so they survive `down`. Move `recordings/` to a separate bucket that is **not** destroyed with the foundation. It's created outside the destroyable module, like the state bucket, or marked `prevent_destroy` and left out of `down`. The UI reads recordings from that bucket.
 - **Q4, legacy cleanup:** yes. Delete the legacy `agdemo-ingress-iap-*` resources and the two unused caller service accounts before importing.
 - **Q11, Terraform 1.7+:** yes, it's acceptable.
-- **Q5** (private MCP theme, name and the reset window): explained to the user; waiting on their answer.
+- **Q5a, private MCP:** Helpdesk theme, "Payroll MCP" (internal-only Cloud Run).
+- **Q5b, gateway approach:** a separate VPC-enabled gateway in another region vs updating `agdemo-egress` in place is under discussion (see §5).
 
 ## 8. Open questions
 
