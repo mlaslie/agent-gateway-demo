@@ -17,14 +17,14 @@ PATHS = ("egress", "ingress")
 
 
 def _names(ctx: Ctx, path: str) -> tuple[str, str, str]:
-    cfg = ctx.config
+    cfg = ctx.config.home()           # Model Armor lives in the base region only (T4)
     proj = gw.gateway_project(cfg, path)
     ext = f"projects/{proj}/locations/{cfg.region}/authzExtensions/{gw.ma_extension_name(cfg)}"
     return proj, gw.ma_policy_name(cfg, path), ext
 
 
 def set(ctx: Ctx, enabled: bool) -> dict[str, Any]:  # noqa: A001 (contract name)
-    cfg = ctx.config
+    cfg = ctx.config.home()           # Model Armor lives in the base region only (T4)
     r = rest(cfg.project)
 
     def one(path: str) -> str:
@@ -40,7 +40,7 @@ def set(ctx: Ctx, enabled: bool) -> dict[str, Any]:  # noqa: A001 (contract name
 
 
 def status(ctx: Ctx) -> dict[str, Any]:
-    cfg = ctx.config
+    cfg = ctx.config.home()           # Model Armor lives in the base region only (T4)
     r = rest(cfg.project)
     try:
         present = {}
@@ -59,7 +59,7 @@ def status(ctx: Ctx) -> dict[str, Any]:
 
 
 def describe(ctx: Ctx) -> list[str]:
-    cfg = ctx.config
+    cfg = ctx.config.home()           # Model Armor lives in the base region only (T4)
     lines = ["# Model Armor on Agent Gateway (CONTENT_AUTHZ)"]
     for path in PATHS:
         proj, name, ext = _names(ctx, path)

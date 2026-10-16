@@ -13,6 +13,7 @@ from those platform entries and used to map an entry to the calling orchestrator
 """
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -25,10 +26,43 @@ LOG_ID = "networkservices.googleapis.com%2Fgateway_requests"
 ENTRIES_URL = "https://logging.googleapis.com/v2/entries:list"
 
 
+PRIVATE_NETS = tuple(ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+
+
+def server_ip(value: str | None) -> str | None:
+    """'10.70.250.10:443' / '[fd00::1]:443' / '74.125.1.95' -> the bare IP (None if absent or unparsable)."""
+    v = (value or "").strip()
+    if not v:
+        return None
+    if v.startswith("["):
+        v = v[1:].split("]", 1)[0]
+    elif v.count(":") == 1:
+        v = v.split(":", 1)[0]
+    try:
+        return str(ipaddress.ip_address(v))
+    except ValueError:
+        return None
+
+
+def is_private_ip(value: str | None) -> bool:
+    """T4: is httpRequest.serverIp in 10/8, 172.16/12 or 192.168/16? A private upstream IP means the gateway
+    sent the request into the VPC (the PSC endpoint), i.e. the private path."""
+    ip = server_ip(value)
+    if ip is None:
+        return False
+    addr = ipaddress.ip_address(ip)
+    return addr.version == 4 and any(addr in n for n in PRIVATE_NETS)
+
+
 def theme_hosts(state: dict[str, Any], theme: Theme) -> dict[str, str]:
-    """{hostname: component id} for the theme's deployed Cloud Run targets."""
+    """{hostname: component id} for the theme's deployed Cloud Run targets (every registered URL form)."""
     comps = state.get("themes", {}).get(theme.id, {}).get("components", {})
-    return {urlparse(c["url"]).hostname: cid for cid, c in comps.items() if c.get("url")}
+    out: dict[str, str] = {}
+    for cid, c in comps.items():
+        for u in [c.get("url"), *(c.get("urls") or [])]:
+            if u and urlparse(u).hostname:
+                out[urlparse(u).hostname] = cid
+    return out
 
 
 def build_filter(cfg: DemoConfig, hosts: list[str], since: str, denied_only: bool) -> str:
@@ -139,6 +173,8 @@ def parse_entry(cfg: DemoConfig, theme: Theme, hosts: dict[str, str], e: dict[st
         what += f" (from {caller['display_name']})"
     label = decision.upper() + (f" by {denying['name']}" if denying else "")
     ts = e.get("timestamp", "")
+    sip = http.get("serverIp")
+    private = is_private_ip(sip)
     return {
         "id": e.get("insertId", ""), "timestamp": ts,
         "gateway": (e.get("resource") or {}).get("labels", {}).get("gateway_name", ""),
@@ -147,7 +183,8 @@ def parse_entry(cfg: DemoConfig, theme: Theme, hosts: dict[str, str], e: dict[st
         "mcp_method": mcp.get("method"), "mcp_tool": mcp.get("parameter"),
         "edge": edge, "component": comp, "caller": caller, "policies": pols,
         "decided_by": denying["name"] if denying else None,
-        "summary": f"{label} · {what} · {status}",
+        "server_ip": sip or None, "private_path": private,
+        "summary": f"{label} · {what} · {status}" + (" · private path" if private else ""),
         "console_url": entry_url(cfg, e.get("insertId", ""), ts),
         "simulated": False, "raw": e,
     }

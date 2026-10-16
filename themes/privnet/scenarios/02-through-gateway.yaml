@@ -1,0 +1,17 @@
+id: through-gateway
+order: 2
+title: "Through the gateway"
+subtitle: "Route exists, no permission → 403"
+description: |
+  Attach the VPC-enabled gateway. Its connectivity template gives it a network attachment in your VPC, where
+  run.app resolves to the PSC endpoint, so Payroll MCP is now reachable. Reachable isn't allowed: default
+  deny answers 403 for both servers.
+flow: egress
+nodes: [orchestrator, egress_gateway, registry, payroll-mcp, benefits-mcp]
+preconditions: [gw-egress]
+policies: [gw-egress]
+tests:
+  - id: payslip-no-grant
+    label: "Payslip through the gateway"
+    prompt: "Show me jdoe's September payslip."
+    probes: [{edge: "payroll-mcp:get_payslip"}]

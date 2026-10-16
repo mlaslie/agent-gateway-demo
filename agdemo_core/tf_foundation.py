@@ -57,15 +57,43 @@ def recordings_bucket(cfg: DemoConfig) -> str:
 
 
 # ------------------------------------------------------------------ tfvars (pure)
-def tfvars(cfg: DemoConfig, organization_id: str = "", existing_platform: dict[str, str] | None = None,
-           recordings: str | None = None) -> dict[str, Any]:
-    """demo.yaml -> Terraform variables. existing_platform: url -> registry_resource for URLs another
-    (non-prefix) service already registered (bootstrap's url_owner branch); they are granted, not created."""
-    endpoints = {
+def _endpoints(cfg: DemoConfig) -> dict[str, dict[str, str]]:
+    """url -> {service_id, display_name} of the platform endpoints of the view's region."""
+    return {
         url: {"service_id": c.platform_service_id(cfg, s),
               "display_name": f"{cfg.prefix} {url.split('//')[1]}"[:63]}
         for s, url in c.platform_endpoints(cfg)
     }
+
+
+def pn_tfvars(cfg: DemoConfig, existing_platform: dict[str, str] | None = None) -> dict[str, Any]:
+    """The `private_networking` variable (T4). Disabled: {"enabled": false}, exactly as before T4, so the base
+    plan doesn't change. existing_platform: the PN region's url -> registry_resource (as for the base)."""
+    pn = cfg.private_networking
+    if not pn.enabled:
+        return {"enabled": False}
+    v = cfg.for_region(pn.region)
+    endpoints = _endpoints(v)
+    return {
+        "enabled": True,
+        "region": pn.region,
+        "subnet_range": pn.subnet_range,
+        "psc_ip": pn.psc_ip,
+        "dns_domains": list(pn.dns_domains),
+        "vpc_egress": pn.vpc_egress,
+        "manage_service_agent_roles": cfg.manage_pn_service_agent_roles,
+        "names": c.pn_names(v),
+        "platform_endpoints": endpoints,
+        "platform_endpoints_existing": {u: rr for u, rr in (existing_platform or {}).items() if u in endpoints},
+    }
+
+
+def tfvars(cfg: DemoConfig, organization_id: str = "", existing_platform: dict[str, str] | None = None,
+           recordings: str | None = None, existing_platform_pn: dict[str, str] | None = None) -> dict[str, Any]:
+    """demo.yaml -> Terraform variables. existing_platform: url -> registry_resource for URLs another
+    (non-prefix) service already registered (bootstrap's url_owner branch); they are granted, not created."""
+    cfg = cfg.home()
+    endpoints = _endpoints(cfg)
     return {
         "project_id": cfg.project,
         "gateway_project_id": cfg.gateway_project if cfg.gateway_project != cfg.project else "",
@@ -94,8 +122,15 @@ def tfvars(cfg: DemoConfig, organization_id: str = "", existing_platform: dict[s
         "platform_endpoints": endpoints,
         "platform_endpoints_existing": {u: rr for u, rr in (existing_platform or {}).items() if u in endpoints},
         "recordings_bucket": recordings if recordings is not None else recordings_bucket(cfg),
-        "private_networking": {"enabled": False},
+        "private_networking": pn_tfvars(cfg, existing_platform_pn),
     }
+
+
+def discover_existing_platform_pn(cfg: DemoConfig, r) -> dict[str, str]:
+    """The Private Networking region's existing platform URLs ({} when the mode is off)."""
+    if not cfg.private_networking.enabled:
+        return {}
+    return discover_existing_platform(cfg.for_region(cfg.private_networking.region), r)
 
 
 def write_tfvars(cfg: DemoConfig, d: Path | None = None, **kw) -> Path:
@@ -122,6 +157,13 @@ def merge_outputs(state: dict[str, Any], outputs: dict[str, Any], force: bool = 
     if not new.get("recordings_bucket"):
         new.pop("recordings_bucket", None)
     shared.update(new)
+    # T4: per-region sections (Private Networking). Replaced as a whole, so turning the mode off removes it.
+    if "state_regions" in outputs:
+        regions = (outputs["state_regions"] or {}).get("value") or {}
+        if regions:
+            shared["regions"] = regions
+        else:
+            shared.pop("regions", None)
     if env:
         shared["tf_environment"] = env
     return state
@@ -147,7 +189,8 @@ def ensure_bucket(r, project: str, name: str, location: str, labels: dict[str, s
 
 
 def discover_existing_platform(cfg: DemoConfig, r) -> dict[str, str]:
-    """Read-only: platform URLs already registered by a service whose id isn't the one Terraform would use."""
+    """Read-only: platform URLs already registered by a service whose id isn't the one Terraform would use
+    (in the view's region: pass cfg.for_region(...) for the Private Networking registry)."""
     from .gcp import registry
     ours = {url: c.platform_service_id(cfg, s) for s, url in c.platform_endpoints(cfg)}
     out: dict[str, str] = {}
@@ -179,11 +222,12 @@ def run_tf(args: list[str], d: Path | None = None, capture: bool = False) -> str
 
 def init(cfg: DemoConfig, r=None, local_state: str | None = None, log: Callable[[str], None] = c.log,
          organization_id: str = "", existing_platform: dict[str, str] | None = None,
-         create_bucket: bool = True) -> None:
+         create_bucket: bool = True, existing_platform_pn: dict[str, str] | None = None) -> None:
     """create_bucket=False (down): refuse instead of creating a missing state bucket (an empty new state
     can't describe the environment being destroyed)."""
     d = tf_dir()
-    write_tfvars(cfg, d, organization_id=organization_id, existing_platform=existing_platform)
+    write_tfvars(cfg, d, organization_id=organization_id, existing_platform=existing_platform,
+                 existing_platform_pn=existing_platform_pn)
     log(f"  wrote {d / TFVARS_NAME}")
     override = d / OVERRIDE_NAME
     if local_state:
@@ -211,7 +255,8 @@ def migrating(d: Path | None = None) -> bool:
     return ((d or tf_dir()) / IMPORTS_NAME).exists()
 
 
-def plan(out: Path | None = None, allow_replace: bool = False, json_out: Path | None = None):
+def plan(out: Path | None = None, allow_replace: bool = False, json_out: Path | None = None,
+         allow_template_swap: bool = False):
     """terraform plan -out, then the plan-safety check (migration mode while imports.tf exists).
     Returns (plan file, Verdict). json_out: also save `terraform show -json`."""
     from . import tf_safety
@@ -221,7 +266,8 @@ def plan(out: Path | None = None, allow_replace: bool = False, json_out: Path | 
     js = run_tf(["show", "-json", str(out)], d, capture=True)
     if json_out:
         Path(json_out).write_text(js)
-    return out, tf_safety.check(json.loads(js), allow_replace=allow_replace, migration=migrating(d))
+    return out, tf_safety.check(json.loads(js), allow_replace=allow_replace, migration=migrating(d),
+                                allow_template_swap=allow_template_swap)
 
 
 def state_addresses() -> set[str]:

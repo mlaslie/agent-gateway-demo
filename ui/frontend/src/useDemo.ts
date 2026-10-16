@@ -1,7 +1,7 @@
 // Central app state: config, theme, polled state, optimistic policy toggles, SSE test runs, activity log.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Api } from "./api/client";
-import type { AppConfig, EdgeState, GatewayLogEntry, Mode, PolicyStatus, Scenario, SseEvent, Theme, ThemeState } from "./api/types";
+import type { AppConfig, EdgeState, GatewayLogEntry, Mode, NetworkMode, NetworkView, PolicyStatus, Scenario, SseEvent, Theme, ThemeState } from "./api/types";
 import { agentIndex, agentName, copyText, edgeLabel, splitSource } from "./util";
 
 export interface LogEntry {
@@ -172,6 +172,15 @@ export function useDemo(api: Api) {
   }, [api]);
 
   const themeSummary = config?.themes.find((t) => t.id === themeId);
+  // T4: Internet / Private Networking switch. The mode is the selected theme's; switching selects that mode's
+  // first theme (the theme picker shows only the current mode's themes).
+  const networkMode: NetworkMode = themeSummary?.network_mode ?? "internet";
+  const networkModes: NetworkMode[] = useMemo(
+    () => (["internet", "private_networking"] as NetworkMode[]).filter((m) => config?.themes.some((t) => (t.network_mode ?? "internet") === m)),
+    [config],
+  );
+  const modeThemes = useMemo(() => config?.themes.filter((t) => (t.network_mode ?? "internet") === networkMode) ?? [], [config, networkMode]);
+  const [network, setNetwork] = useState<NetworkView | null>(null);
 
   // ---------- theme ----------
   useEffect(() => {
@@ -193,6 +202,7 @@ export function useDemo(api: Api) {
       })
       .catch((e) => !cancel && setThemeError(e.message ?? String(e)));
     LS.set("agdemo.theme", themeId);
+    setNetwork(null);
     return () => {
       cancel = true;
     };
@@ -827,6 +837,33 @@ export function useDemo(api: Api) {
     [config, mode, flash, addLog],
   );
 
+  const setNetworkMode = useCallback(
+    (m: NetworkMode) => {
+      if (m === networkMode) return;
+      const saved = LS.get(`agdemo.theme.${m}`);
+      const pick = config?.themes.find((t) => t.id === saved && (t.network_mode ?? "internet") === m) ?? config?.themes.find((t) => (t.network_mode ?? "internet") === m);
+      if (!pick) return;
+      addLog({ kind: "system", text: `Network mode: ${m === "private_networking" ? `Private Networking (${pick.region ?? ""})` : "Internet"}` });
+      selectTheme(pick.id);
+    },
+    [config, networkMode, selectTheme, addLog],
+  );
+  useEffect(() => {
+    if (themeId) LS.set(`agdemo.theme.${networkMode}`, themeId);
+  }, [themeId, networkMode]);
+  // "Under the hood" network pieces for a Private Networking theme.
+  useEffect(() => {
+    if (!themeId || networkMode !== "private_networking") return;
+    let cancel = false;
+    api
+      .network(themeId, mode)
+      .then((n) => !cancel && setNetwork(n))
+      .catch(() => !cancel && setNetwork(null));
+    return () => {
+      cancel = true;
+    };
+  }, [api, themeId, mode, networkMode]);
+
   const selectScenario = useCallback(
     (id: string) => {
       setScenarioId(id);
@@ -856,6 +893,11 @@ export function useDemo(api: Api) {
     themeId,
     themeSummary,
     selectTheme,
+    networkMode,
+    networkModes,
+    modeThemes,
+    setNetworkMode,
+    network,
     mode,
     setMode,
     theme,

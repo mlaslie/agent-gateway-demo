@@ -1,0 +1,22 @@
+id: internal-only
+order: 1
+title: "Internal only"
+subtitle: "Payroll MCP: ingress internal → 404"
+description: |
+  Payroll MCP runs on Cloud Run with ingress internal. From the internet, or from an agent that isn't
+  behind the VPC-enabled gateway, it isn't there at all: 404. Benefits MCP is public and answers directly.
+  The "bypass" test calls both from outside every agent and gateway (the demo UI backend).
+flow: egress
+nodes: [orchestrator, egress_gateway, registry, payroll-mcp, benefits-mcp]
+preconditions: []
+policies: [gw-egress]
+tests:
+  - id: bypass
+    label: "Bypass: call Payroll MCP directly"
+    prompt: "(direct HTTPS call from the demo UI backend, no agent, no gateway)"
+    via: direct
+    probes: [{edge: "payroll-mcp:get_payslip"}, {edge: "benefits-mcp:list_plans"}]
+  - id: agent-no-gateway
+    label: "Agent without the gateway"
+    prompt: "Show me jdoe's September payslip and the benefit plans."
+    probes: [{edge: "payroll-mcp:get_payslip"}, {edge: "benefits-mcp:list_plans"}]

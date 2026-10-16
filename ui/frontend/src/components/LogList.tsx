@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { LogEntry } from "../useDemo";
 import { fmtTime } from "../util";
-import { LogIcon, ShieldIcon } from "./Icons";
+import { LogIcon, ShieldIcon, LockIcon } from "./Icons";
 
 type OpenLog = (g: NonNullable<LogEntry["gw"]>) => void;
 
@@ -35,6 +35,11 @@ export function LogLine({ e, onOpenLog }: { e: LogEntry; onOpenLog?: OpenLog }) 
           </span>
         )}
         {e.kind === "gwlog" && e.edge && <EdgeName e={e} />}
+        {e.kind === "gwlog" && e.gw?.private_path && (
+          <span className="private-chip" title={`httpRequest.serverIp ${e.gw.server_ip}: a private IP, so the gateway sent this request through your VPC (PSC endpoint)`}>
+            <LockIcon size={10} /> private path · {e.gw.server_ip}
+          </span>
+        )}
         {e.kind === "edge" && (
           <>
             <EdgeName e={e} />
@@ -43,6 +48,11 @@ export function LogLine({ e, onOpenLog }: { e: LogEntry; onOpenLog?: OpenLog }) 
               {s}
               {e.edgeState?.http_status ? ` · ${e.edgeState.http_status}` : ""}
             </span>
+            {e.edgeState?.path === "private" && s === "allowed" && (
+              <span className="private-chip" title="Through the VPC-enabled gateway, the network attachment and the PSC endpoint">
+                <LockIcon size={10} /> private path
+              </span>
+            )}
           </>
         )}
         {e.replayed && <span className="replayed">replayed</span>}

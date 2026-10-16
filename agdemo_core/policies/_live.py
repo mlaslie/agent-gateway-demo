@@ -17,6 +17,12 @@ def r(ctx: Ctx) -> Rest:
     return rest(ctx.config.project)
 
 
+def cfg(ctx: Ctx, theme: Theme):
+    """The theme's regional config view (T4): its gateway, registry and region. Base-region themes: unchanged."""
+    from ..themes import theme_config
+    return theme_config(ctx.config, theme)
+
+
 def theme_state(ctx: Ctx, theme: Theme) -> dict[str, Any]:
     st = (ctx.state or {}).get("themes", {}).get(theme.id) or load_state().get("themes", {}).get(theme.id) or {}
     return st
@@ -49,7 +55,8 @@ def principal(ctx: Ctx, theme: Theme, source: str | None = None) -> str:
         return o["principal"]
     from ..gcp.engines import get_engine, principal as p
     e = engine(ctx, theme, source)
-    return p(ctx.config, get_engine(r(ctx), ctx.config, e), e)
+    v = cfg(ctx, theme)
+    return p(v, get_engine(r(ctx), v, e), e)
 
 
 def component_registry(ctx: Ctx, theme: Theme, cid: str) -> str:
@@ -68,4 +75,4 @@ def error(e: Exception) -> PolicyStatus:
     return {"applied": False, "status": "error", "detail": f"{type(e).__name__}: {e}"[:500], "changed_at": None}
 
 
-__all__ = ["r", "engine", "principal", "orchestrator_state", "source", "component_registry", "status", "error", "now_iso", "NotDeployed"]
+__all__ = ["r", "cfg", "engine", "principal", "orchestrator_state", "source", "component_registry", "status", "error", "now_iso", "NotDeployed"]

@@ -39,6 +39,27 @@ class LiveUnavailable(Exception):
     pass
 
 
+NO_MODEL_ARMOR = {"enabled": False, "status": "removed", "available": False,
+                  "detail": "Model Armor isn't part of the Private Networking mode", "typical_seconds": None,
+                  "changed_at": None}
+
+
+def start_state_bad(theme: Theme, edges: dict[str, dict[str, Any]]) -> list[str]:
+    """Egress edges not at the start state (T4: an ingress=internal target starts unreachable, 404)."""
+    want = simulate.evaluate(theme, set(), False)
+    return [e for e, st in edges.items() if not e.startswith("ingress:") and e in want
+            and st.get("state") != want[e]["state"]]
+
+
+def edge_net(theme: Theme, edge: str) -> tuple[bool, str | None]:
+    """(internal target?, network path of an allowed call) for tool_result_to_edge_state."""
+    comp = simulate.split_edge(split_source(edge)[1])[0]
+    internal = theme.internal(comp)
+    if theme.network_mode != "private_networking":
+        return internal, None
+    return internal, "private" if internal else "internet"
+
+
 # =========================================================================== demo
 class DemoStore:
     """Demo-mode policy state: per-theme applied set + global Model Armor flag (shared by all viewers)."""
@@ -65,32 +86,45 @@ class DemoStore:
     def reset(self, theme_id: str) -> None:
         self.applied[theme_id] = set()
 
+    def ma_for(self, theme: Theme) -> bool:
+        return self.model_armor and theme.has_model_armor
+
     def verify_start_state(self, theme: Theme) -> dict[str, Any]:
         applied = self.applied_for(theme.id)
         checks = [{"id": p.id, "label": p.text, "ok": p.id not in applied,
                    "detail": "applied (simulated)" if p.id in applied else "not present"} for p in theme.policies]
-        checks.append({"id": "model-armor", "label": "Model Armor is off", "ok": not self.model_armor,
-                       "detail": "on" if self.model_armor else "off"})
-        edges = simulate.evaluate(theme, applied, self.model_armor)
-        bad = [e for e, st in edges.items() if not e.startswith("ingress:") and st["state"] != "direct"]
-        checks.append({"id": "connections", "label": "Every connection goes direct (no gateway)",
-                       "ok": not bad, "detail": "all direct (simulated)" if not bad else ", ".join(bad)})
+        if theme.has_model_armor:
+            checks.append({"id": "model-armor", "label": "Model Armor is off", "ok": not self.model_armor,
+                           "detail": "on" if self.model_armor else "off"})
+        edges = simulate.evaluate(theme, applied, self.ma_for(theme))
+        bad = start_state_bad(theme, edges)
+        checks.append({"id": "connections", "label": CONNECTIONS_LABEL(theme),
+                       "ok": not bad, "detail": ("all direct (simulated)" if theme.has_ingress else
+                                              "all at the start state (simulated)") if not bad else ", ".join(bad)})
         return {"ok": all(c["ok"] for c in checks), "checks": checks}
 
     def state(self, theme: Theme) -> dict[str, Any]:
         applied = self.applied_for(theme.id)
-        edges = simulate.evaluate(theme, applied, self.model_armor)
+        ma_on = self.ma_for(theme)
+        edges = simulate.evaluate(theme, applied, ma_on)
         return {
             "policies": {p.id: self.policy_status(theme.id, p.id) for p in theme.policies},
             "gateways": {
                 path: {"attached": simulate.gateway_applied(theme, applied, path),
                        "status": "applied" if simulate.gateway_applied(theme, applied, path) else "removed"}
                 for path in ("egress", "ingress")},
-            "model_armor": {"enabled": self.model_armor, "status": "applied" if self.model_armor else "removed",
-                            "typical_seconds": MODEL_ARMOR_TYPICAL_SECONDS, "changed_at": None},
+            "model_armor": ({"enabled": ma_on, "status": "applied" if ma_on else "removed",
+                             "typical_seconds": MODEL_ARMOR_TYPICAL_SECONDS, "changed_at": None}
+                            if theme.has_model_armor else dict(NO_MODEL_ARMOR)),
             "edges": edges,
             "expected": edges,
         }
+
+
+def CONNECTIONS_LABEL(theme: Theme) -> str:   # noqa: N802
+    if theme.network_mode == "private_networking":
+        return "Every connection is at the start state (no gateway: public direct, internal 404)"
+    return "Every connection goes direct (no gateway)"
 
 
 def replay_or_simulate(theme: Theme, scenario: Any, test: ScenarioTest, applied: set[str],
@@ -172,6 +206,13 @@ class LiveEngine:
         ok, why = settings.live_available()
         if not ok:
             raise LiveUnavailable(why)
+        if theme is not None and theme.network_mode != "internet":
+            cfg, _ = settings.get_config()
+            try:
+                from agdemo_core.themes import theme_config
+                theme_config(cfg, theme)
+            except Exception as e:  # noqa: BLE001
+                raise LiveUnavailable(str(e)) from e
         if theme is not None and not settings.theme_deployed(settings.get_state(), theme.id):
             raise LiveUnavailable(f"theme {theme.id} is not deployed (run ./agdemo deploy-theme {theme.id})")
 
@@ -225,6 +266,12 @@ class LiveEngine:
         bases = await asyncio.gather(*(self._handler_status(theme, p) for p in theme.policies))
         return {p.id: self._effective(theme, p, b) for p, b in zip(theme.policies, bases)}
 
+    async def model_armor_for(self, theme: Theme, force: bool = False) -> dict[str, Any]:
+        """The (global) Model Armor status, or 'not part of this mode' for a Private Networking theme."""
+        if not theme.has_model_armor:
+            return dict(NO_MODEL_ARMOR)
+        return await self.model_armor_status(force)
+
     async def model_armor_status(self, force: bool = False) -> dict[str, Any]:
         if not force and self.ma_cache and time.monotonic() - self.ma_cache[0] < STATUS_TTL_S:
             base = self.ma_cache[1]
@@ -260,7 +307,7 @@ class LiveEngine:
         return {pid for pid, s in statuses.items() if s.get("applied") and s.get("status") != "pending_removal"}
 
     async def state(self, theme: Theme) -> dict[str, Any]:
-        statuses, ma = await asyncio.gather(self.policy_statuses(theme), self.model_armor_status())
+        statuses, ma = await asyncio.gather(self.policy_statuses(theme), self.model_armor_for(theme))
         applied = self.desired_applied(statuses)
         expected = simulate.evaluate(theme, applied, bool(ma.get("enabled")))
         pending_edges: set[str] = set()
@@ -292,6 +339,7 @@ class LiveEngine:
         return {"policies": statuses, "gateways": gws,
                 "model_armor": {"enabled": bool(ma.get("enabled")), "status": ma.get("status", "error"),
                                 **({"detail": ma["detail"]} if ma.get("detail") else {}),
+                                **({"available": False} if ma.get("available") is False else {}),
                                 "typical_seconds": ma.get("typical_seconds", MODEL_ARMOR_TYPICAL_SECONDS),
                                 "changed_at": ma.get("changed_at")},
                 "edges": edges, "expected": expected}
@@ -416,7 +464,7 @@ class LiveEngine:
         self.check_available(theme)
         lt = self.lt(theme.id)
         bases = await asyncio.gather(*(self._handler_status(theme, p, force=True) for p in theme.policies))
-        ma = await self.model_armor_status(force=True)
+        ma = await self.model_armor_for(theme, force=True)
         now = time.time()
         for p, b in zip(theme.policies, bases):
             op = lt.ops.get(p.id)
@@ -426,7 +474,7 @@ class LiveEngine:
             stale = op.running and now - op.started > STALE_OP_SECONDS
             if reached and (not op.running or stale):
                 op.running, op.confirmed, op.done_at = False, True, op.done_at or now
-        mop = self.ma_op
+        mop = self.ma_op if theme.has_model_armor else None
         if mop and not mop.confirmed and bool(ma.get("enabled")) == bool(self.ma_target):
             if not mop.running or now - mop.started > STALE_OP_SECONDS:
                 mop.running, mop.confirmed, mop.done_at = False, True, mop.done_at or now
@@ -447,7 +495,7 @@ class LiveEngine:
         self.check_available(theme)
         lt = self.lt(theme.id)
         bases = await asyncio.gather(*(self._handler_status(theme, p, force=True) for p in theme.policies))
-        ma = await self.model_armor_status(force=True)
+        ma = await self.model_armor_for(theme, force=True)
         checks: list[dict[str, Any]] = []
         for p, b in zip(theme.policies, bases):
             op = lt.ops.get(p.id)
@@ -455,19 +503,21 @@ class LiveEngine:
             ok = not b.get("applied") and b.get("status") == "removed" and not busy
             checks.append({"id": p.id, "label": p.text, "ok": ok,
                            "detail": "still being removed" if busy else (b.get("detail") or b.get("status", ""))})
-        checks.append({"id": "model-armor", "label": "Model Armor is off", "ok": not ma.get("enabled")
-                       and ma.get("status") != "pending", "detail": ma.get("detail") or ma.get("status", "")})
+        if theme.has_model_armor:
+            checks.append({"id": "model-armor", "label": "Model Armor is off", "ok": not ma.get("enabled")
+                           and ma.get("status") != "pending", "detail": ma.get("detail") or ma.get("status", "")})
         policies_clear = all(c["ok"] for c in checks)
         edges_ok, bad = None, []
         if policies_clear:
             try:
                 res = await self.probe(theme, [e for e in edge_ids(theme) if not e.startswith("ingress:")])
-                bad = [e for e, st in res.items() if st.get("state") != "direct"]
+                bad = start_state_bad(theme, res)
                 edges_ok = not bad
             except Exception as e:
                 bad, edges_ok = [f"probe failed: {type(e).__name__}: {e}"], False
-            checks.append({"id": "connections", "label": "Every connection goes direct (no gateway)",
-                           "ok": edges_ok, "detail": "all direct" if edges_ok else ", ".join(bad)})
+            checks.append({"id": "connections", "label": CONNECTIONS_LABEL(theme),
+                           "ok": edges_ok, "detail": ("all direct" if theme.has_ingress else "all at the start state")
+                           if edges_ok else ", ".join(bad)})
         return {"ok": policies_clear and bool(edges_ok), "checks": checks}
 
     # ---------------------------------------------------------------- probes / runs
@@ -559,7 +609,9 @@ class LiveEngine:
                 return
             for r in await self._probe_groups(theme, eg, malicious):
                 if r.get("edge"):
-                    results[r["edge"]] = tool_result_to_edge_state(r, egress_attached(theme, applied, r["edge"]))
+                    internal, path = edge_net(theme, r["edge"])
+                    results[r["edge"]] = tool_result_to_edge_state(r, egress_attached(theme, applied, r["edge"]),
+                                                                   internal=internal, path=path)
 
         async def do_ingress(e: str):
             try:
@@ -574,7 +626,7 @@ class LiveEngine:
                               "detail": f"{type(ex).__name__}: {ex}", "http_status": None}
 
         await asyncio.gather(do_egress(), *(do_ingress(e) for e in ing))
-        ma = await self.model_armor_status()
+        ma = await self.model_armor_for(theme)
         self._record_results(theme, results, simulate.evaluate(theme, applied, bool(ma.get("enabled"))))
         return results
 
@@ -583,7 +635,7 @@ class LiveEngine:
         out = [pid for pid, s in statuses.items()
                if s["status"] in ("pending", "pending_removal")
                and set(policy_edges(theme, theme.policy(pid))) & set(test_edges)]
-        if malicious and (await self.model_armor_status()).get("status") == "pending":
+        if malicious and (await self.model_armor_for(theme)).get("status") == "pending":
             out.append("model-armor")
         return out
 
@@ -598,7 +650,16 @@ class LiveEngine:
         results: dict[str, dict[str, Any]] = {}
         agent = theme.orchestrator.display_name
 
-        if simulate.test_is_ingress(scenario, test):
+        if getattr(test, "via", "agent") == "direct":
+            # T4 bypass: from this backend, over the internet, no agent and no gateway.
+            yield ev({"type": "status", "text": simulate.calling_text(theme, scenario, test)})
+            for i, e in enumerate(edges_wanted):
+                st = await self._bypass(theme, e, test)
+                results[e] = st
+                yield ev({"type": "edge", "edge": e, "state": st}, 0.0 if i == 0 else 0.25)
+            yield ev({"type": "message", "role": "agent",
+                      "text": simulate.synth_message(theme, scenario, test, results, samples=False)}, 0.2)
+        elif simulate.test_is_ingress(scenario, test):
             ingress_on = simulate.gateway_applied(theme, applied, "ingress")
             yield ev({"type": "status", "text": f"Calling {agent} through the ingress path..."})
             yield ev({"type": "message", "role": "user", "text": test.prompt})
@@ -637,7 +698,9 @@ class LiveEngine:
                 if remaining:
                     yield ev({"type": "status", "text": f"Probing {len(remaining)} connection(s) (deterministic, no LLM)..."})
                     probe = await self._probe_groups(theme, probe_requests(test, remaining), test.malicious)
-                    got = {r["edge"]: tool_result_to_edge_state(r, egress_attached(theme, applied, r["edge"]))
+                    got = {r["edge"]: tool_result_to_edge_state(r, egress_attached(theme, applied, r["edge"]),
+                                                                 internal=edge_net(theme, r["edge"])[0],
+                                                                 path=edge_net(theme, r["edge"])[1])
                            for r in probe if r.get("edge")}
                     errs = [f"{k}: {v['detail']}" for k, v in got.items() if v["state"] == "error"]
                     if errs:
@@ -672,12 +735,31 @@ class LiveEngine:
                                   f"content security configurations\") before it reached {agent}, so no tools "
                                   "were called. To show the egress gateway's Model Armor screening tool calls, "
                                   "detach the ingress gateway (step 5) first."}, 0.2)
-        ma = await self.model_armor_status()
-        self._record_results(theme, results, simulate.evaluate(theme, applied, bool(ma.get("enabled")), test))
+        ma = await self.model_armor_for(theme)
+        if getattr(test, "via", "agent") != "direct":    # a bypass call confirms nothing about the gateway
+            self._record_results(theme, results, simulate.evaluate(theme, applied, bool(ma.get("enabled")), test))
         yield ev({"type": "done", "edges": results})
 
+    async def _bypass(self, theme: Theme, edge: str, test: ScenarioTest) -> dict[str, Any]:
+        from agdemo_core import bypass
+
+        base = split_source(edge)[1]
+        comp, tool = simulate.split_edge(base)
+        rec = settings.get_state().get("themes", {}).get(theme.id, {}).get("components", {}).get(comp, {})
+        urls = [u for u in [rec.get("url"), *(rec.get("urls") or [])] if u]
+        urls = list(dict.fromkeys(urls))
+        if not urls or not tool:
+            return {"state": "error", "governed": False, "source": "live", "http_status": None,
+                    "detail": f"{comp} has no URL in state.json (deploy the theme)"}
+        spec = next((t for t in theme.mcp_servers[comp].tools if t.name == tool), None)
+        p = next((x for x in test.probes if x.edge == edge), None)
+        args = (p.args if p and p.args else None) or (spec.probe_args if spec else {})
+        st = await bypass.bypass(edge, urls, tool, args, theme.internal(comp))
+        st.pop("edge", None)
+        return st
+
     async def signature_now(self, theme: Theme) -> tuple[set[str], bool]:
-        statuses, ma = await asyncio.gather(self.policy_statuses(theme), self.model_armor_status())
+        statuses, ma = await asyncio.gather(self.policy_statuses(theme), self.model_armor_for(theme))
         return self.desired_applied(statuses), bool(ma.get("enabled"))
 
 
@@ -725,7 +807,7 @@ class Engine:
                        use_llm: bool) -> AsyncIterator[dict[str, Any]]:
         if mode == "demo":
             for e in replay_or_simulate(theme, scenario, test, self.demo.applied_for(theme.id),
-                                        self.demo.model_armor):
+                                        self.demo.ma_for(theme)):
                 yield e
             return
 

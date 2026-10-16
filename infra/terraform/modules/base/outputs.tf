@@ -25,3 +25,8 @@ output "state_shared" {
     recordings_bucket = var.recordings_bucket
   }
 }
+
+# T4: the Private Networking module orders its gcp-sa-agentgateway grants after this gateway (plan §8 Q7).
+output "egress_gateway_id" {
+  value = google_network_services_agent_gateway.gw["egress"].id
+}

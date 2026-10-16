@@ -55,7 +55,7 @@ class EgressAllow:
             return L.error(ex)
 
     def describe(self, ctx: Ctx, theme: Theme, policy: Policy) -> list[str]:
-        cfg = ctx.config
+        cfg = L.cfg(ctx, theme)
         target = policy.params["target"]
         try:
             rr = L.component_registry(ctx, theme, target)

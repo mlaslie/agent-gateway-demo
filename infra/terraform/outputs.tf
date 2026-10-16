@@ -14,3 +14,15 @@ output "environment" {
     prefix             = var.prefix
   }
 }
+
+# T4: per-region sections, merged into state.json shared.regions (keyed by region). Empty when Private
+# Networking is off. Each section has the base's key names for that region plus `mode` and the network pieces.
+output "state_regions" {
+  description = "Keys merged into state.json shared.regions."
+  value = local.pn_on ? {
+    (local.pn.region) = merge(module.pn_region[0].state_regional, {
+      mode               = "private_networking"
+      private_networking = module.private_egress[0].state
+    })
+  } : {}
+}

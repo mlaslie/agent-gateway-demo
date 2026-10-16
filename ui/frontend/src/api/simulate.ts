@@ -17,9 +17,20 @@ export function edgeIds(theme: Theme): string[] {
   const base = baseEgressEdges(theme);
   const out = [...base];
   for (const o of theme.additional_orchestrators ?? []) out.push(...base.map((e) => sourceEdge(o.id, e)));
-  out.push("ingress:user");
+  if (!isPrivateNetworking(theme)) out.push("ingress:user"); // T4: no ingress gateway in Private Networking
   return out;
 }
+
+export const isPrivateNetworking = (theme: Theme | null | undefined) => theme?.network_mode === "private_networking";
+export const isInternal = (theme: Theme, comp: string) => theme.components.some((c) => c.id === comp && c.ingress === "internal");
+const unreachable = (theme: Theme, comp: string, who: string, source: EdgeState["source"]): EdgeState => ({
+  state: "unreachable",
+  governed: false,
+  source,
+  http_status: 404,
+  path: "internet",
+  detail: `404: ${theme.mcp_servers[comp]?.display_name ?? comp} has Cloud Run ingress internal. ${who} reaches run.app over the internet, where an internal service doesn't exist`,
+});
 
 export function evaluate(
   theme: Theme,
@@ -37,10 +48,27 @@ export function evaluate(
   const malicious = !!(modelArmor && test?.malicious);
 
   const out: Record<string, EdgeState> = {};
-  const governed = (allowed: boolean, what: string, screened = true): EdgeState => {
+  const pn = isPrivateNetworking(theme);
+  const netPath = (comp: string): EdgeState["path"] | undefined => (pn ? (isInternal(theme, comp) ? "private" : "internet") : undefined);
+  if (test?.via === "direct") {
+    // T4 bypass: from the demo UI backend, outside every agent and gateway.
+    for (const e of edgeIds(theme)) {
+      if (e.startsWith("ingress:")) continue;
+      const comp = e.split("/").pop()!.split(":")[0];
+      out[e] = isInternal(theme, comp)
+        ? unreachable(theme, comp, "The caller", source)
+        : { state: "direct", governed: false, source, http_status: 200, path: netPath(comp), detail: "Direct call from outside the agent (demo UI backend); no gateway" };
+    }
+    return out;
+  }
+  const governed = (allowed: boolean, what: string, screened = true, comp = ""): EdgeState => {
     if (allowed && malicious && screened)
       return { state: "blocked", governed: true, source, http_status: 403, detail: "Blocked by Model Armor: prompt injection / sensitive data" };
-    if (allowed) return { state: "allowed", governed: true, source, http_status: 200, detail: `Allowed by gateway policy (${what})` };
+    if (allowed) {
+      const path = netPath(comp);
+      const via = path === "private" ? " via the private path (gateway → network attachment → PSC endpoint in your VPC)" : path === "internet" ? " over the internet path" : "";
+      return { state: "allowed", governed: true, source, http_status: 200, detail: `Allowed by gateway policy (${what})${via}`, ...(path ? { path } : {}) };
+    }
     return { state: "denied", governed: true, source, http_status: 403, detail: `403 from gateway: iap.egressor missing for ${what}` };
   };
   const direct = (): EdgeState => ({ state: "direct", governed: false, source, http_status: 200, detail: "Direct call — no gateway in the path" });
@@ -58,8 +86,12 @@ export function evaluate(
       } else {
         for (const t of theme.mcp_servers[c.id]?.tools ?? []) {
           const id = `${c.id}:${t.name}`;
+          if (!egress && isInternal(theme, c.id)) {
+            out[key(id)] = unreachable(theme, c.id, `${theme.orchestrator.display_name} (not behind the VPC-enabled gateway)`, source);
+            continue;
+          }
           if (!egress) {
-            out[key(id)] = direct();
+            out[key(id)] = pn ? { ...direct(), path: "internet" } : direct();
             continue;
           }
           const ok =
@@ -70,12 +102,13 @@ export function evaluate(
                 p.target === c.id &&
                 ((p.read_only === true && t.read_only) || (Array.isArray(p.tools) && (p.tools as string[]).includes(t.name))),
             );
-          out[key(id)] = governed(ok, key(id));
+          out[key(id)] = governed(ok, key(id), true, c.id);
         }
       }
     }
   }
   // Ingress (CLIENT_TO_AGENT) only enforces Model Armor: no caller identity checks, never "denied". Primary only.
+  if (pn) return out;
   out["ingress:user"] = !ingress
     ? { state: "direct", governed: false, source, http_status: 200, detail: "No ingress gateway: the request goes straight to Agent Runtime" }
     : malicious

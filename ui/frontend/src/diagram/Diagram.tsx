@@ -1,12 +1,12 @@
 import { Background, BackgroundVariant, ReactFlow, ReactFlowProvider, useNodesInitialized, useReactFlow } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { EdgeState, GatewayLogEntry, Scenario, Theme, ThemeState } from "../api/types";
+import type { EdgeState, GatewayLogEntry, NetworkView, Scenario, Theme, ThemeState } from "../api/types";
 import { buildDiagram, visibleNodeIds, type DNode } from "./build";
 import { orchestratorNodeId } from "../util";
 import { edgeTypes } from "./edges";
 import { nodeTypes } from "./nodes";
-import { ClockIcon, CloseIcon, ShieldIcon } from "../components/Icons";
+import { ClockIcon, CloseIcon, LockIcon, ShieldIcon } from "../components/Icons";
 
 const PAD = { top: "46px", bottom: "48px", left: "24px", right: "56px" } as const;
 
@@ -19,6 +19,7 @@ interface Props {
   edgeLogs?: Record<string, GatewayLogEntry>;
   onOpenLog?: (e: GatewayLogEntry) => void;
   onOpenRegistry?: () => void;
+  network?: NetworkView | null;
 }
 
 function Fitter({ fitKey, wrap }: { fitKey: string; wrap: React.RefObject<HTMLDivElement | null> }) {
@@ -89,11 +90,12 @@ function useAnimatedPositions(nodes: DNode[], resetKey: string, ms = 550): DNode
   return shown;
 }
 
-export function Diagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry }: Props) {
+export function Diagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry, network }: Props) {
   const { nodes: targetNodes, edges } = useMemo(
-    () => buildDiagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry }),
-    [theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry],
+    () => buildDiagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry, network }),
+    [theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry, network],
   );
+  const pn = theme.network_mode === "private_networking";
   const nodes = useAnimatedPositions(targetNodes, `${theme.id}|${scenario.id}`);
   // Several orchestrators on screen (CONTRACTS §12): the legend names each one's accent.
   const agents = useMemo(() => {
@@ -130,17 +132,18 @@ export function Diagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs
         </ReactFlow>
       </ReactFlowProvider>
       </div>
-      <Legend agents={agents} />
+      <Legend agents={agents} pn={pn} />
     </div>
   );
 }
 
-function Legend({ agents }: { agents: { name: string; idx: number }[] }) {
+function Legend({ agents, pn }: { agents: { name: string; idx: number }[]; pn?: boolean }) {
   const items: { cls: string; label: string; icon?: React.ReactNode }[] = [
     { cls: "direct", label: "Direct (no gateway)" },
     { cls: "allowed", label: "Allowed" },
+    ...(pn ? [{ cls: "allowed path-private", label: "Private path (VPC)", icon: <LockIcon size={10} /> }] : []),
     { cls: "denied", label: "Denied (403)", icon: <CloseIcon size={11} /> },
-    { cls: "blocked", label: "Model Armor block", icon: <ShieldIcon size={11} /> },
+    ...(pn ? [{ cls: "unreachable", label: "Unreachable (404)" }] : [{ cls: "blocked", label: "Model Armor block", icon: <ShieldIcon size={11} /> }]),
     { cls: "pending", label: "Pending", icon: <ClockIcon size={11} /> },
     { cls: "unknown", label: "Not tested" },
     { cls: "error", label: "Error" },
@@ -152,7 +155,7 @@ function Legend({ agents }: { agents: { name: string; idx: number }[] }) {
           <svg width="30" height="10" className="legend-line">
             <line x1="1" y1="5" x2="29" y2="5" className={`edge-path st-${i.cls}`} />
           </svg>
-          {i.icon && <span className={`legend-icon li-${i.cls}`}>{i.icon}</span>}
+          {i.icon && <span className={`legend-icon li-${i.cls.split(" ").pop()}`}>{i.icon}</span>}
           {i.label}
         </span>
       ))}

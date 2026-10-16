@@ -53,8 +53,10 @@ async def _auth_headers() -> dict[str, str]:
 
 # ------------------------------------------------------------------ mapping
 def tool_result_to_edge_state(obj: dict[str, Any], gateway_attached: bool,
-                              source: str = "live") -> dict[str, Any]:
-    """Map a §6 tool return object to a §2 EdgeState."""
+                              source: str = "live", internal: bool = False, path: str | None = None) -> dict[str, Any]:
+    """Map a §6 tool return object to a §2 EdgeState. internal (T4): the target has Cloud Run ingress internal,
+    so a 404 means "not reachable from here" (state unreachable), not an infrastructure error. path: the network
+    path of an allowed call in a Private Networking theme ("private" / "internet")."""
     outcome = (obj or {}).get("outcome", "error")
     status = obj.get("http_status") if isinstance(obj, dict) else None
     detail = str(obj.get("detail") or "") if isinstance(obj, dict) else ""
@@ -62,13 +64,18 @@ def tool_result_to_edge_state(obj: dict[str, Any], gateway_attached: bool,
         state = "allowed" if gateway_attached else "direct"
     elif outcome in ("denied", "blocked"):
         state = outcome
+    elif internal and status == 404:
+        state = "unreachable"
     else:
         state = "error"
     if not detail:
         detail = {"allowed": "Allowed by Agent Gateway", "direct": "Direct call (no gateway)",
                   "denied": "403 from gateway", "blocked": "Blocked by Model Armor"}.get(state, outcome)
+    if state == "unreachable":
+        path = "internet"
     return {"state": state, "governed": gateway_attached or state in ("denied", "blocked"),
             "source": source, "detail": detail, "http_status": status,
+            **({"path": path} if path and state in ("allowed", "direct", "unreachable") else {}),
             **({"latency_ms": obj["latency_ms"]} if isinstance(obj, dict) and "latency_ms" in obj else {})}
 
 

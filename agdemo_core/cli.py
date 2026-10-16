@@ -138,9 +138,10 @@ def reset(theme: Optional[str] = typer.Argument(None),
         c.console.print("[red]--all resets every theme; don't name one[/]")
         raise typer.Exit(2)
     if not yes and not dry_run:
-        typer.confirm(f"Reset EVERY theme in {cfg.project}/{cfg.region} (prefix {cfg.prefix}), turn Model Armor "
+        regions = ", ".join(v.region for v in cfg.region_views())
+        typer.confirm(f"Reset EVERY theme in {cfg.project}/{regions} (prefix {cfg.prefix}), turn Model Armor "
                       "off and remove prefix-owned Policy Studio leftovers? Nobody should be presenting.", abort=True)
-    rep = reset_all.run(cfg, reset_all.LiveOps(cfg), dry_run=dry_run)
+    rep = reset_all.run_regions(cfg, lambda v=None: reset_all.LiveOps(v or cfg), dry_run=dry_run)
     raise typer.Exit(0 if rep.ok else 1)
 
 
@@ -169,7 +170,8 @@ def check_clean(strict: bool = typer.Option(False, "--strict", help="Also fail o
         print(json.dumps({"clean": not bad, "strict": strict, "findings": [asdict(x) for x in findings]}, indent=2))
         raise typer.Exit(1 if bad else 0)
     if findings:
-        t = Table(title=f"check-clean: {cfg.project} / {cfg.region} / prefix {cfg.prefix}"
+        t = Table(title=f"check-clean: {cfg.project} / {', '.join(v.region for v in cfg.region_views())} / "
+                  f"prefix {cfg.prefix}"
                   + (" (strict)" if strict else ""))
         for col in ("Level", "Category", "Resource", "Detail", "Fix"):
             t.add_column(col, overflow="fold")
@@ -190,6 +192,8 @@ def check_clean(strict: bool = typer.Option(False, "--strict", help="Also fail o
 @app.command()
 def up(yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask before applying"),
        allow_replace: bool = typer.Option(False, "--allow-replace", help="Allow replaces (never deletes)"),
+       allow_template_swap: bool = typer.Option(False, "--allow-template-swap",
+                                                help="Allow the connectivity template swap (Private Networking)"),
        skip_build: bool = typer.Option(False, "--skip-build", help="Reuse the images in Artifact Registry"),
        skip_preflight: bool = typer.Option(False, "--skip-preflight", help="Go on when preflight fails"),
        theme: Optional[list[str]] = typer.Option(None, "--theme", help="Deploy only these themes "
@@ -202,7 +206,8 @@ def up(yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask before app
     from . import tf_foundation as tfm
     from .infra import lifecycle as lc
     cfg = _cfg()
-    ops = lc.LiveUpOps(cfg, local_state=local_state, allow_replace=allow_replace, skip_build=skip_build)
+    ops = lc.LiveUpOps(cfg, local_state=local_state, allow_replace=allow_replace, skip_build=skip_build,
+                       allow_template_swap=allow_template_swap)
     try:
         rc = lc.up(cfg, ops, yes=yes, skip_preflight=skip_preflight, themes=theme or None, ui=not no_ui, ge=ge,
                    ask=lambda q: typer.confirm(q))
@@ -315,9 +320,10 @@ def _tf_vars(cfg, r, log=True):
     from .gcp.rest import organization_id
     org = organization_id(cfg.project) or ""
     existing = tfm.discover_existing_platform(cfg, r)
-    for u in existing:
+    existing_pn = tfm.discover_existing_platform_pn(cfg, r)
+    for u in [*existing, *existing_pn]:
         c.console.print(f"  [yellow]{u} is already registered by a service we don't own; granted, not created[/]")
-    p = tfm.write_tfvars(cfg, organization_id=org, existing_platform=existing)
+    p = tfm.write_tfvars(cfg, organization_id=org, existing_platform=existing, existing_platform_pn=existing_pn)
     if log:
         c.console.print(f"  wrote {p}")
     return org, existing
@@ -355,7 +361,8 @@ def tf_init(local_state: Optional[str] = typer.Option(None, "--local-state",
     r = c.client(cfg)
     try:
         org, existing = _tf_vars(cfg, r, log=False)
-        tfm.init(cfg, r, local_state=local_state, organization_id=org, existing_platform=existing)
+        tfm.init(cfg, r, local_state=local_state, organization_id=org, existing_platform=existing,
+                 existing_platform_pn=tfm.discover_existing_platform_pn(cfg, r))
     except tfm.TfError as e:
         _tf_err(e)
     c.console.print(f"[green]initialized[/] state: "
@@ -365,7 +372,10 @@ def tf_init(local_state: Optional[str] = typer.Option(None, "--local-state",
 @tf_app.command("plan")
 def tf_plan(out: Optional[str] = typer.Option(None, "--out", help="Plan file (default infra/terraform/agdemo.tfplan)"),
             json_out: Optional[str] = typer.Option(None, "--json", help="Also save `terraform show -json` here"),
-            allow_replace: bool = typer.Option(False, "--allow-replace")):
+            allow_replace: bool = typer.Option(False, "--allow-replace"),
+            allow_template_swap: bool = typer.Option(False, "--allow-template-swap",
+                                                     help="Allow the connectivity template's create-before-destroy "
+                                                          "swap (a Private Networking content change)")):
     """Refresh tfvars, terraform plan, then the plan-safety check (read-only). While imports.tf exists the
     check runs in migration mode (only additive IAM/API creates allowed)."""
     from pathlib import Path
@@ -378,7 +388,7 @@ def tf_plan(out: Optional[str] = typer.Option(None, "--out", help="Plan file (de
             c.console.print("[yellow]The egress gateway already exists but isn't in this state: this environment "
                             "was created by bootstrap. Run ./agdemo tf import first; apply is refused until then.[/]")
         _, v = tfm.plan(Path(out) if out else None, allow_replace=allow_replace,
-                        json_out=Path(json_out) if json_out else None)
+                        json_out=Path(json_out) if json_out else None, allow_template_swap=allow_template_swap)
     except tfm.TfError as e:
         _tf_err(e)
     c.console.print(f"plan: {v.summary()}" + (" (migration mode: imports.tf present)" if tfm.migrating() else ""))
@@ -390,6 +400,8 @@ def tf_plan(out: Optional[str] = typer.Option(None, "--out", help="Plan file (de
 
 @tf_app.command("apply")
 def tf_apply(allow_replace: bool = typer.Option(False, "--allow-replace", help="Allow replaces (never deletes)"),
+             allow_template_swap: bool = typer.Option(False, "--allow-template-swap",
+                                                      help="Allow the connectivity template swap"),
              state: Optional[str] = typer.Option(None, "--state", help="state.json to merge outputs into"),
              yes: bool = typer.Option(False, "--yes", "-y")):
     """Plan, check (no delete/replace), apply, then merge outputs into state.json. Creates the recordings
@@ -402,7 +414,7 @@ def tf_apply(allow_replace: bool = typer.Option(False, "--allow-replace", help="
         if _tf_live_guard(cfg):
             _tf_err(tfm.TfError(f"{cfg.egress_gateway_resource} exists but isn't in this Terraform state. "
                                 "Run ./agdemo tf import first (phase T2); refusing to apply."))
-        planfile, v = tfm.plan(allow_replace=allow_replace)
+        planfile, v = tfm.plan(allow_replace=allow_replace, allow_template_swap=allow_template_swap)
         c.console.print(f"plan: {v.summary()}")
         if not v.ok:
             for addr, actions in v.blockers:

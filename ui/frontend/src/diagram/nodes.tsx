@@ -1,7 +1,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { memo } from "react";
 import type { AgentState, DNode } from "./build";
-import { BookIcon, CloudIcon, GatewayIcon, PencilIcon, PersonIcon, OpenInNewIcon, RegistryIcon, RobotIcon, ServerIcon, ShieldIcon } from "../components/Icons";
+import { BookIcon, CloudIcon, GatewayIcon, LockIcon, NetworkIcon, PencilIcon, PersonIcon, OpenInNewIcon, RegistryIcon, RobotIcon, ServerIcon, ShieldIcon } from "../components/Icons";
 import { STATE_LABEL } from "./edges";
 
 const H = ({ type, pos, id, style }: { type: "source" | "target"; pos: Position; id: string; style?: React.CSSProperties }) => (
@@ -170,11 +170,39 @@ const A2ANode = memo(({ data }: NodeProps<DNode>) => (
   </div>
 ));
 
+/** T4: "Your VPC" with the pre-built pieces the VPC-enabled gateway uses (attachment, PSC endpoint, private DNS). */
+const VpcNode = memo(({ data }: NodeProps<DNode>) => (
+  <div className={`node node-vpc ${data.faded ? "faded" : "attached"} ${data.active ? "active" : ""}`}>
+    <H type="target" pos={Position.Left} id="in" />
+    <div className="node-badge badge-vpc">
+      <LockIcon size={11} /> Private Networking
+    </div>
+    <div className="node-head">
+      <span className="node-icon icon-vpc">
+        <NetworkIcon size={20} />
+      </span>
+      <div className="node-titles">
+        <div className="node-title">{data.label}</div>
+        <div className="node-sub mono">{data.sublabel}</div>
+      </div>
+    </div>
+    <div className="vpc-pieces">
+      {data.pieces?.map((p) => (
+        <div key={p.key} className={`vpc-piece vp-${p.key}`} title={p.hint}>
+          <div className="vpc-piece-label">{p.label}</div>
+          <div className="vpc-piece-value mono">{p.value}</div>
+        </div>
+      ))}
+    </div>
+    <H type="source" pos={Position.Right} id="out" />
+  </div>
+));
+
 const McpNode = memo(({ data }: NodeProps<DNode>) => (
-  <div className={`node node-mcp ${data.inFlight ? "in-flight" : ""}`}>
+  <div className={`node node-mcp ${data.inFlight ? "in-flight" : ""} ${data.internal ? "is-internal" : ""}`}>
     <H type="target" pos={Position.Right} id="reg" style={{ top: 30 }} />
-    <div className="node-badge badge-cloudrun">
-      <CloudIcon size={12} /> {data.badge}
+    <div className={`node-badge badge-cloudrun ${data.internal ? "badge-internal" : ""}`}>
+      {data.internal ? <LockIcon size={11} /> : <CloudIcon size={12} />} {data.badge}
     </div>
     <div className="node-head">
       <span className="node-icon icon-mcp">
@@ -210,4 +238,5 @@ export const nodeTypes = {
   registry: RegistryNode,
   a2a: A2ANode,
   mcp: McpNode,
+  vpc: VpcNode,
 };

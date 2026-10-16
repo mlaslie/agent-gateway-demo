@@ -199,11 +199,12 @@ def iap_drift(cfg: DemoConfig, ext: dict) -> list[str]:
 def state_describes(cfg: DemoConfig, state: dict) -> bool:
     """False when config/state.json belongs to another environment (one checkout, two configs): its themes and
     engines then say nothing about this one."""
+    home = cfg.home()          # state.json is keyed by the base region (T4: regional views share it)
     sh = state.get("shared") or {}
     env = sh.get("tf_environment")
-    if env and (env.get("project_id"), env.get("region"), env.get("prefix")) != (cfg.project, cfg.region, cfg.prefix):
+    if env and (env.get("project_id"), env.get("region"), env.get("prefix")) != (home.project, home.region, home.prefix):
         return False
-    return not sh.get("egress_gateway") or tail(sh["egress_gateway"]) == tail(cfg.egress_gateway_resource)
+    return not sh.get("egress_gateway") or tail(sh["egress_gateway"]) == tail(home.egress_gateway_resource)
 
 
 # ------------------------------------------------------------------ classification (pure)
@@ -344,7 +345,7 @@ def classify(cfg: DemoConfig, state: dict, snap: Snapshot, derived: Derived) -> 
         add(WARN, "legacy", f"service account {sa}", "legacy (never in Terraform)", "./agdemo down deletes it")
 
     # state.json and unreadable checks
-    stale = [t for t in (state.get("themes") or {})]
+    stale = [t for t in (state.get("themes") or {})] if cfg.is_home else []
     if stale:
         add(WARN, "state", "config/state.json", f"still lists themes: {', '.join(sorted(stale))}",
             "./agdemo down clears it (or ./agdemo teardown <theme>)")
@@ -410,6 +411,8 @@ def collect(cfg: DemoConfig, r, state: dict) -> Snapshot:
             gw.ext_url(proj, region), "authzExtensions")) or []
     snap.ma_templates = guard("model armor templates", lambda: r.list_all(
         f"{modelarmor(region)}/projects/{cfg.project}/locations/{region}/templates", "templates")) or []
+    if not cfg.is_home:        # project-wide checks (GE app, service accounts) run once, with the base region
+        return snap
     if cfg.gemini_enterprise.app_id:
         snap.ge_agents = guard("gemini enterprise agents", lambda: publish_ge.list_agents(cfg, r)) or []
     leg = set(legacy(cfg)["service_accounts"])
@@ -424,7 +427,8 @@ def derived(cfg: DemoConfig) -> Derived:
     return Derived(principal_set=project_principal_set(cfg))
 
 
-def run(cfg: DemoConfig, r, state: dict) -> tuple[Snapshot, list[Finding]]:
+def run_region(cfg: DemoConfig, r, state: dict) -> tuple[Snapshot, list[Finding]]:
+    """One region (a config view): collect + classify."""
     snap = collect(cfg, r, state)
     try:
         d = derived(cfg)
@@ -432,3 +436,23 @@ def run(cfg: DemoConfig, r, state: dict) -> tuple[Snapshot, list[Finding]]:
         snap.errors["principal set"] = f"{type(e).__name__}: {e}"
         d = Derived(principal_set="")
     return snap, classify(cfg, state, snap, d)
+
+
+def tag_region(cfg: DemoConfig, findings: list[Finding]) -> list[Finding]:
+    """Findings of a non-base region carry it in the resource: "[us-west1] engine ..."."""
+    if cfg.is_home:
+        return findings
+    return [Finding(x.level, x.category, f"[{cfg.region}] {x.resource}", x.detail, x.fix) for x in findings]
+
+
+def run(cfg: DemoConfig, r, state: dict) -> tuple[Snapshot, list[Finding]]:
+    """Every region of the environment (T4): the base, plus the Private Networking region when enabled.
+    Returns the base region's snapshot and all findings."""
+    out: list[Finding] = []
+    first: Snapshot | None = None
+    for v in cfg.region_views():
+        snap, f = run_region(v, r, state)
+        first = first or snap
+        out += tag_region(v, f)
+    order = {BLOCK: 0, WARN: 1, INFO: 2}
+    return first, sorted(out, key=lambda x: (order[x.level], x.category, x.resource))

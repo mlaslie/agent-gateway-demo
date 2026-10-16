@@ -129,8 +129,16 @@ class TeardownPlan:
     legacy_extensions: list[tuple[str, str]] = field(default_factory=list)
     legacy_sas: list[str] = field(default_factory=list)
     ma_templates: list[str] = field(default_factory=list)      # full names
+    region: str = ""                                            # "" = the base region
+    others: list["TeardownPlan"] = field(default_factory=list)  # T4: the other regions' plans (Private Networking)
 
     def lines(self) -> list[str]:
+        out = self._lines()
+        for o in self.others:
+            out += [f"[{o.region}] {x}" for x in o._lines()]
+        return out
+
+    def _lines(self) -> list[str]:
         out = [f"Gemini Enterprise registration {a.get('displayName', a.get('name'))}" for a in self.ge_agents]
         out += [f"engine {e['display']} ({cc.engine_id(e['name'])})" for e in self.engines]
         out += [f"Cloud Run {cc.leaf(n)}" for n in self.run_services]
@@ -170,10 +178,19 @@ def plan_teardown(cfg: DemoConfig, state: dict, snap: cc.Snapshot) -> TeardownPl
     return p
 
 
-def shared_grant_addresses(addresses: list[str] | set[str], egress_agent_shared: bool) -> list[str]:
-    """State addresses of the project-wide grants down keeps (see the module docstring)."""
+PN_AGENT_ADDR = "module.private_egress[0].google_project_iam_member.agentgateway"
+
+
+def shared_grant_addresses(addresses: list[str] | set[str], egress_agent_shared: bool,
+                           pn_agent_shared: bool = False) -> list[str]:
+    """State addresses of the project-wide grants down keeps (see the module docstring). T4: the
+    gcp-sa-agentgateway networkAdmin/dns.peer grants are kept when another VPC-enabled gateway in the project
+    (not this environment's) needs them."""
     out = []
     for a in sorted(addresses):
+        if a.startswith(f"{PN_AGENT_ADDR}[") and pn_agent_shared:
+            out.append(a)
+            continue
         if a.startswith(f"{IAM_ADDR}.presenters["):
             out.append(a)
         elif a.startswith(f"{IAM_ADDR}.model_armor_agents["):
@@ -186,7 +203,7 @@ def shared_grant_addresses(addresses: list[str] | set[str], egress_agent_shared:
 # ------------------------------------------------------------------ up
 def up(cfg: DemoConfig, ops, *, yes: bool = False, skip_preflight: bool = False, themes: list[str] | None = None,
        ui: bool = True, ge: bool = False, ask: Callable[[str], bool] | None = None, log=c.log) -> int:
-    themes = list(themes if themes is not None else cfg.themes.enabled)
+    themes = list(themes if themes is not None else cfg.enabled_themes())
     msg = up_refusal(cfg, ops.state(), ops.gateway_live(), None)
     if msg:
         log(f"[red]{msg}[/]")
@@ -270,7 +287,7 @@ def down(cfg: DemoConfig, ops, *, yes: bool = False, prefix_arg: str | None = No
     log("  then terraform destroy (the foundation). Kept: APIs, the state bucket, the recordings bucket, "
         "the shared project grants.")
     if dry_run:
-        reset_all.run(cfg, ops.reset_ops(), dry_run=True, log=log)
+        reset_all.run_regions(cfg, ops.reset_ops, dry_run=True, log=log)
         log("[bold]dry run: nothing changed[/]")
         return 0
     go, why = confirm_down(cfg, yes, prefix_arg, ask or (lambda q: ""))
@@ -278,7 +295,7 @@ def down(cfg: DemoConfig, ops, *, yes: bool = False, prefix_arg: str | None = No
         log(f"[red]{why}[/]")
         return 1
     log("[bold]1/6 reset --all[/]")
-    rep = reset_all.run(cfg, ops.reset_ops(), log=log)
+    rep = reset_all.run_regions(cfg, ops.reset_ops, log=log)
     if not rep.ok:
         log("[red]reset --all failed; nothing deleted. Fix it and re-run down.[/]")
         return 1
@@ -313,6 +330,7 @@ def down(cfg: DemoConfig, ops, *, yes: bool = False, prefix_arg: str | None = No
 class _Base:
     def __init__(self, cfg: DemoConfig, r=None, local_state: str | None = None, log=c.log):
         self.cfg, self.r, self.local_state, self.log = cfg, r or c.client(cfg), local_state, log
+        self.existing_pn: dict[str, str] = {}
 
     def state(self) -> dict:
         from ..state import load_state
@@ -326,13 +344,16 @@ class _Base:
         from .. import tf_foundation as tfm
         from ..gcp.rest import organization_id
         existing = tfm.discover_existing_platform(self.cfg, self.r)
+        self.existing_pn = tfm.discover_existing_platform_pn(self.cfg, self.r)
         return organization_id(self.cfg.project) or "", existing
 
 
 class LiveUpOps(_Base):
-    def __init__(self, cfg, r=None, local_state=None, allow_replace=False, skip_build=False, log=c.log):
+    def __init__(self, cfg, r=None, local_state=None, allow_replace=False, skip_build=False, log=c.log,
+                 allow_template_swap=False):
         super().__init__(cfg, r, local_state, log)
         self.allow_replace, self.skip_build = allow_replace, skip_build
+        self.allow_template_swap = allow_template_swap
 
     def preflight(self) -> list[str]:
         from . import preflight as pf
@@ -341,7 +362,8 @@ class LiveUpOps(_Base):
     def tf_init(self) -> None:
         from .. import tf_foundation as tfm
         org, existing = self._tfvars()
-        tfm.init(self.cfg, self.r, local_state=self.local_state, organization_id=org, existing_platform=existing)
+        tfm.init(self.cfg, self.r, local_state=self.local_state, organization_id=org, existing_platform=existing,
+                 existing_platform_pn=self.existing_pn)
 
     def tf_managed(self) -> bool:
         from .. import tf_foundation as tfm
@@ -350,7 +372,7 @@ class LiveUpOps(_Base):
 
     def tf_plan(self):
         from .. import tf_foundation as tfm
-        return tfm.plan(allow_replace=self.allow_replace)
+        return tfm.plan(allow_replace=self.allow_replace, allow_template_swap=self.allow_template_swap)
 
     def tf_apply(self, planfile) -> None:
         from .. import tf_foundation as tfm
@@ -403,6 +425,7 @@ def verify(cfg: DemoConfig, r, state: dict, themes: list[str], ui: bool) -> list
     sh = state.get("shared") or {}
     out.append(("platform endpoints", len(sh.get("platform_registry_ids") or {}) == len(c.platform_endpoints(cfg)),
                 f"{len(sh.get('platform_registry_ids') or {})} in state.json"))
+    out += verify_pn(cfg, r, state)
     for t in themes:
         ts = (state.get("themes") or {}).get(t, {})
         engs = [o for o in [ts.get("orchestrator") or {}, *((ts.get("orchestrators") or {}).values())]]
@@ -423,12 +446,33 @@ def verify(cfg: DemoConfig, r, state: dict, themes: list[str], ui: bool) -> list
     return out
 
 
+def verify_pn(cfg: DemoConfig, r, state: dict) -> list[tuple[str, bool, str]]:
+    """T4, read-only: the Private Networking region's gateway carries the template, its IAP policy and the
+    region's platform entries exist ([] when the mode is off)."""
+    if not cfg.private_networking.enabled:
+        return []
+    from ..gcp import gateways as gw
+    from ..state import region_shared
+    v = cfg.for_region(cfg.private_networking.region)
+    g = gw.get_gateway(v, "egress", r) or {}
+    tmpl = g.get("agentConnectivityTemplate") or ""
+    out = [(f"{v.region} VPC-enabled gateway", bool(g) and bool(tmpl),
+            "missing" if not g else (f"{v.egress_gateway} template {tmpl.split('/')[-1]}" if tmpl
+                                     else f"{v.egress_gateway} has NO connectivity template"))]
+    pol = gw.get_policy(r, v.gateway_project, v.region, gw.iap_policy_name(v, "egress"))
+    out.append((f"{v.region} IAP REQUEST_AUTHZ policy", bool(pol), (pol or {}).get("policyProfile", "missing")))
+    rs = region_shared(state, v)
+    n = len(rs.get("platform_registry_ids") or {})
+    out.append((f"{v.region} platform endpoints", n == len(c.platform_endpoints(v)), f"{n} in state.json"))
+    return out
+
+
 class LiveDownOps(_Base):
     def tf_init(self) -> None:
         from .. import tf_foundation as tfm
         org, existing = self._tfvars()
         tfm.init(self.cfg, self.r, local_state=self.local_state, organization_id=org, existing_platform=existing,
-                 create_bucket=False)
+                 create_bucket=False, existing_platform_pn=self.existing_pn)
 
     def tf_environment(self) -> dict | None:
         from .. import tf_foundation as tfm
@@ -446,10 +490,20 @@ class LiveDownOps(_Base):
         return cc.collect(self.cfg, self.r, self.state())
 
     def inventory(self) -> TeardownPlan:
-        return plan_teardown(self.cfg, self.state(), self.snapshot())
+        """The base region's plan, with every other region's (T4) in `others`."""
+        state = self.state()
+        snap = self.snapshot()
+        plan = plan_teardown(self.cfg, state, snap)
+        for v in self.cfg.region_views()[1:]:
+            p = plan_teardown(v, state, cc.collect(v, self.r, state))
+            p.region = v.region
+            # GE registrations are read once (project-wide); match this region's engines too.
+            plan.ge_agents += cc.ge_matches(v, snap.ge_agents or [], {cc.engine_id(e["name"]) for e in p.engines})
+            plan.others.append(p)
+        return plan
 
-    def reset_ops(self):
-        return reset_all.LiveOps(self.cfg, self.r, log=self.log)
+    def reset_ops(self, view: DemoConfig | None = None):
+        return reset_all.LiveOps(view or self.cfg, self.r, log=self.log)
 
     def ge_unregister(self, agents: list[dict]) -> None:
         from . import publish_ge
@@ -459,6 +513,8 @@ class LiveDownOps(_Base):
         publish_ge.unregister(self.cfg, self.r, agents, log=self.log)
 
     def teardown(self, plan: TeardownPlan) -> None:
+        for o in plan.others:                    # other regions first; the base run clears state.json
+            teardown(self.cfg.for_region(o.region), self.r, o, log=self.log, clear_state=False)
         teardown(self.cfg, self.r, plan, log=self.log)
 
     def check_clean(self) -> list[cc.Finding]:
@@ -474,7 +530,7 @@ class LiveDownOps(_Base):
             sa = (mine.get("agentGatewayCard") or {}).get("serviceExtensionsServiceAccount")
             if not sa:
                 return False
-            ours = {gw.gateway_resource(self.cfg, p) for p in ("egress", "ingress")}
+            ours = {gw.gateway_resource(v, p) for v in self.cfg.region_views() for p in ("egress", "ingress")}
             for proj in sorted({self.cfg.project, self.cfg.gateway_project}):
                 for g in self.r.list_all(f"{NETWORKSERVICES}/projects/{proj}/locations/-/agentGateways",
                                          "agentGateways"):
@@ -485,9 +541,27 @@ class LiveDownOps(_Base):
         except Exception:  # noqa: BLE001
             return True
 
+    def pn_agent_shared(self) -> bool:
+        """T4: another VPC-enabled gateway (template or inline networkConfig) in the gateway project that isn't
+        ours still needs gcp-sa-agentgateway's roles (unreadable = shared, the safe side)."""
+        if not self.cfg.private_networking.enabled:
+            return False
+        from ..gcp.rest import NETWORKSERVICES
+        from ..gcp import gateways as gw
+        try:
+            ours = {gw.gateway_resource(v, "egress") for v in self.cfg.region_views()}
+            for g in self.r.list_all(f"{NETWORKSERVICES}/projects/{self.cfg.gateway_project}/locations/-/"
+                                     "agentGateways", "agentGateways"):
+                if cc.tail(g.get("name", "")) not in {cc.tail(x) for x in ours} and \
+                        (g.get("agentConnectivityTemplate") or g.get("networkConfig")):
+                    return True
+            return False
+        except Exception:  # noqa: BLE001
+            return True
+
     def keep_shared_grants(self) -> list[str]:
         from .. import tf_foundation as tfm
-        addrs = shared_grant_addresses(tfm.state_addresses(), self.egress_agent_shared())
+        addrs = shared_grant_addresses(tfm.state_addresses(), self.egress_agent_shared(), self.pn_agent_shared())
         tfm.state_rm(addrs)
         return addrs
 
@@ -532,7 +606,7 @@ def recheck_shared(cfg: DemoConfig, r) -> list[str]:
     return out
 
 
-def teardown(cfg: DemoConfig, r, plan: TeardownPlan, log=c.log) -> None:
+def teardown(cfg: DemoConfig, r, plan: TeardownPlan, log=c.log, clear_state: bool = True) -> None:
     """Delete what plan_teardown found. Every delete treats 404 as done. Engines in parallel (force=true)."""
     from concurrent.futures import ThreadPoolExecutor
 
@@ -583,6 +657,8 @@ def teardown(cfg: DemoConfig, r, plan: TeardownPlan, log=c.log) -> None:
     for name in plan.ma_templates:
         gone_ok(lambda name=name: r.delete(f"{modelarmor(cfg.region)}/{name}"))
         log(f"  deleted Model Armor template {cc.leaf(name)}")
+    if not clear_state:
+        return
     st = load_state()
     st["themes"] = {}
     st.get("shared", {}).pop("ui_url", None)

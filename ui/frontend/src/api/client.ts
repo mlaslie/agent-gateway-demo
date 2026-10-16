@@ -1,5 +1,5 @@
 // HTTP client for the FastAPI backend (CONTRACTS §7).
-import type { AppConfig, GatewayLogsQuery, GatewayLogsResponse, Mode, PolicyStatus, ProbeResult, RecordResult, RegistryView, SseEvent, TerraformExport, ThemeResponse, ThemeState, VerifyResult, SyncResult } from "./types";
+import type { NetworkView, AppConfig, GatewayLogsQuery, GatewayLogsResponse, Mode, PolicyStatus, ProbeResult, RecordResult, RegistryView, SseEvent, TerraformExport, ThemeResponse, ThemeState, VerifyResult, SyncResult } from "./types";
 
 export interface Api {
   getConfig(): Promise<AppConfig>;
@@ -26,6 +26,8 @@ export interface Api {
   registry(id: string, mode: Mode, refresh?: boolean): Promise<RegistryView>;
   /** CONTRACTS §11: Terraform for the theme's current policy state (read-only). */
   terraform(id: string, mode: Mode, includeShared: boolean): Promise<TerraformExport>;
+  /** T4: the Private Networking theme's network pieces ("Under the hood"). */
+  network(id: string, mode: Mode): Promise<NetworkView>;
   readonly isMock: boolean;
 }
 
@@ -110,6 +112,7 @@ export const httpApi: Api = {
   },
   registry: (id, mode, refresh = false) => req("GET", `/api/themes/${enc(id)}/registry?mode=${enc(mode)}${refresh ? "&refresh=true" : ""}`),
   terraform: (id, mode, includeShared) => req("GET", `/api/themes/${enc(id)}/terraform?mode=${enc(mode)}&include_shared=${includeShared}`),
+  network: (id, mode) => req("GET", `/api/themes/${enc(id)}/network?mode=${enc(mode)}`),
   async runTest(id, testId, body, onEvent, signal) {
     const r = await fetch(`/api/themes/${enc(id)}/tests/${enc(testId)}/run`, {
       method: "POST",

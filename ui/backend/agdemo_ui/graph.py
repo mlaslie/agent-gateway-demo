@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from agdemo_core.config import DemoConfig
-from agdemo_core.themes import INGRESS_EDGE, Theme, source_edge
+from agdemo_core.themes import INGRESS_EDGE, Theme, source_edge, theme_config, theme_region
 
 
 def _pos(theme: Theme, node_id: str) -> dict[str, Any]:
@@ -14,7 +14,14 @@ def _pos(theme: Theme, node_id: str) -> dict[str, Any]:
 
 def build_graph(theme: Theme, cfg: DemoConfig | None = None, state: dict | None = None) -> dict[str, Any]:
     state = state or {}
-    egress_name = cfg.egress_gateway if cfg else "egress gateway"
+    pn = theme.network_mode == "private_networking"
+    try:
+        view = theme_config(cfg, theme) if cfg else None
+    except ValueError:      # e.g. a Private Networking theme while the mode is off (Demo only)
+        view = None
+    region = view.region if view else theme_region(cfg, theme) if (cfg or theme.region) else "regional"
+    egress_name = view.egress_gateway if view else (f"{cfg.prefix}-pn-egress" if cfg and pn else
+                                                    "egress gateway")
     ingress_name = cfg.ingress_gateway if cfg else "ingress gateway"
 
     nodes: list[dict[str, Any]] = [
@@ -23,14 +30,16 @@ def build_graph(theme: Theme, cfg: DemoConfig | None = None, state: dict | None 
          "sublabel": f"CLIENT_TO_AGENT · {ingress_name}"},
         {"id": "orchestrator", "type": "orchestrator", "label": theme.orchestrator.display_name,
          "sublabel": f"Agent Runtime · {theme.orchestrator.id}"},
-        {"id": "egress_gateway", "type": "gateway", "label": "Agent Gateway (egress)",
+        {"id": "egress_gateway", "type": "gateway",
+         "label": "Agent Gateway (egress, VPC-enabled)" if pn else "Agent Gateway (egress)",
          "sublabel": f"AGENT_TO_ANYWHERE · {egress_name}"},
-        {"id": "registry", "type": "registry", "label": "Agent Registry",
-         "sublabel": cfg.region if cfg else "regional"},
+        {"id": "registry", "type": "registry", "label": "Agent Registry", "sublabel": region},
     ]
+    if not theme.has_ingress:
+        nodes = [n for n in nodes if n["id"] not in ("user", "ingress_gateway")]
     # Additional orchestrators (CONTRACTS §12): node "orchestrator:<id>", same gateways, own Agent Identity.
     for o in theme.additional_orchestrators:
-        nodes.insert(3 + theme.additional_orchestrators.index(o),
+        nodes.insert((3 if theme.has_ingress else 1) + theme.additional_orchestrators.index(o),
                      {"id": f"orchestrator:{o.id}", "type": "orchestrator", "label": o.display_name,
                       "sublabel": f"Agent Runtime · {o.id}"})
     for n in nodes:
@@ -49,6 +58,7 @@ def build_graph(theme: Theme, cfg: DemoConfig | None = None, state: dict | None 
             spec = theme.mcp_servers[c.id]
             nodes.append({"id": c.id, "type": "mcp_server", "label": spec.display_name,
                           "sublabel": c.role_label or "MCP server", "description": spec.description,
+                          "ingress": c.ingress,
                           "tools": [{"name": t.name, "read_only": t.read_only, "description": t.description,
                                      "edge": f"{c.id}:{t.name}"} for t in spec.tools],
                           **_pos(theme, c.id)})
@@ -58,5 +68,7 @@ def build_graph(theme: Theme, cfg: DemoConfig | None = None, state: dict | None 
     primary = list(edges)
     for o in theme.additional_orchestrators:
         edges += [{**e, "id": source_edge(o.id, e["id"]), "source": f"orchestrator:{o.id}"} for e in primary]
-    edges.append({"id": INGRESS_EDGE, "source": "user", "target": "orchestrator", "kind": "ingress"})
-    return {"theme": theme.model_dump(mode="json"), "nodes": nodes, "edges": edges}
+    if theme.has_ingress:
+        edges.append({"id": INGRESS_EDGE, "source": "user", "target": "orchestrator", "kind": "ingress"})
+    return {"theme": theme.model_dump(mode="json"), "nodes": nodes, "edges": edges,
+            "region": region, "network_mode": theme.network_mode}

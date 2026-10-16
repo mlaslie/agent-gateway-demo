@@ -48,3 +48,14 @@ default_mode: live_with_fallback      # live | demo | live_with_fallback
 
 terraform:                            # Terraform foundation (preview, ./agdemo tf ...; docs/TERRAFORM_PLAN.md)
   shared_project_grants: true         # false for a second environment in a project that already has one
+
+private_networking:                   # Private Networking mode (docs/TERRAFORM_PLAN.md §7c): VPC-enabled gateway, 2nd region
+  enabled: false                      # true = ./agdemo up also builds the VPC side and <prefix>-pn-egress
+  region: us-west1                    # must differ from environment.region (one egress gateway per project+region)
+  subnet_range: 10.70.0.0/28          # network attachment subnet (Private Google Access on)
+  psc_ip: 10.70.250.10                # PSC endpoint for Google APIs; *.run.app resolves to it inside the VPC
+  dns_domains: ["run.app."]           # names the gateway resolves through the VPC (DNS peering)
+  vpc_egress: PRIVATE_RANGES_ONLY     # the only verified value
+  egress_name: ""                     # default: <prefix>-pn-egress
+  manage_service_agent_roles: null    # gcp-sa-agentgateway networkAdmin + dns.peer; null = terraform.shared_project_grants
+  themes: [privnet]                   # themes shown in the UI's Private Networking mode (deployed by up when enabled)

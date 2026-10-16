@@ -43,7 +43,35 @@ def repo_id(cfg: DemoConfig) -> str:
 
 
 def staging_bucket(cfg: DemoConfig) -> str:
-    return f"{cfg.project}-{cfg.prefix}-staging"[:63]
+    """Agent Runtime staging bucket of the view's region: <project>-<prefix>-staging in the base region,
+    <project>-<prefix>-staging-<region> in the Private Networking region (Terraform modules/regional)."""
+    if cfg.is_home:
+        return f"{cfg.project}-{cfg.prefix}-staging"[:63]
+    return f"{cfg.project}-{cfg.prefix}-staging-{cfg.region}"[:63]
+
+
+def psc_rule_name(cfg: DemoConfig) -> str:
+    """PSC endpoint for Google APIs forwarding rule: 1-20 lowercase letters/digits, no hyphen (P0 F45)."""
+    return (re.sub(r"[^a-z0-9]", "", cfg.prefix) + "pnpsc")[:20]
+
+
+def pn_names(cfg: DemoConfig) -> dict[str, str]:
+    """Names of the Private Networking resources (Terraform modules/private_egress + modules/regional)."""
+    from ..gcp import gateways as gw
+    v = cfg if cfg.is_private_networking else cfg.for_region(cfg.private_networking.region)
+    return {
+        "network": v.name("pn", "vpc"),
+        "subnet": v.name("pn", "att"),
+        "attachment": v.name("pn", "att"),
+        "psc_address": v.name("pn", "psc-ip"),
+        "psc_forwarding_rule": psc_rule_name(v),
+        "dns_zone": v.name("pn", "run-app"),
+        "template_prefix": v.name("pn", "tmpl"),
+        "egress_gateway": v.egress_gateway,
+        "egress_iap_extension": gw.iap_extension_name(v, "egress"),
+        "egress_iap_policy": gw.iap_policy_name(v, "egress"),
+        "staging_bucket": staging_bucket(v),
+    }
 
 
 def service_name(cfg: DemoConfig, theme_id: str, component_id: str) -> str:

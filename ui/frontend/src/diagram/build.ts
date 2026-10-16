@@ -1,9 +1,17 @@
 // Builds React Flow nodes + edges from the theme, the current scenario and the edge states.
 import type { Edge, Node } from "@xyflow/react";
-import type { EdgeState, EdgeStateName, GatewayLogEntry, Scenario, Theme, ThemeState } from "../api/types";
+import type { EdgeState, EdgeStateName, GatewayLogEntry, NetworkView, Scenario, Theme, ThemeState } from "../api/types";
 import { agentIndex, orchestratorNodeId, policySource, sourceEdge } from "../util";
 
-export type NodeKind = "user" | "gateway" | "orchestrator" | "registry" | "a2a" | "mcp";
+export type NodeKind = "user" | "gateway" | "orchestrator" | "registry" | "a2a" | "mcp" | "vpc";
+
+/** One pre-built network piece shown inside the VPC node (T4 Private Networking). */
+export interface VpcPiece {
+  key: "attachment" | "psc" | "dns";
+  label: string;
+  value: string;
+  hint: string;
+}
 
 /** One orchestrator's state for a target (A2A agent / MCP tool) when several agents are shown (CONTRACTS §12). */
 export interface AgentState {
@@ -42,6 +50,11 @@ export interface DiagramNodeData extends Record<string, unknown> {
   direction?: "egress" | "ingress";
   /** Registry node: open the Agent Registry browser. */
   onOpen?: () => void;
+  /** VPC node: the pre-built pieces; MCP node: Cloud Run ingress internal. */
+  pieces?: VpcPiece[];
+  internal?: boolean;
+  /** VPC node: traffic is flowing through it (an allowed private call). */
+  active?: boolean;
 }
 
 export interface DiagramEdgeData extends Record<string, unknown> {
@@ -57,12 +70,14 @@ export interface DiagramEdgeData extends Record<string, unknown> {
   log?: { summary: string; open: () => void };
   /** Whose call this is, when several orchestrators are shown (accent dot + halo tint). */
   agent?: { idx: number; name: string };
+  /** T4: the call took the private path (through the VPC / PSC endpoint). */
+  privatePath?: boolean;
 }
 
 export type DNode = Node<DiagramNodeData>;
 export type DEdge = Edge<DiagramEdgeData>;
 
-const W: Record<NodeKind, number> = { user: 200, gateway: 220, orchestrator: 240, registry: 220, a2a: 270, mcp: 290 };
+const W: Record<NodeKind, number> = { user: 200, gateway: 220, orchestrator: 240, registry: 220, a2a: 270, mcp: 290, vpc: 236 };
 
 export function nodeHeight(d: DiagramNodeData): number {
   switch (d.kind) {
@@ -74,6 +89,8 @@ export function nodeHeight(d: DiagramNodeData): number {
       return 112;
     case "orchestrator":
       return 108;
+    case "vpc":
+      return 64 + (d.pieces?.length ?? 0) * 46;
     default:
       return 76;
   }
@@ -104,9 +121,26 @@ interface BuildArgs {
   edgeLogs?: Record<string, GatewayLogEntry>;
   onOpenLog?: (e: GatewayLogEntry) => void;
   onOpenRegistry?: () => void;
+  /** T4: the Private Networking theme's network pieces (VPC view). */
+  network?: NetworkView | null;
 }
 
-export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry }: BuildArgs): { nodes: DNode[]; edges: DEdge[] } {
+export const VPC_NODE = "vpc";
+
+/** The pieces shown in the VPC node: names from /network when known, else generic. */
+export function vpcPieces(network: NetworkView | null | undefined, region: string): VpcPiece[] {
+  const p = network?.pieces;
+  const leaf = (x?: string) => (x ? x.split("/").pop()! : "");
+  return [
+    { key: "attachment", label: "Network attachment", value: p ? `${leaf(p.attachment)} · ${p.subnet_range}` : `${region} · /28 subnet`, hint: "The VPC-enabled gateway's PSC interface lands here (ACCEPT_AUTOMATIC)" },
+    { key: "psc", label: "PSC endpoint · all-apis", value: p ? `${p.psc_ip} · ${leaf(p.psc_forwarding_rule)}` : "10.x private IP", hint: "PSC endpoint for Google APIs: Cloud Run ingress internal accepts traffic that arrives through it" },
+    { key: "dns", label: "Private DNS · run.app.", value: p ? `*.run.app → ${p.psc_ip}` : "*.run.app → PSC IP", hint: "Apex + wildcard A records; the gateway peers DNS into this VPC (PRIVATE_RANGES_ONLY)" },
+  ];
+}
+
+export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edgeLogs, onOpenLog, onOpenRegistry, network }: BuildArgs): { nodes: DNode[]; edges: DEdge[] } {
+  const pn = theme.network_mode === "private_networking";
+  const internalIds = new Set(theme.components.filter((c) => c.ingress === "internal").map((c) => c.id));
   const vis = new Set(visibleNodeIds(theme, scenario));
   const egressAttached = !!state?.gateways.egress.attached;
   const ingressAttached = !!state?.gateways.ingress.attached;
@@ -180,7 +214,8 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
         kind: "mcp",
         label: spec?.display_name ?? c.id,
         sublabel: c.id,
-        badge: "MCP · Cloud Run",
+        badge: internalIds.has(c.id) ? "MCP · Cloud Run · ingress internal" : pn ? "MCP · Cloud Run · public" : "MCP · Cloud Run",
+        internal: internalIds.has(c.id),
         tools: (spec?.tools ?? []).map((t) => {
           const eid = `${c.id}:${t.name}`;
           const cs = combine(perOrch(eid));
@@ -198,6 +233,8 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
   if (vis.has("ingress_gateway")) cols.push({ key: "ingress_gateway", w: W.gateway });
   if (orchs.length) cols.push({ key: "orchestrator", w: W.orchestrator });
   if (vis.has("egress_gateway")) cols.push({ key: "egress_gateway", w: W.gateway });
+  const showVpc = pn && vis.has("egress_gateway") && comps.some((c) => internalIds.has(c.id));
+  if (showVpc) cols.push({ key: "vpc", w: W.vpc });
   if (targetData.length) cols.push({ key: "targets", w: Math.max(...targetData.map((t) => W[t.data.kind])) });
   const colX: Record<string, number> = {};
   let x = 0;
@@ -249,10 +286,11 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
     else if (attached) chips.push(egress ? { text: "Default deny", tone: "red" } : { text: "In the path", tone: "blue" });
     else chips.push({ text: "Not attached", tone: "neutral" });
     if (attached && ma) chips.push({ text: "Model Armor", tone: "orange" });
+    if (egress && pn) chips.push({ text: "VPC-enabled", tone: "blue" });
     const d: DiagramNodeData = {
       kind: "gateway",
       label: "Agent Gateway",
-      sublabel: egress ? "Egress · Agent-to-Anywhere" : "Ingress · Client-to-Agent",
+      sublabel: egress ? (pn ? "Egress · connectivity template" : "Egress · Agent-to-Anywhere") : "Ingress · Client-to-Agent",
       faded: !attached && !pending,
       chips,
       shield: attached && ma,
@@ -311,6 +349,24 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
     );
   }
 
+  // ---------- VPC (T4 Private Networking): attachment, PSC endpoint, private DNS ----------
+  const anyThrough = lanes.length > 0;
+  const privateAllowed = [...internalIds].some((cid) => Object.entries(edgeStates).some(([e, v]) => e.split("/").pop()!.startsWith(`${cid}:`) && v.state === "allowed"));
+  if (showVpc) {
+    const internalTargets = nodes.filter((n) => internalIds.has(n.id));
+    const d: DiagramNodeData = {
+      kind: "vpc",
+      label: "Your VPC",
+      sublabel: `${theme.region ?? network?.region ?? ""} · ${network?.pieces ? network.pieces.network.split("/").pop() : "pre-built by ./agdemo up"}`,
+      pieces: vpcPieces(network, theme.region ?? ""),
+      faded: !anyThrough,
+      active: anyThrough && privateAllowed,
+    };
+    const h = nodeHeight(d);
+    const top = internalTargets.length ? Math.min(...internalTargets.map((n) => n.position.y)) : -h / 2;
+    nodes.push({ id: VPC_NODE, type: "vpc", position: pos(VPC_NODE, colX.vpc, top - 6), data: d, draggable: false });
+  }
+
   // ---------- egress call edges ----------
   const mkEdge = (edgeId: string, source: string, sourceHandle: string | undefined, target: string, targetHandle: string | undefined): DEdge => {
     const s = st(edgeId);
@@ -346,7 +402,13 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
         ids.push(eid);
         // A2A targets get one entry handle per orchestrator so the agents' lines stay apart (MCP tool rows are too short).
         const th = c.kind === "a2a_agent" ? (multi ? `in-${orchs.indexOf(o)}` : "in") : `tool-${base.split(":")[1]}`;
-        const e = through ? mkEdge(eid, "egress_gateway", laneHandle(o, "out"), c.id, th) : mkEdge(eid, o.nodeId, "out", c.id, th);
+        const viaVpc = through && showVpc && internalIds.has(c.id);
+        const e = viaVpc
+          ? mkEdge(eid, VPC_NODE, "out", c.id, th)
+          : through
+            ? mkEdge(eid, "egress_gateway", laneHandle(o, "out"), c.id, th)
+            : mkEdge(eid, o.nodeId, "out", c.id, th);
+        if (viaVpc || st(eid).path === "private") e.data = { ...e.data!, privatePath: st(eid).state === "allowed" };
         if (multi) e.data = { ...e.data!, agent: { idx: o.idx, name: o.label } };
         edges.push(e);
       }
@@ -363,6 +425,18 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
         data: { state: "neutral", inFlight: ids.some((e) => inFlight.has(e)), agent: multi ? { idx: o.idx, name: o.label } : undefined },
       });
   }
+
+  if (showVpc && anyThrough)
+    edges.push({
+      id: "seg:egress-vpc",
+      source: "egress_gateway",
+      sourceHandle: lanes.length > 1 ? "out-0" : "out",
+      target: VPC_NODE,
+      targetHandle: "in",
+      type: "state",
+      zIndex: 1,
+      data: { state: privateAllowed ? "allowed" : "neutral", label: "PSC interface", privatePath: privateAllowed, inFlight: [...inFlight].some((e) => internalIds.has(e.split("/").pop()!.split(":")[0])) },
+    });
 
   // ---------- ingress call edge ----------
   // CLIENT_TO_AGENT only screens content (Model Armor); it does not check caller identity.

@@ -154,6 +154,66 @@ function PolicyCard({ d, api, policy }: { d: Demo; api: Api; policy: Policy }) {
   );
 }
 
+/** T4 "Under the hood": the pre-built network pieces and the template behind the VPC-enabled gateway. */
+function NetworkCard({ d }: { d: Demo }) {
+  const [open, setOpen] = useState(false);
+  const n = d.network;
+  if (d.networkMode !== "private_networking") return null;
+  const p = n?.pieces;
+  const leaf = (x?: string) => (x ? x.split("/").pop() : "…");
+  const rows: [string, string, string][] = p
+    ? [
+        ["VPC", leaf(p.network)!, p.network],
+        ["Subnet (Private Google Access)", `${leaf(p.subnet)} · ${p.subnet_range}`, p.subnet],
+        ["Network attachment", `${leaf(p.attachment)} · ACCEPT_AUTOMATIC`, p.attachment],
+        ["PSC endpoint for Google APIs", `${p.psc_ip} · ${leaf(p.psc_forwarding_rule)} → ${p.psc_target}`, p.psc_forwarding_rule],
+        ["Private DNS zone", `${leaf(p.dns_zone)} · ${p.dns_name} (${p.dns_records.join(", ")} → ${p.psc_ip})`, p.dns_zone],
+        ["Connectivity template", `${p.template_id} · ${p.deployment_model} · ${p.vpc_egress}`, p.template],
+        ["  DNS peering", p.dns_domains.join(", "), "Names the gateway resolves through your VPC"],
+        ["VPC-enabled gateway", leaf(p.gateway)!, `${p.gateway} → ${p.template_ref} (by project number)`],
+        ["Gateway service agent", p.service_agent_roles.join(", "), p.service_agent],
+      ]
+    : [];
+  const src = n?.source === "state" ? "from state.json (Terraform outputs)" : n?.source === "config" ? "as ./agdemo up creates them (config)" : n ? "placeholders" : "loading…";
+  return (
+    <section className="card network-card">
+      <div className="hood-bar">
+        <button className={`hood-toggle ${open ? "open" : ""}`} onClick={() => setOpen(!open)} aria-expanded={open}>
+          <ChevronIcon size={16} /> Under the hood: private network <span className="mono hood-type">{n?.region ?? ""}</span>
+        </button>
+      </div>
+      {!open && (
+        <p className="network-sum muted">
+          Pre-built by Terraform: VPC, attachment, PSC endpoint{p ? ` ${p.psc_ip}` : ""}, run.app zone and the connectivity template the gateway was created with.
+        </p>
+      )}
+      {open && (
+        <div className="hood">
+          <div className="network-src muted">{src}</div>
+          <dl className="network-list">
+            {rows.map(([k, v, t]) => (
+              <div key={k} className="network-row" title={t}>
+                <dt>{k.trim()}</dt>
+                <dd className="mono">{v}</dd>
+              </div>
+            ))}
+          </dl>
+          {n?.internal_components?.length ? (
+            <p className="hood-explain">
+              Internal only: <b>{n.internal_components.join(", ")}</b>. Public: {n.public_components?.join(", ") || "none"}.
+            </p>
+          ) : null}
+          <ul className="network-notes">
+            {(n?.notes ?? []).map((x) => (
+              <li key={x}>{x}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function SidePanel({ d, api }: { d: Demo; api: Api }) {
   const sc = d.scenario;
   const theme = d.theme;
@@ -187,6 +247,8 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
           {sc.subtitle && <div className="scenario-sub">{sc.subtitle}</div>}
           {sc.description && <p className="scenario-desc">{sc.description}</p>}
         </section>
+
+        <NetworkCard d={d} />
 
         {prePolicies.length > 0 && (
           <section className={`card precond ${missingPre.length ? "missing" : "ok"}`}>

@@ -40,10 +40,14 @@ def endpoint_body(display: str, url: str, description: str = "") -> dict[str, An
             "interfaces": [{"url": url, "protocolBinding": "JSONRPC"}]}
 
 
-def mcp_body(display: str, url: str, tools: list[dict], description: str = "") -> dict[str, Any]:
+def mcp_body(display: str, url: str, tools: list[dict], description: str = "",
+             extra_urls: list[str] | None = None) -> dict[str, Any]:
+    """extra_urls (T4): more interfaces of the same server, e.g. the second run.app URL form of an internal
+    Cloud Run service. The registry matches URLs exactly, so both forms are registered (P0 F21/F23)."""
+    urls = [url, *[u for u in (extra_urls or []) if u and u != url]]
     return {"displayName": display[:63], "description": description,
             "mcpServerSpec": {"type": "TOOL_SPEC", "content": {"tools": tools}},
-            "interfaces": [{"url": url, "protocolBinding": "JSONRPC"}]}
+            "interfaces": [{"url": u, "protocolBinding": "JSONRPC"} for u in urls]}
 
 
 def a2a_body(display: str, card: dict, description: str = "") -> dict[str, Any]:

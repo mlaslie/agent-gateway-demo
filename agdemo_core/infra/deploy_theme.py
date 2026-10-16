@@ -17,11 +17,15 @@ from ..gcp import gcloud, project, registry
 from ..gcp.engines import get_engine, principal
 from ..gcp.rest import GcpError, Rest, aiplatform, project_number
 from ..state import load_state, save_state, update_state
-from ..themes import Theme, load_theme
+from ..themes import Theme, load_theme, theme_config
 from . import common as c
 
 RUNTIMES = REPO_ROOT / "runtimes"
 IMAGES = {"mcp_server": "mcp-server", "a2a_agent": "a2a-agent"}
+
+# T4 (P0 F44): engines bound to a VPC-enabled (connectivity template) gateway got 401 on every Google API call
+# without this; cause not isolated. Set on every engine of a Private Networking theme.
+TOKEN_SHARING_ENV = {"GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "false"}
 
 # Project roles for the orchestrator's Agent Identity (agent-gateway troubleshooting "basic roles").
 AGENT_ROLES = ["roles/aiplatform.user", "roles/agentregistry.viewer", "roles/logging.logWriter",
@@ -43,7 +47,8 @@ def make_specs():
 
 # ---------------------------------------------------------------- images
 def image_uri(cfg: DemoConfig, kind: str) -> str:
-    return f"{cfg.region}-docker.pkg.dev/{cfg.project}/{c.repo_id(cfg)}/{IMAGES[kind]}:latest"
+    """Images live in the base region's repo for every theme (Cloud Run in another region pulls from it)."""
+    return f"{cfg.home_region}-docker.pkg.dev/{cfg.project}/{c.repo_id(cfg)}/{IMAGES[kind]}:latest"
 
 
 def build_images(cfg: DemoConfig, kinds: set[str]) -> None:
@@ -51,7 +56,7 @@ def build_images(cfg: DemoConfig, kinds: set[str]) -> None:
         src = RUNTIMES / kind
         c.log(f"  building {IMAGES[kind]} with Cloud Build ({src.relative_to(REPO_ROOT)})")
         gcloud.run(["builds", "submit", str(src), f"--tag={image_uri(cfg, kind)}", f"--project={cfg.project}",
-                    f"--region={cfg.region}", "--quiet"], timeout=1800)
+                    f"--region={cfg.home_region}", "--quiet"], timeout=1800)
         c.log(f"  [green]built[/] {image_uri(cfg, kind)}")
     with ThreadPoolExecutor(len(kinds)) as ex:
         list(ex.map(one, sorted(kinds)))
@@ -61,6 +66,34 @@ def build_images(cfg: DemoConfig, kinds: set[str]) -> None:
 def run_url(cfg: DemoConfig, service: str) -> str:
     """Deterministic Cloud Run URL: https://<service>-<project number>.<region>.run.app"""
     return f"https://{service}-{project_number(cfg.project)}.{cfg.region}.run.app"
+
+
+def service_args(cfg: DemoConfig, theme: Theme, cid: str, env_file: Path) -> list[str]:
+    """`gcloud run deploy` arguments for one component (cfg: the theme's regional view)."""
+    comp = theme.component(cid)
+    svc = c.service_name(cfg, theme.id, cid)
+    labels = ",".join(f"{k}={v}" for k, v in {**cfg.labels, "demo-theme": theme.id, "demo-component": cid}.items())
+    args = ["run", "deploy", svc, f"--image={image_uri(cfg, comp.kind)}", f"--region={cfg.region}",
+            f"--project={cfg.project}", f"--env-vars-file={env_file}", f"--labels={labels}",
+            f"--service-account={c.sa(cfg, c.run_sa_id(cfg))}", "--min-instances=0", "--max-instances=3",
+            "--memory=1Gi", "--cpu=1", "--port=8080", "--quiet"]
+    # T4: internal = only VPC traffic of the project (the VPC-enabled gateway via the PSC endpoint); the
+    # internet, and an agent outside the gateway, get 404. Invocation stays per cloud_run.public_targets.
+    if comp.ingress == "internal":
+        args.append("--ingress=internal")
+    args.append("--allow-unauthenticated" if cfg.cloud_run.public_targets else "--no-allow-unauthenticated")
+    return args
+
+
+def service_urls(cfg: DemoConfig, svc: str) -> list[str]:
+    """Both run.app URL forms: the deterministic <svc>-<number>.<region>.run.app and status.url
+    (<svc>-<hash>-<r>.a.run.app). Read-only describe; the second is missing if it can't be read."""
+    out = [run_url(cfg, svc)]
+    alt = gcloud.value(["run", "services", "describe", svc, f"--region={cfg.region}", f"--project={cfg.project}",
+                        "--format=value(status.url)"])
+    if alt and alt.rstrip("/") not in out:
+        out.append(alt.rstrip("/"))
+    return out
 
 
 def deploy_service(cfg: DemoConfig, theme: Theme, cid: str, ms) -> str:
@@ -75,13 +108,8 @@ def deploy_service(cfg: DemoConfig, theme: Theme, cid: str, ms) -> str:
     env_file = CONFIG_DIR / "generated" / f"{svc}.env.yaml"
     env_file.parent.mkdir(parents=True, exist_ok=True)
     env_file.write_text("\n".join(f"{k}: {json.dumps(v)}" for k, v in env.items()) + "\n")
-    labels = ",".join(f"{k}={v}" for k, v in {**cfg.labels, "demo-theme": theme.id, "demo-component": cid}.items())
-    args = ["run", "deploy", svc, f"--image={image_uri(cfg, comp.kind)}", f"--region={cfg.region}",
-            f"--project={cfg.project}", f"--env-vars-file={env_file}", f"--labels={labels}",
-            f"--service-account={c.sa(cfg, c.run_sa_id(cfg))}", "--min-instances=0", "--max-instances=3",
-            "--memory=1Gi", "--cpu=1", "--port=8080", "--quiet"]
-    args.append("--allow-unauthenticated" if cfg.cloud_run.public_targets else "--no-allow-unauthenticated")
-    c.log(f"  deploying Cloud Run {svc}")
+    args = service_args(cfg, theme, cid, env_file)
+    c.log(f"  deploying Cloud Run {svc}" + (" (ingress internal)" if comp.ingress == "internal" else ""))
     try:
         gcloud.run(args, timeout=900)
     except gcloud.GcloudError as e:
@@ -118,16 +146,22 @@ def fetch_card(url: str) -> dict | None:
     return None
 
 
-def register_component(cfg: DemoConfig, r: Rest, theme: Theme, cid: str, url: str) -> dict[str, Any]:
+def register_component(cfg: DemoConfig, r: Rest, theme: Theme, cid: str, url: str,
+                       urls: list[str] | None = None) -> dict[str, Any]:
+    """urls: every URL form of the service (T4 internal components register both run.app forms)."""
     comp = theme.component(cid)
     sid = c.service_name(cfg, theme.id, cid)
     parent = cfg.registry_parent
     info: dict[str, Any] = {}
     if comp.kind == "mcp_server":
         spec = theme.mcp_servers[cid]
+        extra = [f"{u}/mcp" for u in (urls or []) if u != url]
         svc = registry.ensure_service(r, parent, sid, registry.mcp_body(
-            f"{cfg.prefix} {theme.id} {spec.display_name}", f"{url}/mcp", mcp_toolspec(theme, cid), spec.description))
+            f"{cfg.prefix} {theme.id} {spec.display_name}", f"{url}/mcp", mcp_toolspec(theme, cid), spec.description,
+            extra_urls=extra))
         info["registry_mode"] = "mcp_tool_spec"
+        if extra:
+            info["registry_urls"] = [f"{url}/mcp", *extra]
     else:
         spec = theme.a2a_agents[cid]
         card = None
@@ -175,7 +209,14 @@ def find_engine(r: Rest, cfg: DemoConfig, display: str) -> dict | None:
 def _engine_env(cfg: DemoConfig, theme: Theme, urls: dict[str, str], ms, ds, orchestrator_id: str | None):
     spec = ms.orchestrator_spec(theme, urls, cfg.models.default, orchestrator_id)
     auth_mode = "none" if cfg.cloud_run.public_targets else "id_token"
-    return ds.env_vars(ms.encode_spec(spec), spec["model"], auth_mode)
+    return engine_env(cfg, theme, ds.env_vars(ms.encode_spec(spec), spec["model"], auth_mode))
+
+
+def engine_env(cfg: DemoConfig, theme: Theme, env: dict[str, str]) -> dict[str, str]:
+    """Theme-specific engine env on top of deploy_spec.env_vars: the token-sharing switch in Private Networking."""
+    if theme.network_mode == "private_networking" or cfg.is_private_networking:
+        return {**env, **TOKEN_SHARING_ENV}
+    return env
 
 
 def create_engine(cfg: DemoConfig, theme: Theme, urls: dict[str, str], ms,
@@ -283,11 +324,16 @@ def deploy_orchestrator(cfg: DemoConfig, r: Rest, theme: Theme, urls: dict[str, 
 def run(cfg: DemoConfig, theme_id: str, skip_build: bool = False, only: str | None = None,
         recreate_engine: bool = False, update_engine: bool = False) -> dict:
     theme = load_theme(theme_id)
+    cfg = theme_config(cfg, theme)        # T4: the theme's region, gateway, registry and staging bucket
     r = c.client(cfg)
     ms = make_specs()
     st = load_state()
     if not st.get("shared", {}).get("egress_gateway"):
         c.log("[yellow]shared resources missing — run ./agdemo up first[/]")
+    elif not cfg.is_home and not (st["shared"].get("regions") or {}).get(cfg.region):
+        c.log(f"[yellow]no {cfg.region} foundation in state.json (shared.regions) — run ./agdemo up with "
+              "private_networking.enabled[/]")
+    c.log(f"[bold]{theme.id}[/]: region {cfg.region}, gateway {cfg.egress_gateway}")
     tstate: dict[str, Any] = st.setdefault("themes", {}).setdefault(theme.id, {})
     comps: dict[str, Any] = tstate.setdefault("components", {})
     steps = {only} if only else {"images", "run", "registry", "engine"}
@@ -304,7 +350,8 @@ def run(cfg: DemoConfig, theme_id: str, skip_build: bool = False, only: str | No
                            ex.map(lambda comp: deploy_service(cfg, theme, comp.id, ms), theme.components)))
         for cid, url in res.items():
             comps.setdefault(cid, {}).update(url=url, service=c.service_name(cfg, theme.id, cid),
-                                             kind=theme.component(cid).kind)
+                                             kind=theme.component(cid).kind, ingress=theme.component(cid).ingress,
+                                             region=cfg.region)
         urls.update(res)
         update_state("themes", theme.id, "components", value=comps)
     for comp in theme.components:
@@ -313,7 +360,10 @@ def run(cfg: DemoConfig, theme_id: str, skip_build: bool = False, only: str | No
     if "registry" in steps:
         c.log("[bold]Agent Registry[/]")
         for comp in theme.components:
-            comps.setdefault(comp.id, {}).update(register_component(cfg, r, theme, comp.id, urls[comp.id]))
+            forms = service_urls(cfg, c.service_name(cfg, theme.id, comp.id)) if comp.ingress == "internal" else None
+            if forms:
+                comps.setdefault(comp.id, {})["urls"] = forms
+            comps.setdefault(comp.id, {}).update(register_component(cfg, r, theme, comp.id, urls[comp.id], forms))
         update_state("themes", theme.id, "components", value=comps)
 
     if "engine" in steps:

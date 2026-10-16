@@ -1,7 +1,7 @@
 import { BaseEdge, EdgeLabelRenderer, getBezierPath, getSmoothStepPath, type EdgeProps } from "@xyflow/react";
 import { memo } from "react";
 import type { DEdge } from "./build";
-import { ClockIcon, CloseIcon, LogIcon, ShieldIcon } from "../components/Icons";
+import { ClockIcon, CloseIcon, LockIcon, LogIcon, ShieldIcon } from "../components/Icons";
 
 export const STATE_LABEL: Record<string, string> = {
   direct: "Direct (no gateway)",
@@ -11,6 +11,7 @@ export const STATE_LABEL: Record<string, string> = {
   pending: "Policy change pending",
   unknown: "Not tested yet",
   error: "Infrastructure error",
+  unreachable: "Not reachable (404, ingress internal)",
   neutral: "Through gateway",
 };
 
@@ -26,7 +27,7 @@ function StateEdgeImpl({ id, sourceX, sourceY, targetX, targetY, sourcePosition,
   const agent = data?.agent;
   const [ax, ay] = at(Math.min(0.5, 22 / Math.max(1, Math.hypot(targetX - sourceX, targetY - sourceY))));
   const markerId = `m-${id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
-  const showArrow = state !== "denied";
+  const showArrow = state !== "denied" && state !== "unreachable";
   const badge =
     state === "denied" ? (
       <span className="edge-badge badge-denied">
@@ -38,12 +39,18 @@ function StateEdgeImpl({ id, sourceX, sourceY, targetX, targetY, sourcePosition,
       </span>
     ) : state === "error" ? (
       <span className="edge-badge badge-error">!</span>
+    ) : state === "unreachable" ? (
+      <span className="edge-badge badge-unreachable">404</span>
+    ) : data?.privatePath ? (
+      <span className="edge-badge badge-private" aria-label="Private path through your VPC">
+        <LockIcon size={11} />
+      </span>
     ) : state === "pending" ? (
       <span className="edge-badge badge-pending">
         <ClockIcon size={13} />
       </span>
     ) : null;
-  const title = [agent ? `${agent.name}'s call` : "", STATE_LABEL[state] ?? state, data?.httpStatus ? `HTTP ${data.httpStatus}` : "", data?.detail ?? "", data?.expected ? `expected: ${data.expected}` : "", data?.replayed ? "(replayed)" : ""]
+  const title = [agent ? `${agent.name}'s call` : "", STATE_LABEL[state] ?? state, data?.privatePath ? "private path (VPC / PSC endpoint)" : "", data?.httpStatus ? `HTTP ${data.httpStatus}` : "", data?.detail ?? "", data?.expected ? `expected: ${data.expected}` : "", data?.replayed ? "(replayed)" : ""]
     .filter(Boolean)
     .join(" · ");
   return (
@@ -54,7 +61,7 @@ function StateEdgeImpl({ id, sourceX, sourceY, targetX, targetY, sourcePosition,
         </marker>
       </defs>
       <path d={path} className={`edge-halo ${agent ? `agent-halo accent-${agent.idx}` : ""}`} />
-      <BaseEdge id={id} path={path} className={`edge-path st-${state}`} markerEnd={showArrow ? `url(#${markerId})` : undefined} />
+      <BaseEdge id={id} path={path} className={`edge-path st-${state} ${data?.privatePath ? "path-private" : ""}`} markerEnd={showArrow ? `url(#${markerId})` : undefined} />
       <path d={path} className="edge-hit" fill="none">
         <title>{title}</title>
       </path>

@@ -25,6 +25,9 @@ export function Header({ d }: { d: Demo }) {
   const maPending = ma?.status === "pending";
   const maSettled = useSettled(ma?.status);
   const geUrl = cfg?.gemini_enterprise?.app_url || "";
+  const maAvailable = d.state?.model_armor.available !== false && d.themeSummary?.model_armor !== false;
+  const region = d.themeSummary?.region || env?.region;
+  const pn = d.networkMode === "private_networking";
   return (
     <header className="app-header">
       <div className="brand">
@@ -38,20 +41,42 @@ export function Header({ d }: { d: Demo }) {
       </div>
 
       {env && (
-        <div className="env-chip" title={`Project ${env.project_id} · region ${env.region} · prefix ${env.prefix}`}>
+        <div className={`env-chip ${pn ? "env-pn" : ""}`} title={`Project ${env.project_id} · region ${region} · prefix ${env.prefix}${pn ? " · Private Networking (VPC-enabled gateway)" : ""}`}>
           <span className="env-dot" />
           <span>{env.project_id}</span>
           <span className="env-sep">·</span>
-          <span>{env.region}</span>
+          <span>{region}</span>
         </div>
       )}
 
       <div className="header-spacer" />
 
+      {d.networkModes.length > 1 && (
+        <div className="field">
+          <span className="field-label">Network</span>
+          <div className="segmented seg-network" role="radiogroup" aria-label="Network mode">
+            {(
+              [
+                { id: "internet", label: "Internet", hint: `Agent Gateway without a VPC; public Cloud Run destinations (${env?.region ?? "base region"})` },
+                {
+                  id: "private_networking",
+                  label: "Private Networking",
+                  hint: `VPC-enabled Agent Gateway in ${cfg?.private_networking?.region ?? "the second region"}: attachment, PSC endpoint, private DNS, internal Cloud Run`,
+                },
+              ] as const
+            ).map((m) => (
+              <button key={m.id} role="radio" aria-checked={d.networkMode === m.id} className={`seg ${d.networkMode === m.id ? "on" : ""} seg-net-${m.id}`} title={m.hint} onClick={() => d.setNetworkMode(m.id)}>
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <label className="field">
         <span className="field-label">Theme</span>
         <select className="select" value={d.themeId} onChange={(e) => d.selectTheme(e.target.value)} disabled={!cfg}>
-          {cfg?.themes.map((t) => (
+          {d.modeThemes.map((t) => (
             <option key={t.id} value={t.id}>
               {t.name}
               {!t.deployed && d.mode !== "demo" ? " (not deployed)" : ""}
@@ -82,7 +107,7 @@ export function Header({ d }: { d: Demo }) {
         </div>
       </div>
 
-      <div className="anchor">
+      {maAvailable && <div className="anchor">
         <label className={`ma-toggle ${maEnabled ? "on" : ""} ${maPending ? "pending" : ""}`} title={adminTip ?? "Screen gateway traffic with Model Armor (all themes)"}>
           <input
             type="checkbox"
@@ -109,7 +134,7 @@ export function Header({ d }: { d: Demo }) {
           />
         )}
         {!maPending && maSettled && <SettledPop floating status={maSettled} what="Model Armor" />}
-      </div>
+      </div>}
 
       <div className="ge-group">
         <label className={`ma-toggle ge-toggle ${d.geDemo ? "on" : ""}`} title="Send prompts from Gemini Enterprise instead of this UI">
@@ -160,8 +185,8 @@ export function Header({ d }: { d: Demo }) {
             <>
               This returns <b>{d.theme?.name}</b> to step 1, Wide open:
               <ul className="confirm-list">
-                <li>removes every applied policy and detaches the egress and ingress gateways</li>
-                <li>turns Model Armor off (it applies to all themes)</li>
+                <li>removes every applied policy and detaches the {pn ? "VPC-enabled egress gateway" : "egress and ingress gateways"}</li>
+                {!pn && <li>turns Model Armor off (it applies to all themes)</li>}
                 <li>switches to the Wide open tab and clears the activity log</li>
               </ul>
               {d.mode === "demo"

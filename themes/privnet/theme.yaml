@@ -1,0 +1,53 @@
+id: privnet
+name: Private networking
+description: >
+  An HR payroll agent behind a VPC-enabled Agent Gateway (Private Networking mode, docs/TERRAFORM_PLAN.md §7c).
+  Payroll MCP is an internal-only Cloud Run service reachable only through your VPC; Benefits MCP is a
+  public one, for side-by-side contrast. The same registry + IAP policy governs both.
+
+# Runs in private_networking.region, behind <prefix>-pn-egress (created by ./agdemo up with the connectivity
+# template). No ingress gateway and no Model Armor in this mode.
+region: us-west1
+network_mode: private_networking
+
+orchestrator:
+  id: payroll-agent
+  display_name: Payroll Agent
+  description: HR payroll assistant on Agent Runtime (Private Networking region)
+  instruction: |
+    You are the company's payroll assistant. Help employees with payslips, bank details and benefits.
+    Use list_capabilities to see which MCP tools exist.
+    - Use call_mcp_tool("payroll-mcp", ...) for payslips and bank details (internal payroll system).
+    - Use call_mcp_tool("benefits-mcp", ...) for benefit plans and enrollment.
+    Every tool returns an "outcome". If the outcome is "denied", tell the user plainly that access was
+    blocked by policy (name the tool). If the call failed with 404, say the system isn't reachable from
+    where you run. Do not retry another way.
+
+components:
+  - {id: payroll-mcp, kind: mcp_server, role_label: "Private MCP (ingress internal)", ingress: internal}
+  - {id: benefits-mcp, kind: mcp_server, role_label: "Public MCP"}
+
+policies:
+  - id: gw-egress
+    text: "All of Payroll Agent's outbound traffic goes through the VPC-enabled Agent Gateway (default: deny everything)."
+    type: gateway_attach
+    params: {path: egress}
+    explain: Binds the Agent Runtime engine to the VPC-enabled egress gateway (connectivity template → network attachment → your VPC). Names under run.app resolve to the PSC endpoint inside the VPC.
+  - id: payroll-readonly
+    text: "Payroll Agent can only use Payroll MCP's read-only tools (listed by name)."
+    type: mcp_tool_allow
+    params: {target: payroll-mcp, read_only: true}
+    explain: Conditional egressor binding that lists the allowed tool names (get_payslip). update_bank_details stays blocked.
+  - id: payroll-readonly-hints
+    text: "Payroll Agent can only use Payroll MCP tools annotated read-only (MCP readOnlyHint)."
+    type: mcp_tool_allow
+    params: {target: payroll-mcp, read_only: true, use_annotation: true}
+    explain: Conditional egressor binding on iap.googleapis.com/mcp.tool.isReadOnly (the readOnlyHint in the tool spec registered in Agent Registry).
+  - id: payroll-all
+    text: "Payroll Agent can use every Payroll MCP tool, including update_bank_details."
+    type: mcp_server_allow
+    params: {target: payroll-mcp}
+  - id: allow-benefits
+    text: "Payroll Agent can use the public Benefits MCP server."
+    type: mcp_server_allow
+    params: {target: benefits-mcp}

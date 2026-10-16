@@ -131,21 +131,55 @@ variable "staging_force_destroy" {
 }
 
 # ---------------------------------------------------------------------------------------------------
-# PLACEHOLDER (phase T4, not built): Private Networking mode in us-west1 (plan §7c). A second `base`
-# instance plus the `private_egress` module (VPC, attachment, PSC, run.app zone, connectivity template,
-# agdemo-pn-egress). The variable exists so the tfvars shape is stable; enabling it fails until T4.
+# Private Networking mode (phase T4, docs/TERRAFORM_PLAN.md §7c): a VPC-enabled egress gateway in a second
+# region (modules/private_egress + modules/regional). `./agdemo tf vars` fills it from demo.yaml
+# private_networking; names and the region's platform endpoints are computed in Python (agdemo_core).
+# Disabled = no resource and no change to the base plan.
 # ---------------------------------------------------------------------------------------------------
 variable "private_networking" {
-  description = "T4 placeholder: Private Networking mode (second region). Must stay disabled in T1."
+  description = "Private Networking mode (second region): VPC, attachment, PSC endpoint, run.app zone, template, VPC-enabled gateway."
   type = object({
-    enabled = bool
-    region  = optional(string, "us-west1")
+    enabled                    = bool
+    region                     = optional(string, "us-west1")
+    subnet_range               = optional(string, "10.70.0.0/28")
+    psc_ip                     = optional(string, "10.70.250.10")
+    dns_domains                = optional(list(string), ["run.app."])
+    vpc_egress                 = optional(string, "PRIVATE_RANGES_ONLY")
+    manage_service_agent_roles = optional(bool, true)
+    names = optional(object({
+      network              = string
+      subnet               = string
+      attachment           = string
+      psc_address          = string
+      psc_forwarding_rule  = string
+      dns_zone             = string
+      template_prefix      = string
+      egress_gateway       = string
+      egress_iap_extension = string
+      egress_iap_policy    = string
+      staging_bucket       = string
+    }))
+    platform_endpoints = optional(map(object({
+      service_id   = string
+      display_name = string
+    })), {})
+    platform_endpoints_existing = optional(map(string), {})
   })
   default = { enabled = false }
 
   validation {
-    condition     = !var.private_networking.enabled
-    error_message = "private_networking is not built yet (phase T4 of docs/TERRAFORM_PLAN.md)."
+    condition     = !var.private_networking.enabled || var.private_networking.names != null
+    error_message = "private_networking.names is required when enabled (./agdemo tf vars writes it)."
+  }
+
+  validation {
+    condition     = !var.private_networking.enabled || length(var.private_networking.platform_endpoints) > 0
+    error_message = "private_networking.platform_endpoints is required when enabled (./agdemo tf vars writes it)."
+  }
+
+  validation {
+    condition     = contains(["PRIVATE_RANGES_ONLY"], var.private_networking.vpc_egress)
+    error_message = "private_networking.vpc_egress: only PRIVATE_RANGES_ONLY is verified (ALL_TRAFFIC needs Cloud NAT, untested)."
   }
 }
 

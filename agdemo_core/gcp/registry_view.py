@@ -207,7 +207,7 @@ def simulate(theme: Theme, applied: set[str], cfg: DemoConfig | None, state: dic
     """Demo-mode view: the bindings the applied policies would create, entries from the theme files."""
     from ..policies.egress_allow import condition as policy_condition
 
-    region = cfg.region if cfg else "us-east4"
+    region = cfg.region if cfg else (theme.region or "us-east4")
     tstate = (state or {}).get("themes", {}).get(theme.id, {})
     comps = tstate.get("components", {})
     principal = tstate.get("orchestrator", {}).get("principal") or SIM_PRINCIPAL.format(region=region)

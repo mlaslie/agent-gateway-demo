@@ -21,11 +21,11 @@ def _path(policy: Policy) -> str:
 class GatewayAttach:
     def apply(self, ctx: Ctx, theme: Theme, policy: Policy) -> None:
         p = _path(policy)
-        engines.set_gateways(L.r(ctx), ctx.config, L.engine(ctx, theme, L.source(policy)), p,
-                             gw.gateway_resource(ctx.config, p))
+        v = L.cfg(ctx, theme)
+        engines.set_gateways(L.r(ctx), v, L.engine(ctx, theme, L.source(policy)), p, gw.gateway_resource(v, p))
 
     def remove(self, ctx: Ctx, theme: Theme, policy: Policy) -> None:
-        engines.set_gateways(L.r(ctx), ctx.config, L.engine(ctx, theme, L.source(policy)), _path(policy), None)
+        engines.set_gateways(L.r(ctx), L.cfg(ctx, theme), L.engine(ctx, theme, L.source(policy)), _path(policy), None)
 
     def remove_many(self, ctx: Ctx, theme: Theme, policies: list[Policy]) -> None:
         """Detach several directions in ONE PATCH per engine (used by reset). Policies are grouped by their
@@ -37,7 +37,7 @@ class GatewayAttach:
             groups.setdefault(L.source(p), []).append(p)
 
         def one(src: str | None) -> None:
-            engines.set_gateway_paths(L.r(ctx), ctx.config, L.engine(ctx, theme, src),
+            engines.set_gateway_paths(L.r(ctx), L.cfg(ctx, theme), L.engine(ctx, theme, src),
                                       {_path(p): None for p in groups[src]})
 
         with ThreadPoolExecutor(max(1, len(groups))) as ex:
@@ -45,7 +45,7 @@ class GatewayAttach:
 
     def status(self, ctx: Ctx, theme: Theme, policy: Policy) -> PolicyStatus:
         try:
-            r, cfg, p = L.r(ctx), ctx.config, _path(policy)
+            r, cfg, p = L.r(ctx), L.cfg(ctx, theme), _path(policy)
             e = L.engine(ctx, theme, L.source(policy))
             eng = engines.get_engine(r, cfg, e)
             if eng is None:
@@ -71,7 +71,7 @@ class GatewayAttach:
             return L.error(ex)
 
     def describe(self, ctx: Ctx, theme: Theme, policy: Policy) -> list[str]:
-        cfg, p = ctx.config, _path(policy)
+        cfg, p = L.cfg(ctx, theme), _path(policy)
         key = engines.KEYS[p]
         try:
             e = L.engine(ctx, theme, L.source(policy))
@@ -86,6 +86,9 @@ class GatewayAttach:
             f"  -d '{{\"spec\":{{\"deploymentSpec\":{{\"agentGatewayConfig\":{{\"{key}\":"
             f"{{\"agentGateway\":\"{gw.gateway_resource(cfg, p)}\"}}}}}}}}}}'",
             "# Remove: PATCH the same field without this direction (the other direction is re-sent unchanged).",
+            *(["# VPC-enabled gateway (connectivity template): run.app names resolve to the PSC endpoint in your VPC.",
+               "# Deploy the engine with GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false (P0 F44)."]
+              if cfg.is_private_networking else []),
             "# The engine redeploys (minutes). Once attached, the gateway is default-deny: "
             + ("only registered destinations with roles/iap.egressor are reachable." if p == "egress"
                else "query/streamQuery requests are screened by Model Armor when it is on."),

@@ -18,9 +18,22 @@ INGRESS_EDGES = (INGRESS_EDGE,)
 
 # ---------------------------------------------------------------- helpers
 def edge_state(state: str, *, governed: bool, source: str = "simulated", detail: str = "",
-               http_status: int | None = None) -> EdgeState:
-    return {"state": state, "governed": governed, "source": source, "detail": detail,
-            "http_status": http_status}
+               http_status: int | None = None, path: str | None = None) -> EdgeState:
+    out = {"state": state, "governed": governed, "source": source, "detail": detail, "http_status": http_status}
+    if path:
+        out["path"] = path      # T4: "private" (through the VPC / PSC endpoint) or "internet"
+    return out
+
+
+UNREACHABLE_DETAIL = ("404: {name} has Cloud Run ingress internal. {who} reaches run.app over the internet, "
+                      "where an internal service doesn't exist")
+
+
+def _net_path(theme: Theme, base: str) -> str | None:
+    """Private Networking themes: which network path an allowed call takes (None for Internet themes)."""
+    if theme.network_mode != "private_networking":
+        return None
+    return "private" if theme.internal(split_edge(base)[0]) else "internet"
 
 
 def _applied_policies(theme: Theme, applied: Iterable[str]) -> list[Policy]:
@@ -114,6 +127,22 @@ def evaluate(theme: Theme, applied: Iterable[str], model_armor: bool,
     malicious = bool(test and test.malicious)
     ingress_on = gateway_applied(theme, applied, "ingress")
     out: dict[str, EdgeState] = {}
+    if test is not None and getattr(test, "via", "agent") == "direct":
+        # T4 bypass: called from outside every agent and gateway (the demo UI backend, over the internet).
+        for e in edge_ids(theme):
+            if is_ingress_edge(e):
+                continue
+            base = split_source(e)[1]
+            comp = split_edge(base)[0]
+            if theme.internal(comp):
+                out[e] = edge_state("unreachable", governed=False, http_status=404, path="internet",
+                                    detail=UNREACHABLE_DETAIL.format(name=_label(theme, comp), who="The caller"))
+            else:
+                out[e] = edge_state("direct", governed=False, http_status=200, path=_net_path(theme, base),
+                                    detail="Direct call from outside the agent (demo UI backend); no gateway")
+        if theme.has_ingress:
+            out[INGRESS_EDGE] = edge_state("direct", governed=False, http_status=200, detail="Not exercised")
+        return {e: out[e] for e in edge_ids(theme)}
 
     def armor(st: EdgeState, gw: str) -> EdgeState:
         if model_armor and malicious and st["state"] == "allowed":
@@ -128,12 +157,20 @@ def evaluate(theme: Theme, applied: Iterable[str], model_armor: bool,
         mine = [p for p in pols if policy_source(p) == src]
         for base in base_egress_edges(theme):
             e = source_edge(src, base)
-            if not egress_on:
-                out[e] = edge_state("direct", governed=False, http_status=200,
+            net = _net_path(theme, base)
+            if not egress_on and theme.internal(split_edge(base)[0]):
+                who = theme.orchestrator_for(src).display_name + " (not behind the VPC-enabled gateway)"
+                out[e] = edge_state("unreachable", governed=False, http_status=404, path="internet",
+                                    detail=UNREACHABLE_DETAIL.format(name=_label(theme, split_edge(base)[0]),
+                                                                     who=who))
+            elif not egress_on:
+                out[e] = edge_state("direct", governed=False, http_status=200, path=net,
                                     detail="Direct call; no Agent Gateway attached")
             elif (p := _egress_allowing_policy(theme, mine, base)):
-                st = edge_state("allowed", governed=True, http_status=200,
-                                detail=f"Allowed by Agent Gateway ({p.id})")
+                via = {"private": " via the private path (gateway -> network attachment -> PSC endpoint in "
+                                  "your VPC)", "internet": " over the internet path"}.get(net or "", "")
+                st = edge_state("allowed", governed=True, http_status=200, path=net,
+                                detail=f"Allowed by Agent Gateway ({p.id}){via}")
                 # Verified behaviour: egress Model Armor screens MCP tools/call traffic, not A2A messages.
                 out[e] = armor(st, "egress") if ":" in base else st
             else:
@@ -143,7 +180,9 @@ def evaluate(theme: Theme, applied: Iterable[str], model_armor: bool,
                                            f"{_label(theme, base)}" + (f" ({who}'s Agent Identity)" if src else ""))
 
     # Ingress gateways screen content (Model Armor); they never deny a request on other grounds.
-    if not ingress_on:
+    if not theme.has_ingress:
+        pass
+    elif not ingress_on:
         out[INGRESS_EDGE] = edge_state("direct", governed=False, http_status=200,
                                        detail="User calls the agent directly; no ingress gateway")
     else:
@@ -237,6 +276,8 @@ def test_agents(theme: Theme, scenario: Any, test: ScenarioTest) -> list[str | N
 
 def calling_text(theme: Theme, scenario: Any, test: ScenarioTest) -> str:
     """Status line for the start of a run, naming the agent(s) that are called."""
+    if getattr(test, "via", "agent") == "direct":
+        return "Calling the MCP servers directly from the demo UI backend (no agent, no gateway)..."
     if test_is_ingress(scenario, test):
         return f"Calling {theme.orchestrator.display_name} through the ingress path..."
     names = [theme.orchestrator_for(a).id for a in test_agents(theme, scenario, test)]
@@ -283,6 +324,8 @@ def edge_sentence(theme: Theme, edge: str, st: EdgeState) -> str:
         return f"✓ {name} responded {via}{tail}"
     if state == "denied":
         return f"✕ {name}: access was blocked by Agent Gateway policy (403)."
+    if state == "unreachable":
+        return f"⌀ {name}: not reachable (404, Cloud Run ingress internal)."
     if state == "blocked":
         return f"⛨ {name}: Model Armor blocked the request (prompt injection / sensitive data)."
     if state == "pending":

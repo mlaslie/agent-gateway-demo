@@ -63,3 +63,12 @@ def update_state(*keys: str, value: Any, path: Path = STATE_PATH) -> dict[str, A
 
 def theme_state(theme_id: str, path: Path = STATE_PATH) -> dict[str, Any]:
     return load_state(path).get("themes", {}).get(theme_id, {})
+
+
+def region_shared(state: dict[str, Any], cfg) -> dict[str, Any]:
+    """T4: the foundation keys for a config view's region: `shared` for the base region, else
+    `shared.regions.<region>` (written by `./agdemo tf output-sync` from the Terraform state_regions output)."""
+    shared = state.get("shared") or {}
+    if cfg is None or cfg.is_home:
+        return shared
+    return (shared.get("regions") or {}).get(cfg.region) or {}

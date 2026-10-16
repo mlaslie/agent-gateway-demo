@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = REPO_ROOT / "config"
@@ -70,6 +70,23 @@ class TerraformCfg(BaseModel):
     shared_project_grants: bool = True
 
 
+class PrivateNetworking(BaseModel):
+    """Private Networking mode (docs/TERRAFORM_PLAN.md §7c, phase T4): a VPC-enabled egress gateway in a second
+    region, created by Terraform (`up`) with the connectivity template from the start. Themes declare
+    `network_mode: private_networking` and `region: <this region>`."""
+    enabled: bool = False
+    region: str = "us-west1"                    # must differ from environment.region (one egress gateway per region)
+    subnet_range: str = "10.70.0.0/28"          # attachment subnet (/28, Private Google Access)
+    psc_ip: str = "10.70.250.10"                # PSC endpoint for Google APIs; run.app resolves to it in the VPC
+    dns_domains: list[str] = Field(default_factory=lambda: ["run.app."])
+    vpc_egress: Literal["PRIVATE_RANGES_ONLY"] = "PRIVATE_RANGES_ONLY"
+    egress_name: str = ""                       # default <prefix>-pn-egress
+    # gcp-sa-agentgateway roles/compute.networkAdmin + roles/dns.peer (project-wide). None = follow
+    # terraform.shared_project_grants (false for a second environment that relies on the first one's grants).
+    manage_service_agent_roles: bool | None = None
+    themes: list[str] = Field(default_factory=lambda: ["privnet"])   # shown in the UI's Private Networking mode
+
+
 class DemoConfig(BaseModel):
     environment: Environment
     gateways: Gateways = Gateways()
@@ -80,7 +97,20 @@ class DemoConfig(BaseModel):
     themes: ThemesCfg = ThemesCfg()
     gemini_enterprise: GeminiEnterprise = GeminiEnterprise()
     terraform: TerraformCfg = TerraformCfg()
+    private_networking: PrivateNetworking = PrivateNetworking()
     default_mode: Mode = "live_with_fallback"
+
+    # Regional view (T4): None = the base (Internet mode) region. for_region() returns a copy whose `region`,
+    # gateway and registry names are those of another region; `home_region` stays the base region (images,
+    # the UI, the Terraform state and the recordings bucket live there).
+    _view: str | None = PrivateAttr(default=None)
+
+    @model_validator(mode="after")
+    def _pn_region(self) -> "DemoConfig":
+        if self.private_networking.enabled and self.private_networking.region == self.environment.region:
+            raise ValueError("private_networking.region must differ from environment.region (a project can have "
+                             "only one egress gateway per region serving agents)")
+        return self
 
     # ---- derived names (single place for resource naming) ----
     @property
@@ -93,7 +123,58 @@ class DemoConfig(BaseModel):
 
     @property
     def region(self) -> str:
+        return self._view or self.environment.region
+
+    @property
+    def home_region(self) -> str:
+        """The base region (Internet mode): Artifact Registry, the UI, Terraform state, recordings."""
         return self.environment.region
+
+    @property
+    def is_home(self) -> bool:
+        return self.region == self.environment.region
+
+    @property
+    def is_private_networking(self) -> bool:
+        """This view is the Private Networking region (VPC-enabled gateway, no ingress gateway, no Model Armor)."""
+        return not self.is_home and self.region == self.private_networking.region
+
+    def for_region(self, region: str) -> "DemoConfig":
+        """A view of this config in `region`: the base region, or the enabled Private Networking region."""
+        if region == self.environment.region:
+            return self.home()
+        if not (self.private_networking.enabled and region == self.private_networking.region):
+            raise ValueError(f"region {region} is neither environment.region ({self.environment.region}) nor the "
+                             "enabled private_networking.region")
+        v = self.model_copy()
+        v._view = region
+        return v
+
+    def home(self) -> "DemoConfig":
+        if self._view is None:
+            return self
+        v = self.model_copy()
+        v._view = None
+        return v
+
+    def region_views(self) -> list["DemoConfig"]:
+        """[base view] + [Private Networking view when enabled]: what up/down/check-clean/reset --all cover."""
+        out = [self.home()]
+        if self.private_networking.enabled:
+            out.append(self.for_region(self.private_networking.region))
+        return out
+
+    def enabled_themes(self) -> list[str]:
+        """themes.enabled, plus the Private Networking themes when that mode is enabled (deploy order)."""
+        out = list(self.themes.enabled)
+        if self.private_networking.enabled:
+            out += [t for t in self.private_networking.themes if t not in out]
+        return out
+
+    @property
+    def manage_pn_service_agent_roles(self) -> bool:
+        m = self.private_networking.manage_service_agent_roles
+        return self.terraform.shared_project_grants if m is None else m
 
     @property
     def prefix(self) -> str:
@@ -101,6 +182,8 @@ class DemoConfig(BaseModel):
 
     @property
     def egress_gateway(self) -> str:
+        if self.is_private_networking:
+            return self.private_networking.egress_name or f"{self.prefix}-pn-egress"
         return self.gateways.egress_name or f"{self.prefix}-egress"
 
     @property
@@ -114,6 +197,15 @@ class DemoConfig(BaseModel):
     @property
     def ingress_gateway_resource(self) -> str:
         return f"projects/{self.project}/locations/{self.region}/agentGateways/{self.ingress_gateway}"
+
+    @property
+    def has_ingress_gateway(self) -> bool:
+        return not self.is_private_networking
+
+    @property
+    def has_model_armor(self) -> bool:
+        """Model Armor (template, extension, the checkbox) exists only in the base region."""
+        return not self.is_private_networking
 
     @property
     def model_armor_template(self) -> str:

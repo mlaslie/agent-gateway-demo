@@ -788,7 +788,7 @@ def test_down_dry_run_changes_nothing():
 def test_guard_resource():
     text = (TF_DIR / "guards.tf").read_text()
     body = text[text.index('resource "terraform_data" "teardown_guard"') :]
-    assert "depends_on = [module.base]" in body
+    assert "depends_on = [module.base, module.private_egress, module.pn_region]" in body  # T4: every region
     assert re.search(r"when\s+=\s+destroy", body)
     cmd = re.search(r'command\s+=\s+"([^"]+)"', body).group(1)
     assert cmd == "${self.input.agdemo} check-clean --strict --expect ${self.input.environment}"

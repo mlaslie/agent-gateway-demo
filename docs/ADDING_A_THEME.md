@@ -301,3 +301,13 @@ The loader checks the YAML structure and types, that policy `target`s exist, and
 - [ ] `mcp_tool_allow.tools` names exist on the target server.
 - [ ] Every tool has `probe_args` covering its required params, and every A2A agent has a `probe_message`.
 - [ ] The orchestrator instruction names every component id.
+
+## Private Networking themes (T4)
+
+A theme can run behind the VPC-enabled gateway of the Private Networking mode instead of the base region's gateway ([TERRAFORM_PLAN.md](TERRAFORM_PLAN.md) §7c, §7f; example: `themes/privnet/`).
+
+- `network_mode: private_networking` and `region: <private_networking.region>` in `theme.yaml`. A mismatch with `config/demo.yaml` is an error (the theme then runs in Demo only).
+- `ingress: internal` on a component deploys its Cloud Run service with `--ingress=internal` and registers both run.app URL forms. Without the gateway, calls to it are `unreachable` (404).
+- A scenario test with `via: direct` is the "bypass" call from the UI backend, outside every agent and gateway.
+- No ingress gateway (no `gateway_attach{path: ingress}`, no `flow: ingress`) and no Model Armor in this mode.
+- List the theme under `private_networking.themes` so the UI's Network switch shows it.

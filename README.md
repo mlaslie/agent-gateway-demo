@@ -306,8 +306,24 @@ Click the **Agent Registry** node on the diagram to browse what's registered: th
 |---|---|---|---|
 | `helpdesk`: IT / HR Helpdesk | `helpdesk-agent`, plus `hr-assistant` (scenario 7) | `kb-agent` (allowed), `hr-records-agent` (denied) | `tickets-mcp` (read: list/get; write: close/delete), `directory-mcp` |
 | `retail`: Retail Store Operations | `store-ops-agent`, plus `pricing-analyst` (scenario 7) | `merchandising-agent` (allowed), `pricing-agent` (denied) | `inventory-mcp` (read: list_stock/get_item; write: adjust_stock/delete_item), `orders-mcp` (lookup_order / issue_refund) |
+| `privnet`: Private networking (Private Networking mode, us-west1) | `payroll-agent` | none | `payroll-mcp` (Cloud Run ingress **internal**; read: get_payslip, write: update_bank_details), `benefits-mcp` (public; list_plans / enroll) |
 
 A new theme is a folder of YAML. Start from `themes/_template/` and follow [docs/ADDING_A_THEME.md](docs/ADDING_A_THEME.md).
+
+## Private Networking mode
+
+The header's **Network** switch picks **Internet** (the themes above, base region, `agdemo-egress` without a VPC) or **Private Networking**: a VPC-enabled egress gateway, `<prefix>-pn-egress`, in a second region (default us-west1), created by Terraform **with** an agent connectivity template from the start. Design and decisions: [docs/TERRAFORM_PLAN.md](docs/TERRAFORM_PLAN.md) §7c and §7f; gotchas: [docs/PRIVATE_EGRESS_TESTBED.md](docs/PRIVATE_EGRESS_TESTBED.md).
+
+**Turn it on:** set `private_networking.enabled: true` in `config/demo.yaml` (block in `demo.example.yaml`), then `./agdemo up`. Terraform adds `modules/private_egress` (VPC, /28 subnet with Private Google Access, network attachment, PSC endpoint for Google APIs, private `run.app.` zone with apex and wildcard records, `gcp-sa-agentgateway` networkAdmin + dns.peer, the content-hashed template) and `modules/regional` (the gateway, its IAP extension and REQUEST_AUTHZ policy, the region's 25 platform registry entries with their egressor grant, a staging bucket). The base region's plan doesn't change. `deploy-theme privnet` deploys Payroll MCP with `--ingress=internal`, registers both run.app URL forms, and deploys the orchestrator with `GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false`. `status`, `reset --all`, `check-clean` and `down` cover both regions.
+
+**Demo steps** (theme `privnet`, all live toggles; they also run in Demo mode without GCP):
+1. **Internal only:** the *Bypass* test calls Payroll MCP from the UI backend (no agent, no gateway): 404. The agent without the gateway also gets 404. Benefits MCP answers directly.
+2. **Through the gateway:** attach the gateway; route exists, no permission: 403.
+3. **Registered ≠ allowed:** Payroll MCP is in Agent Registry (both URLs, tool spec); still 403.
+4. **Grant:** all tools or read-only only: 200, and the gateway log entry is marked **private path** (`httpRequest.serverIp` = the PSC endpoint, 10.x).
+5. **Public MCP, same policy:** Benefits MCP follows the same registry + IAP rules over the internet path (public serverIp).
+
+The diagram shows the VPC between the gateway and Payroll MCP (attachment, PSC endpoint, DNS); **Under the hood: private network** in the side panel lists the pre-built pieces and the template, from `state.json shared.regions` after `up` (or as `up` would name them). No ingress gateway and no Model Armor in this mode.
 
 ## Repo layout
 

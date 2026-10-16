@@ -18,12 +18,18 @@ def _loc(project: str, region: str) -> str:
 
 
 # ------------------------------------------------------------------ names (all derived from config)
+def _stem(cfg: DemoConfig, path: str) -> tuple[str, ...]:
+    """Name parts after the prefix: ('egress',) in the base region, ('pn', 'egress') in the Private
+    Networking region (agdemo-pn-egress-iap-policy next to the agdemo-pn-egress gateway)."""
+    return ("pn", path) if cfg.is_private_networking else (path,)
+
+
 def iap_extension_name(cfg: DemoConfig, path: str) -> str:
-    return cfg.name(path, "iap-authz")                       # agdemo-egress-iap-authz
+    return cfg.name(*_stem(cfg, path), "iap-authz")          # agdemo-egress-iap-authz
 
 
 def iap_policy_name(cfg: DemoConfig, path: str) -> str:
-    return cfg.name(path, "iap-policy")                      # agdemo-egress-iap-policy
+    return cfg.name(*_stem(cfg, path), "iap-policy")         # agdemo-egress-iap-policy
 
 
 def ma_extension_name(cfg: DemoConfig) -> str:

@@ -1,6 +1,6 @@
 # Terraform foundation plan (base + private egress)
 
-**Status:** T1 built (2026-10-16; see §7a). **T2: the read-only part is done** (2026-10-16; see §7d): the `tf import` generator, a migration-mode plan-safety check and a read-only plan against the live demo with only imports and additive creates. The live steps (legacy cleanup, state bucket, recordings copy, apply, UI redeploy) are in [TERRAFORM_MIGRATION_RUNBOOK.md](TERRAFORM_MIGRATION_RUNBOOK.md) and haven't been run. **T3 built** (2026-10-16; see §7e): `up`, `down`, `reset --all`, `check-clean`, the destroy guard; unit-tested on fakes, plan-only and read-only checks, never run live. T4–T5 not started. Nothing in GCP was changed while writing it: the only calls were read-only lists and GETs against the demo project, plus a read of the provider schema and source.
+**Status:** T1 built (2026-10-16; see §7a). **T2: the read-only part is done** (2026-10-16; see §7d): the `tf import` generator, a migration-mode plan-safety check and a read-only plan against the live demo with only imports and additive creates. The live steps (legacy cleanup, state bucket, recordings copy, apply, UI redeploy) are in [TERRAFORM_MIGRATION_RUNBOOK.md](TERRAFORM_MIGRATION_RUNBOOK.md) and haven't been run. **T3 built** (2026-10-16; see §7e): `up`, `down`, `reset --all`, `check-clean`, the destroy guard; unit-tested on fakes, plan-only and read-only checks, never run live. **T4 built** (2026-10-16; see §7f): the Private Networking mode (second region, VPC-enabled gateway), region-aware themes, the `privnet` theme and the UI's Network switch; plan-only, never applied. T5 not started. Nothing in GCP was changed while writing it: the only calls were read-only lists and GETs against the demo project, plus a read of the provider schema and source.
 
 **Goal:** deploy the demo's whole foundation with Terraform, for both the public (non-VPC) setup and the private-egress (VPC) test bed. Clean up in two steps: first a **reset** through the API/CLI that removes everything that isn't base, then `terraform destroy` for the foundation.
 
@@ -445,7 +445,7 @@ The provider has no gateway data source, so this reads it with the `http` provid
 | T1 **(built)** | Scaffold: `versions`, backend + `tf init` (state bucket), tfvars generator, `base` module for a **fresh** environment, outputs → state.json, CI validate, unit tests | 2–3 d |
 | T2 **(read-only part built; live steps in the runbook)** | Import the live demo: legacy cleanup (after asking), `tf import` generator, plan-safety check, iterate to a zero-diff plan, apply, deprecate `bootstrap` | 1–2 d |
 | T3 **(built; live runs pending)** | Lifecycle: `up`, `reset --all`, `down`, `check-clean`, guard resource, teardown additions (GE unregister, Policy Studio leftovers) | 2 d |
-| T4 | `private_egress` module, `migrate-gateway`, preconditions, env var in `deploy-theme`, private MCP component (internal ingress, both URLs registered), status/UI showing private egress | 2–3 d |
+| T4 **(built; live runs pending)** | Per §7c: `private_egress` + a second-region `regional` module, region-aware themes, env var in `deploy-theme`, private MCP component (internal ingress, both URLs registered), the `privnet` theme, status/UI showing private egress. No `migrate-gateway` (dropped in §7b) | 2–3 d |
 | T5 | E2E up/down ×2 in us-west1 + negative tests, then the in-place migration of `agdemo-egress` (§5.2) in a quiet window; docs (SETUP, TROUBLESHOOTING, README, TESTBED pointer) | 1–2 d |
 
 **Total about 8–12 days.** T1 and T2 deliver value without T4. T4's live migration must wait for T5's throwaway run.
@@ -608,6 +608,74 @@ No GCP writes were made: unit tests on fakes, plan-only Terraform runs with a lo
 13. **`up`'s verify** is a CLI read-only check (gateways, IAP policy, template, platform count, every engine exists and is unbound, components deployed, UI URL), not the UI's probe-based Verify.
 
 **Needs a live run (T5):** everything that writes: `reset --all` for real (repoint PATCH, enforcement restore, IAM pruning, stray unbind, the wait), `down` end to end (GE `DELETE`, the Cloud Run v2 REST delete, engine deletes, `state rm`, the destroy with the guard passing, the re-check), the guard **aborting** a bare `terraform destroy` with nothing deleted (ordering included), `up` end to end and its timing, and a second `up`/`down` for idempotency.
+
+## 7f. T4 as built (2026-10-16)
+
+No GCP writes were made: unit tests on fakes, plan-only Terraform runs with a local scratch state, and the UI in Demo mode.
+
+**What exists:**
+- **Terraform.**
+  - `modules/private_egress` (`count` = `private_networking.enabled`), all in the gateway project:
+    - `compute` + `dns` APIs (never disabled);
+    - VPC `<prefix>-pn-vpc`, subnet `<prefix>-pn-att` (/28, Private Google Access), network attachment `<prefix>-pn-att` (ACCEPT_AUTOMATIC);
+    - global address `<prefix>-pn-psc-ip` (PRIVATE_SERVICE_CONNECT) and forwarding rule `<prefix without hyphens>pnpsc` (`all-apis`; validated `^[a-z][a-z0-9]{0,19}$`);
+    - private zone `<prefix>-pn-run-app` (`run.app.`) with apex and wildcard A records to the PSC IP;
+    - `gcp-sa-agentgateway` `roles/compute.networkAdmin` + `roles/dns.peer` (`_member`);
+    - template `<prefix>-pn-tmpl-<sha1(content)[0:6]>`, `create_before_destroy`, `CENTRALIZED`, `PRIVATE_RANGES_ONLY`, DNS peering `run.app.`; attachment and network by project **ID**.
+  - Output `template_ref` (project **NUMBER** form), with `depends_on` the service-agent grants. The gateway reads it, so it's created after the grants and destroyed before them.
+  - `modules/regional` (second-region instance of the base pieces the mode needs):
+    - `<prefix>-pn-egress`, created **with** `agent_connectivity_template` (precondition: number form), `ignore_changes = [protocols]`;
+    - `<prefix>-pn-egress-iap-authz` + `<prefix>-pn-egress-iap-policy` (REQUEST_AUTHZ, the base's `ignore_changes`);
+    - the region's 25 platform entries + egressor grant;
+    - a staging bucket `<project>-<prefix>-staging-<region>` for that region's engines.
+  - Root: `module.private_egress`, `module.pn_region` (`depends_on = [module.base]`), output `state_regions`, the guard's `depends_on` and `input.gateways` cover both. Base: one new module output, `egress_gateway_id`.
+- **Python.**
+  - `DemoConfig.private_networking` (enabled, region, subnet_range, psc_ip, dns_domains, vpc_egress, egress_name, manage_service_agent_roles, themes) and regional views: `cfg.for_region(r)`, `cfg.region_views()`, `cfg.home_region`. A view changes `region`, the gateway, registry, IAP names and the staging bucket; images, the UI, the state and recordings stay in the base region.
+  - Themes: `region:`, `network_mode: internet | private_networking`, component `ingress: all | internal`, scenario test `via: agent | direct`. `themes.theme_config(cfg, theme)` gives the theme's view; Internet themes get the base config unchanged.
+  - `tf vars` writes `private_networking` (names from `common.pn_names`, the region's platform endpoints); `{"enabled": false}` when off, exactly as before. `output-sync` merges `state_regions` into `state.json shared.regions.<region>` (replaced as a whole; removed when empty).
+  - `deploy-theme`, policy handlers, gateway logs, registry view, Terraform export, status, Verify, `reset`, `teardown <theme>`, `reset --all`, `check-clean` and `down` follow the theme's region. Engine URLs follow the region in the engine name.
+  - `agdemo_core/bypass.py` (the direct call), `agdemo_core/network_view.py` (the "Under the hood" data), `gateway_logs.is_private_ip` (10/8, 172.16/12, 192.168/16).
+- **Theme `privnet`** (us-west1): Payroll Agent; Payroll MCP (`ingress: internal`; `get_payslip` read-only, `update_bank_details` write); Benefits MCP (public). Policies: gateway attach, Payroll all / read-only by name / read-only by hint, Benefits allow. Five scenarios for the §7c steps.
+- **UI.**
+  - Network switch (Internet / Private Networking) that filters the theme picker; the env chip shows the theme's region.
+  - VPC node (attachment, PSC endpoint, DNS) between the gateway and Payroll MCP, with Benefits on the direct gateway path.
+  - New edge state `unreachable` (404) and a "private path" badge.
+  - "Under the hood: private network" card (`GET /api/themes/{id}/network`).
+  - Gateway log entries with a private `serverIp` marked "private path".
+  - Model Armor is hidden in this mode. The in-browser mock supports all of it.
+- **Tests:** `ui/backend/tests/test_private_networking.py` (42).
+
+**Plan-only results:**
+- **Fresh environment** (prefix `agdtest`, base us-east1, PN us-west1, local scratch state): **164 to add, 0 change, 0 destroy**, plan-safety OK.
+  - 97 are T3's (§7e).
+  - 67 are Private Networking: `private_egress` 13 (2 APIs, network, subnet, attachment, address, forwarding rule, zone, 2 records, 2 grants, template) and `pn_region` 54 (gateway, extension, policy, bucket, 25 + 25 registry).
+  - The gateway plans with `agent_connectivity_template = projects/<number>/locations/us-west1/agentConnectivityTemplates/agdtest-pn-tmpl-<hash>`; the template with the project-ID attachment and network.
+  - The same environment with PN disabled: 97 (= T3), and its tfvars are byte-identical to T3's.
+- **Live migration plan, PN disabled** (T3's generated imports, local scratch state): **69 to add, 8 to change, 0 to destroy, 35 to import**. The 104 resource actions are identical to T3's `live-actions.txt`. The tfvars generated from the live config are identical to T3's. The only plan difference is a new root output, `state_regions = {}`.
+- `terraform fmt -check -recursive` and `terraform validate` pass.
+
+**Decisions and deviations:**
+1. **Base not refactored.** Moving base resources into a shared regional submodule would change the live addresses the T2 imports target (`module.base.google_network_services_agent_gateway.gw["egress"]` and so on). `modules/regional` therefore repeats the base's gateway, authz and registry blocks with the same arguments and lifecycle rules, and a test checks the two stay in step. Unifying them later needs `moved` blocks after the T2 apply.
+2. **Q7 (service identity):** no google-beta and no local-exec. The `gcp-sa-agentgateway` grants reference the base egress gateway id in a precondition, so they're created after it: creating the first Agent Gateway provisions the project's gateway service agents. If a fresh-project run still fails with "service account does not exist", re-run apply. T5's fresh-project run settles it.
+3. **Model Armor:** not in this mode (minimal; no demo step needs it). No template, extension or grants in the PN region; the UI hides the checkbox; `reset --all` skips it there.
+4. **No ingress gateway** in the PN region; Private Networking themes have no `ingress:user` edge.
+5. **IAP names in the PN region:** `<prefix>-pn-egress-iap-*` (next to `<prefix>-pn-egress`), so log entries name the right policy.
+6. **Bypass probe:** a scenario test with `via: direct` is run by the UI backend. Live: an HTTPS `initialize` + `tools/call` to every URL form; 404 → `unreachable`. Demo: simulated. The 404 of an unbound agent (step 1b) comes from the orchestrator's normal probe; a 404 is mapped to `unreachable` only for `ingress: internal` targets, so Internet themes still show `error`.
+7. **Steps 2 and 3** are the same GCP state (registration happens at deploy). They're separate scenarios for the talk track; registration isn't a toggle.
+8. **The guard's `depends_on`** now lists all three modules. The T3 test assertion was updated to match.
+9. **Shared grants on `down`:** the `gcp-sa-agentgateway` grants are kept (`state rm`) only when another VPC-enabled gateway in the project that isn't ours exists (unreadable = shared). `manage_service_agent_roles` defaults to `terraform.shared_project_grants`.
+10. **The UI lists `private_networking.themes`** even when the mode is off (marked not deployed, so Demo only). `up` deploys them only when the mode is on (`cfg.enabled_themes()`).
+11. **`--allow-template-swap`** is on `tf plan`, `tf apply` and `up`, so a template content change (a create-before-destroy swap) passes the plan-safety check.
+
+**Needs a live run (T5):**
+- Apply in us-west1, timings, and the two-region `down` with the guard.
+- Q7 in a fresh project.
+- Binding by PATCH: an engine bound by PATCH (the demo's live toggle) to a template gateway. P0 only verified create-time binding, and F44 wasn't isolated.
+- Cross-region resources: Cloud Run in us-west1 pulling images from the base region's repo; the regional staging bucket with the vertexai SDK.
+- Steps 1–5 live: the 404 from the backend and from the unbound engine, 403, the grant → 200 delay, and the real `serverIp` in the log.
+- Both URL forms accepted by the registry and IAP.
+- Cloud Run `--ingress=internal` with `public_targets` false (id-token auth over the PSC path).
+- `reset --all` and `check-clean` against real us-west1 resources.
 
 ## 8. Open questions
 

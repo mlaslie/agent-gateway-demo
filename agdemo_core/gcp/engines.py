@@ -24,8 +24,16 @@ _inflight: dict[str, dict[str, Any]] = {}
 _lock = threading.Lock()
 
 
+def region_of(cfg: DemoConfig, name: str) -> str:
+    """The region in a reasoningEngines (or operation) resource name; the config view's region otherwise.
+    Engines of a theme in another region (T4 Private Networking) are reached at that region's endpoint."""
+    if "/locations/" in (name or ""):
+        return name.split("/locations/", 1)[1].split("/", 1)[0]
+    return cfg.region
+
+
 def engine_url(cfg: DemoConfig, engine: str) -> str:
-    return f"{aiplatform(cfg.region)}/{engine}"
+    return f"{aiplatform(region_of(cfg, engine))}/{engine}"
 
 
 def get_engine(r: Rest, cfg: DemoConfig, engine: str) -> dict | None:
@@ -49,7 +57,7 @@ def principal(cfg: DemoConfig, eng: dict | None, engine: str) -> str:
     num = project_number(cfg.project)
     eid = engine.rstrip("/").split("/")[-1]
     return (f"principal://agents.global.org-{org}.system.id.goog/resources/aiplatform/projects/{num}"
-            f"/locations/{cfg.region}/reasoningEngines/{eid}")
+            f"/locations/{region_of(cfg, engine)}/reasoningEngines/{eid}")
 
 
 def project_principal_set(cfg: DemoConfig) -> str:
@@ -61,7 +69,7 @@ def project_principal_set(cfg: DemoConfig) -> str:
 
 def _op_done(r: Rest, cfg: DemoConfig, op_name: str) -> tuple[bool, str | None]:
     try:
-        op = r.get(f"{aiplatform(cfg.region)}/{op_name}")
+        op = r.get(f"{aiplatform(region_of(cfg, op_name))}/{op_name}")
     except GcpError as e:
         return (True, None) if e.not_found else (False, None)
     if not op.get("done"):
@@ -208,5 +216,5 @@ def set_gateway_paths(r: Rest, cfg: DemoConfig, engine: str, targets: dict[str, 
             _persist(engine, rec)
             break
     if wait:
-        r.wait(op, aiplatform(cfg.region), timeout=timeout, interval=15)
+        r.wait(op, aiplatform(region_of(cfg, engine)), timeout=timeout, interval=15)
     return {"changed": True, "operation": op.get("name")}

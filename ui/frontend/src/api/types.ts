@@ -9,7 +9,9 @@ export type EdgeStateName =
   | "blocked"
   | "pending"
   | "unknown"
-  | "error";
+  | "error"
+  /** T4: 404 from an ingress=internal Cloud Run service (not reachable over the internet). */
+  | "unreachable";
 
 export interface EdgeState {
   state: EdgeStateName;
@@ -17,6 +19,8 @@ export interface EdgeState {
   source?: "live" | "simulated" | "replayed";
   detail?: string;
   http_status?: number | null;
+  /** T4 Private Networking: the network path of the call. */
+  path?: "private" | "internet";
 }
 
 export type PolicyStatusName = "applied" | "removed" | "pending" | "pending_removal" | "error";
@@ -28,11 +32,17 @@ export interface PolicyStatus {
   changed_at?: string | null;
 }
 
+export type NetworkMode = "internet" | "private_networking";
+
 export interface ThemeSummary {
   id: string;
   name: string;
   description?: string;
   deployed: boolean;
+  /** T4: Internet (base region) or Private Networking (VPC-enabled gateway, second region). */
+  network_mode?: NetworkMode;
+  region?: string;
+  model_armor?: boolean;
 }
 
 export interface AppConfig {
@@ -43,6 +53,8 @@ export interface AppConfig {
   live_available: boolean;
   live_unavailable_reason?: string;
   can_admin: boolean;
+  /** T4: the Private Networking mode (second region). */
+  private_networking?: { enabled: boolean; region: string };
   /** Gemini Enterprise app used for the "GE Demo" flow (prompts are pasted there). */
   gemini_enterprise?: { app_url: string; configured: boolean };
 }
@@ -78,6 +90,8 @@ export interface Component {
   id: string;
   kind: "a2a_agent" | "mcp_server";
   role_label?: string;
+  /** T4: "internal" = Cloud Run ingress internal (reachable only through the VPC). */
+  ingress?: "all" | "internal";
 }
 export type PolicyType =
   | "gateway_attach"
@@ -105,6 +119,8 @@ export interface ScenarioTest {
   agent?: string | null;
   /** Edge id → canned reply shown by the simulator for a successful call. */
   sample_replies?: Record<string, string>;
+  /** T4 bypass: "direct" = called from the demo UI backend, outside every agent and gateway. */
+  via?: "agent" | "direct";
 }
 export interface Scenario {
   id: string;
@@ -131,6 +147,42 @@ export interface Theme {
   mcp_servers: Record<string, McpServerSpec>;
   a2a_agents: Record<string, A2AAgentSpec>;
   scenarios: Scenario[];
+  region?: string | null;
+  network_mode?: NetworkMode;
+}
+
+/** GET /api/themes/{id}/network (T4 "Under the hood"): the pre-built network pieces of a Private Networking theme. */
+export interface NetworkPieces {
+  network: string;
+  subnet: string;
+  subnet_range: string;
+  attachment: string;
+  psc_address: string;
+  psc_ip: string;
+  psc_forwarding_rule: string;
+  psc_target: string;
+  dns_zone: string;
+  dns_name: string;
+  dns_records: string[];
+  template: string;
+  template_id: string;
+  template_ref: string;
+  deployment_model: string;
+  vpc_egress: string;
+  dns_domains: string[];
+  service_agent: string;
+  service_agent_roles: string[];
+  gateway: string;
+}
+export interface NetworkView {
+  theme: string;
+  network_mode: NetworkMode;
+  region: string;
+  source: "state" | "config" | "placeholder" | "none";
+  pieces: NetworkPieces | null;
+  internal_components?: string[];
+  public_components?: string[];
+  notes?: string[];
 }
 
 export interface ThemeResponse {
@@ -145,6 +197,8 @@ export interface GatewayState {
 }
 
 export interface ModelArmorState {
+  /** false: Model Armor isn't part of this theme's mode (Private Networking). */
+  available?: boolean;
   enabled: boolean;
   status: string;
   detail?: string;
@@ -218,6 +272,9 @@ export interface GatewayLogEntry {
   component: string | null;
   policies: GatewayLogPolicy[];
   decided_by: string | null;
+  /** T4: httpRequest.serverIp; private_path = it is in 10/8, 172.16/12 or 192.168/16 (through the VPC). */
+  server_ip?: string | null;
+  private_path?: boolean;
   summary: string;
   console_url: string | null;
   simulated: boolean;

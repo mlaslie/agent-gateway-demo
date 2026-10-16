@@ -2,6 +2,8 @@
  "id": "helpdesk",
  "name": "IT / HR Helpdesk",
  "description": "An internal helpdesk agent that resolves employee requests using a knowledge-base agent, an HR-records agent, a ticketing MCP server and a directory MCP server.\n",
+ "region": null,
+ "network_mode": "internet",
  "orchestrator": {
   "id": "helpdesk-agent",
   "display_name": "Helpdesk Agent",
@@ -24,22 +26,26 @@
   {
    "id": "kb-agent",
    "kind": "a2a_agent",
-   "role_label": "A2A agent"
+   "role_label": "A2A agent",
+   "ingress": "all"
   },
   {
    "id": "hr-records-agent",
    "kind": "a2a_agent",
-   "role_label": "A2A agent"
+   "role_label": "A2A agent",
+   "ingress": "all"
   },
   {
    "id": "tickets-mcp",
    "kind": "mcp_server",
-   "role_label": "MCP server"
+   "role_label": "MCP server",
+   "ingress": "all"
   },
   {
    "id": "directory-mcp",
    "kind": "mcp_server",
-   "role_label": "MCP server"
+   "role_label": "MCP server",
+   "ingress": "all"
   }
  ],
  "policies": [
@@ -453,6 +459,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "kb-agent": "Passwords need 14+ characters and are rotated every 180 days.",
       "hr-records-agent": "jdoe is Jordan Doe, Engineering."
@@ -471,6 +478,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "hr-records-agent": "Jordan Doe (jdoe) earns $182,000 a year, with an \"exceeds\" rating."
      }
@@ -528,6 +536,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "kb-agent": "Passwords need 14+ characters and are rotated every 180 days.",
       "hr-records-agent": "jdoe is Jordan Doe, Engineering."
@@ -570,6 +579,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "kb-agent": "Update GlobalProtect to v6.2 or later and switch the portal to vpn2.example.com; that fixes the 30-minute drops."
      }
@@ -587,6 +597,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "hr-records-agent": "Jordan Doe (jdoe) earns $182,000 a year, with an \"exceeds\" rating."
      }
@@ -609,6 +620,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "kb-agent": "KB Agent here: ready to answer IT and HR how-to questions.",
       "hr-records-agent": "HR Records Agent here: I can look up employee records."
@@ -653,6 +665,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {}
     },
     {
@@ -668,6 +681,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {}
     },
     {
@@ -708,6 +722,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {}
     }
    ]
@@ -742,6 +757,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "ingress:user": "Passwords need at least 14 characters, are rotated every 180 days, and can't reuse your last 10."
      }
@@ -759,6 +775,7 @@
       }
      ],
      "malicious": true,
+     "via": "agent",
      "sample_replies": {}
     }
    ]
@@ -805,6 +822,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "kb-agent": "Passwords need at least 14 characters and are rotated every 180 days."
      }
@@ -827,6 +845,7 @@
       }
      ],
      "malicious": true,
+     "via": "agent",
      "sample_replies": {}
     }
    ]
@@ -870,6 +889,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "hr-records-agent": "Jordan Doe (jdoe) earns $182,000 a year, with an \"exceeds\" rating."
      }
@@ -887,6 +907,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "hr-assistant/hr-records-agent": "Jordan Doe (jdoe) earns $182,000 a year, with an \"exceeds\" rating."
      }
@@ -919,6 +940,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "kb-agent": "KB Agent here: ready to answer IT and HR how-to questions.",
       "hr-records-agent": "HR Records Agent here: I can look up employee records.",

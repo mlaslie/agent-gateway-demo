@@ -37,6 +37,10 @@
   --e-error: var(--dark-red);
   --e-neutral: #80868b;
   --e-registry: #9aa0a6;
+  /* T4 Private Networking: unreachable (404, ingress internal) and the private VPC path. */
+  --e-unreachable: #8d6e63;
+  --teal: #00796b;
+  --teal-weak: #e0f2f1;
   /* Per-orchestrator accents (CONTRACTS §12): 0 = primary, 1.. = additional agents. */
   --agent-0: #4285f4;
   --agent-1: #a142f4;
@@ -78,6 +82,9 @@
     --e-unknown: #5f6368;
     --e-neutral: #9aa0a6;
     --e-registry: #6f747a;
+    --e-unreachable: #bcaaa4;
+    --teal: #80cbc4;
+    --teal-weak: rgba(128, 203, 196, 0.15);
     --agent-0: #8ab4f8;
     --agent-1: #d7aefb;
     --agent-2: #78d9ec;
@@ -3541,4 +3548,158 @@ a {
 }
 .test-label .agent-chip {
   margin-right: 0;
+}
+
+
+/* ---------- T4: Private Networking mode (VPC view, unreachable, private path) ---------- */
+.env-chip.env-pn .env-dot {
+  background: var(--teal);
+}
+.seg-network .seg.on.seg-net-private_networking {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: var(--surface);
+}
+.node-vpc {
+  width: 236px;
+  border: 2px dashed var(--teal);
+  background: color-mix(in srgb, var(--teal-weak) 60%, var(--surface));
+}
+.node-vpc.faded {
+  opacity: 0.55;
+}
+.node-vpc.active {
+  border-style: solid;
+  box-shadow: 0 0 0 4px var(--teal-weak), var(--shadow-2);
+}
+.badge-vpc {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: var(--surface);
+}
+.icon-vpc {
+  background: var(--teal-weak);
+  color: var(--teal);
+}
+.vpc-pieces {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+.vpc-piece {
+  border: 1px solid color-mix(in srgb, var(--teal) 35%, var(--border));
+  border-radius: 8px;
+  padding: 5px 8px;
+  background: var(--surface);
+}
+.vpc-piece-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.vpc-piece-value {
+  font-size: 11.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.node-mcp.is-internal {
+  border-color: var(--teal);
+}
+.badge-internal {
+  color: var(--teal);
+  border-color: color-mix(in srgb, var(--teal) 45%, var(--border));
+}
+.edge-path.st-unreachable {
+  stroke: var(--e-unreachable);
+  stroke-dasharray: 2 5;
+  stroke-width: 2.5px;
+  stroke-linecap: round;
+}
+.edge-path.st-allowed.path-private {
+  stroke: var(--teal);
+}
+.edge-arrow.st-unreachable {
+  fill: var(--e-unreachable);
+}
+.badge-unreachable {
+  width: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  background: var(--e-unreachable);
+}
+.badge-private {
+  background: var(--teal);
+  color: var(--surface);
+}
+.li-unreachable {
+  background: var(--e-unreachable);
+}
+.li-path-private {
+  background: var(--teal);
+  color: var(--surface);
+}
+.sp-unreachable {
+  background: var(--e-unreachable);
+}
+.state-dot.st-unreachable {
+  background: var(--e-unreachable);
+}
+.tool-row.st-unreachable {
+  border-left-color: var(--e-unreachable);
+}
+.tool-row.st-unreachable .tool-name {
+  color: var(--text-3);
+}
+.private-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--teal-weak);
+  color: var(--teal);
+  border: 1px solid color-mix(in srgb, var(--teal) 40%, transparent);
+  white-space: nowrap;
+}
+.network-card .network-sum {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+}
+.network-src {
+  font-size: 11.5px;
+  margin-bottom: 6px;
+}
+.network-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.network-row {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 8px;
+  font-size: 12px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border);
+}
+.network-row dt {
+  color: var(--text-2);
+}
+.network-row dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.network-notes {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-2);
 }

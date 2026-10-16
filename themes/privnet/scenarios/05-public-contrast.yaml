@@ -1,0 +1,18 @@
+id: public-contrast
+order: 5
+title: "Public MCP, same policy"
+subtitle: "Internet path, same registry + IAP"
+description: |
+  Benefits MCP is a normal public Cloud Run service. Through the same gateway it follows exactly the same
+  policy (403 until granted, then 200), but the gateway log shows a public serverIp: the internet path.
+  Not shown, only explained: an agent with its own PSC interface would reach the VPC without the gateway
+  (ungoverned), which is why the demo never gives the agent one.
+flow: egress
+nodes: [orchestrator, egress_gateway, registry, payroll-mcp, benefits-mcp]
+preconditions: [gw-egress]
+policies: [allow-benefits, payroll-readonly]
+tests:
+  - id: side-by-side
+    label: "Both servers"
+    prompt: "Show jdoe's payslip and the benefit plans."
+    probes: [{edge: "payroll-mcp:get_payslip"}, {edge: "benefits-mcp:list_plans"}]

@@ -8,11 +8,15 @@ from ..gcp import model_armor as ma
 from ..gcp.engines import project_principal_set
 from ..gcp.rest import GcpError, aiplatform
 from ..state import load_state, save_state
-from ..themes import load_theme
+from ..themes import load_theme, theme_config
 from . import common as c
 
 
 def teardown_theme(cfg: DemoConfig, theme_id: str) -> None:
+    try:
+        cfg = theme_config(cfg, load_theme(theme_id))     # T4: the theme's region
+    except Exception:  # noqa: BLE001 (unknown/broken theme: the base region, as before)
+        pass
     r = c.client(cfg)
     st = load_state()
     ts = st.get("themes", {}).get(theme_id, {})

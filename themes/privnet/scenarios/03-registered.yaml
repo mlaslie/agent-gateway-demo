@@ -1,0 +1,17 @@
+id: registered
+order: 3
+title: "Registered ≠ allowed"
+subtitle: "In Agent Registry, still 403"
+description: |
+  Open Agent Registry: Payroll MCP is registered with both run.app URL forms (SERVICE-NUMBER.REGION.run.app
+  and SERVICE-HASH.a.run.app; the registry matches URLs exactly) and its tool spec. No identity holds
+  roles/iap.egressor on it, so the gateway still denies the call.
+flow: egress
+nodes: [orchestrator, egress_gateway, registry, payroll-mcp]
+preconditions: [gw-egress]
+policies: []
+tests:
+  - id: registered-no-grant
+    label: "Registered, no grant"
+    prompt: "Update jdoe's bank account to IBAN 0000 and show the payslip."
+    probes: [{edge: "payroll-mcp:get_payslip"}, {edge: "payroll-mcp:update_bank_details"}]

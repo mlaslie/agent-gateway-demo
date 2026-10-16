@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from agdemo_core import recordings, simulate
-from agdemo_core.themes import Theme, list_themes, load_theme
+from agdemo_core.themes import Theme, list_themes, load_theme, theme_config, theme_region
 
 from . import settings
 from .engine import Engine, LiveUnavailable
@@ -89,12 +89,25 @@ def _require_admin(request: Request, mode: str) -> None:
 
 
 def _enabled_themes() -> list[str]:
+    """themes.enabled, plus the Private Networking themes (always listed: without the mode they run in Demo)."""
     avail = list_themes()
     cfg, _ = settings.get_config()
     if cfg is None:
         return avail
     enabled = [t for t in cfg.themes.enabled if t in avail]
-    return enabled or avail
+    if not enabled:
+        return avail
+    return enabled + [t for t in cfg.private_networking.themes if t in avail and t not in enabled]
+
+
+def _view(cfg, theme: Theme):
+    """The theme's regional config view (T4); the base config when the theme's mode isn't configured."""
+    if cfg is None:
+        return None
+    try:
+        return theme_config(cfg, theme)
+    except ValueError:
+        return cfg
 
 
 async def _paced(events, pace: float):
@@ -122,7 +135,9 @@ def get_config(request: Request) -> dict[str, Any]:
         try:
             t = load_theme(tid)
             themes.append({"id": t.id, "name": t.name, "description": t.description,
-                           "deployed": settings.theme_deployed(state, tid)})
+                           "deployed": settings.theme_deployed(state, tid) and _pn_ok(cfg, t),
+                           "network_mode": t.network_mode, "region": theme_region(cfg, t),
+                           "model_armor": t.has_model_armor})
         except Exception as e:  # a broken theme pack shouldn't take the UI down
             log.warning("theme %s failed to load: %s", tid, e)
     ids = [t["id"] for t in themes]
@@ -137,10 +152,33 @@ def get_config(request: Request) -> dict[str, Any]:
                               "configured": bool(cfg and cfg.gemini_enterprise.app_id)},
         "environment": {"project_id": cfg.project if cfg else "", "region": cfg.region if cfg else "",
                         "prefix": cfg.prefix if cfg else ""},
+        "private_networking": {"enabled": bool(cfg and cfg.private_networking.enabled),
+                               "region": cfg.private_networking.region if cfg else "us-west1"},
         "live_available": live_ok,
         "live_unavailable_reason": "" if live_ok else live_why,
         "can_admin": settings.can_admin(request.headers),
     }
+
+
+def _pn_ok(cfg, theme: Theme) -> bool:
+    if theme.network_mode == "internet" or cfg is None:
+        return theme.network_mode == "internet"
+    try:
+        theme_config(cfg, theme)
+        return True
+    except ValueError:
+        return False
+
+
+@app.get("/api/themes/{theme_id}/network")
+def network(theme_id: str, mode: Mode = "demo") -> dict[str, Any]:
+    """T4 "Under the hood": the pre-built network pieces of a Private Networking theme (VPC, subnet, attachment,
+    PSC endpoint, run.app zone, connectivity template, VPC-enabled gateway) from state.json shared.regions, or
+    simulated from config in Demo mode / before `up`. Read-only, no GCP call."""
+    from agdemo_core import network_view
+    theme = _theme(theme_id)
+    cfg, _ = settings.get_config()
+    return network_view.view(cfg, settings.get_state(), theme, live=mode != "demo")
 
 
 @app.get("/api/themes/{theme_id}")
@@ -206,7 +244,7 @@ async def run_test(theme_id: str, test_id: str, body: RunBody, request: Request)
             async for e in _paced(engine.run_test(theme, scenario, test, body.mode, body.use_llm), pace):
                 st = e.get("state") if e.get("type") == "edge" else None
                 if st and st.get("source") != "live":       # no real gateway log for simulated/replayed calls
-                    sim_logs.add_edges(theme, {e["edge"]: st}, _prefix())
+                    sim_logs.add_edges(theme, {e["edge"]: st}, _prefix(), **_sim_kw())
                 yield {"data": json.dumps(e)}
         except asyncio.CancelledError:
             raise
@@ -222,7 +260,7 @@ async def probe(theme_id: str, body: ModeBody, request: Request) -> dict[str, An
     theme = _theme(theme_id)
     if body.mode == "demo":
         edges = engine.demo.state(theme)["edges"]
-        sim_logs.add_edges(theme, edges, _prefix())
+        sim_logs.add_edges(theme, edges, _prefix(), **_sim_kw())
         return {"edges": edges}
     try:
         await asyncio.wait_for(engine.live.probe(theme), settings.live_timeout())
@@ -237,7 +275,7 @@ async def probe(theme_id: str, body: ModeBody, request: Request) -> dict[str, An
             except Exception:  # noqa: BLE001
                 applied, ma = set(), False
             edges = simulate.evaluate(theme, applied, ma)
-            sim_logs.add_edges(theme, edges, _prefix())
+            sim_logs.add_edges(theme, edges, _prefix(), **_sim_kw())
             return {"edges": edges, "fallback": reason}
         if isinstance(e, LiveUnavailable):
             raise HTTPException(409, f"Live mode unavailable: {e}") from e
@@ -262,6 +300,11 @@ def _prefix() -> str:
     return cfg.prefix if cfg else "agdemo"
 
 
+def _sim_kw() -> dict[str, Any]:
+    cfg, _ = settings.get_config()
+    return {"psc_ip": cfg.private_networking.psc_ip} if cfg else {}
+
+
 @app.get("/api/themes/{theme_id}/gateway-logs")
 async def gateway_logs(theme_id: str, mode: Mode = "demo", since: str | None = None,
                        denied_only: bool = False, limit: int = 50) -> dict[str, Any]:
@@ -278,8 +321,9 @@ async def gateway_logs(theme_id: str, mode: Mode = "demo", since: str | None = N
         from agdemo_core.gcp import gateway_logs as gl
         from agdemo_core.gcp.rest import rest
 
+        view = _view(cfg, theme)
         out = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: gl.fetch(rest(cfg.project), cfg, settings.get_state(), theme, since, denied_only, limit))
+            None, lambda: gl.fetch(rest(cfg.project), view, settings.get_state(), theme, since, denied_only, limit))
     except Exception as e:  # noqa: BLE001
         if mode == "live_with_fallback":
             return {"source": "simulated", "filter": "", "console_url": None, "entries": simulated,
@@ -304,7 +348,7 @@ async def registry_view(theme_id: str, mode: Mode = "demo", refresh: bool = Fals
     state = settings.get_state()
 
     def simulated(reason: str | None = None) -> dict[str, Any]:
-        return rv.simulate(theme, set(engine.demo.applied_for(theme.id)), cfg, state, reason)
+        return rv.simulate(theme, set(engine.demo.applied_for(theme.id)), _view(cfg, theme), state, reason)
 
     if mode == "demo":
         return simulated()
@@ -321,7 +365,8 @@ async def registry_view(theme_id: str, mode: Mode = "demo", refresh: bool = Fals
         from agdemo_core.gcp.rest import project_number, rest
 
         out = await asyncio.get_running_loop().run_in_executor(
-            None, lambda: rv.fetch(rest(cfg.project), cfg, state, theme, lambda: project_number(cfg.project)))
+            None, lambda: rv.fetch(rest(cfg.project), _view(cfg, theme), state, theme,
+                                   lambda: project_number(cfg.project)))
     except Exception as e:  # noqa: BLE001
         if mode == "live_with_fallback":
             return simulated(f"{type(e).__name__}: {e}")
@@ -350,7 +395,7 @@ async def terraform_export(theme_id: str, mode: Mode = "demo", include_shared: b
             if mode == "live":
                 raise HTTPException(409, f"Live mode unavailable: {e}") from e
             applied, ma, error = set(engine.demo.applied_for(theme.id)), engine.demo.model_armor, str(e)
-    files = tf.render(cfg, state, theme, applied, ma, include_shared)
+    files = tf.render(_view(cfg, theme), state, theme, applied, ma and theme.has_model_armor, include_shared)
     out: dict[str, Any] = {"theme": theme.id, "files": files, "applied": [p.id for p in theme.policies if p.id in applied],
                            "model_armor": ma, "include_shared": include_shared, "source": source,
                            "state_line": tf.state_line(theme, applied, ma)}

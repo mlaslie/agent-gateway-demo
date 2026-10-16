@@ -2,6 +2,8 @@
  "id": "retail",
  "name": "Retail Store Operations",
  "description": "A store-operations agent that helps store managers using a merchandising agent, a pricing agent that holds confidential cost and margin data, an inventory MCP server and an orders MCP server.\n",
+ "region": null,
+ "network_mode": "internet",
  "orchestrator": {
   "id": "store-ops-agent",
   "display_name": "Store Ops Agent",
@@ -24,22 +26,26 @@
   {
    "id": "merchandising-agent",
    "kind": "a2a_agent",
-   "role_label": "A2A agent"
+   "role_label": "A2A agent",
+   "ingress": "all"
   },
   {
    "id": "pricing-agent",
    "kind": "a2a_agent",
-   "role_label": "A2A agent"
+   "role_label": "A2A agent",
+   "ingress": "all"
   },
   {
    "id": "inventory-mcp",
    "kind": "mcp_server",
-   "role_label": "MCP server"
+   "role_label": "MCP server",
+   "ingress": "all"
   },
   {
    "id": "orders-mcp",
    "kind": "mcp_server",
-   "role_label": "MCP server"
+   "role_label": "MCP server",
+   "ingress": "all"
   }
  ],
  "policies": [
@@ -536,6 +542,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "merchandising-agent": "20% off all tents and camp stoves through Sunday.",
       "pricing-agent": "Trailhead 2-Person Tent margin is 59.2%."
@@ -554,6 +561,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "pricing-agent": "Trailhead 2-Person Tent: unit cost $61.20, shelf $149.99, gross margin 59.2%. Markdown to $119.99 planned for Nov 15."
      }
@@ -611,6 +619,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "merchandising-agent": "20% off all tents and camp stoves through Sunday.",
       "pricing-agent": "Trailhead 2-Person Tent margin is 59.2%."
@@ -653,6 +662,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "merchandising-agent": "Yes: the Ember Camp Stove is 20% off through Sunday (\"Fall Into Camping\"). It's in aisle 14, bay A."
      }
@@ -670,6 +680,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "pricing-agent": "Trailhead 2-Person Tent: unit cost $61.20, shelf $149.99, gross margin 59.2%."
      }
@@ -692,6 +703,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "merchandising-agent": "Merchandising Agent here: I can help with products and promotions.",
       "pricing-agent": "Pricing Agent here: I hold cost and margin data."
@@ -737,6 +749,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {}
     },
     {
@@ -752,6 +765,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {}
     },
     {
@@ -772,6 +786,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {}
     },
     {
@@ -812,6 +827,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {}
     }
    ]
@@ -846,6 +862,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "ingress:user": "This week: 20% off all tents and camp stoves through Sunday, and buy 2 insulated bottles, get the 3rd free."
      }
@@ -863,6 +880,7 @@
       }
      ],
      "malicious": true,
+     "via": "agent",
      "sample_replies": {}
     }
    ]
@@ -909,6 +927,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "merchandising-agent": "20% off all tents and camp stoves through Sunday; buy 2 insulated bottles, get the 3rd free."
      }
@@ -931,6 +950,7 @@
       }
      ],
      "malicious": true,
+     "via": "agent",
      "sample_replies": {}
     }
    ]
@@ -974,6 +994,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "pricing-agent": "Trailhead 2-Person Tent: unit cost $61.20, shelf $149.99, gross margin 59.2%."
      }
@@ -991,6 +1012,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "pricing-analyst/pricing-agent": "Trailhead 2-Person Tent: unit cost $61.20, shelf $149.99, gross margin 59.2%."
      }
@@ -1023,6 +1045,7 @@
       }
      ],
      "malicious": false,
+     "via": "agent",
      "sample_replies": {
       "merchandising-agent": "Merchandising Agent here: I can help with products and promotions.",
       "pricing-agent": "Pricing Agent here: I hold cost and margin data.",

@@ -39,6 +39,7 @@ export function GatewayLogViewer({ entry, onClose }: { entry: GatewayLogEntry; o
       subtitle={
         <>
           <DecisionPill d={entry.decision} />
+          {entry.private_path && <span className="private-chip">private path · {entry.server_ip}</span>}
           <span className="mono">{entry.edge ?? entry.host}</span>
           <span>· {fmtTime(Date.parse(entry.timestamp))}</span>
           {entry.simulated && <span className="tag tag-sim">Simulated</span>}
@@ -64,6 +65,11 @@ export function GatewayLogViewer({ entry, onClose }: { entry: GatewayLogEntry; o
         {entry.simulated
           ? "Simulated entry, shaped like the one Agent Gateway writes to Cloud Logging for this request."
           : "The Cloud Logging entry Agent Gateway wrote for this request."}{" "}
+        {entry.private_path && (
+          <>
+            httpRequest.serverIp <span className="mono">{entry.server_ip}</span> is a private address: the request went through your VPC (the PSC endpoint), not the internet.{" "}
+          </>
+        )}
         {entry.decided_by && (
           <>
             Decided by <span className="mono">{entry.decided_by}</span>.
@@ -201,6 +207,7 @@ export function GatewayLogsSheet({ d, api, onClose }: { d: Demo; api: Api; onClo
                       <td className="mono gw-time">{fmtTime(Date.parse(e.timestamp))}</td>
                       <td>
                         <DecisionPill d={e.decision} />
+                        {e.private_path && <span className="private-chip" title={`httpRequest.serverIp ${e.server_ip}`}>private path</span>}
                       </td>
                       <td className="gw-target">
                         {t.name}

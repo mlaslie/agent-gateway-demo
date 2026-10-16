@@ -1,14 +1,15 @@
 // In-browser mock of the backend (CONTRACTS §7). Enabled with VITE_MOCK=1 or ?mock=1.
 // Simulates §3 rules, Live-mode propagation delays ("pending") and SSE test runs.
 import type { Api } from "./client";
-import { evaluate } from "./simulate";
+import { evaluate, isInternal, isPrivateNetworking } from "./simulate";
 import { agentName, edgeLabel, policySource, splitSource } from "../util";
 import { mockTerraform } from "./mockTerraform";
 import helpdeskJson from "./mockTheme.helpdesk.json";
 import retailJson from "./mockTheme.retail.json";
-import type { AppConfig, EdgeState, GatewayLogEntry, GatewayLogsResponse, Mode, Policy, PolicyStatus, RegistryAccess, RegistryItem, RegistryView, SseEvent, TerraformExport, Theme, ThemeState } from "./types";
+import privnetJson from "./mockTheme.privnet.json";
+import type { NetworkView, AppConfig, EdgeState, GatewayLogEntry, GatewayLogsResponse, Mode, Policy, PolicyStatus, RegistryAccess, RegistryItem, RegistryView, SseEvent, TerraformExport, Theme, ThemeState } from "./types";
 
-// Regenerate (repo root): uv run python -c "import json; from agdemo_core.themes import load_theme; [json.dump(load_theme(t).model_dump(mode='json'), open(f'ui/frontend/src/api/mockTheme.{t}.json','w'), indent=1) for t in ['helpdesk','retail']]"
+// Regenerate (repo root): uv run python -c "import json; from agdemo_core.themes import load_theme; [json.dump(load_theme(t).model_dump(mode='json'), open(f'ui/frontend/src/api/mockTheme.{t}.json','w'), indent=1) for t in ['helpdesk','retail','privnet']]"
 const QS = new URLSearchParams(location.search);
 // ?typical=N overrides every policy's typical apply/remove time (seconds) so the progress bar and the
 // "taking longer than usual" note can be seen within the mock's short pending window.
@@ -20,7 +21,13 @@ function withTypical(t: Theme): Theme {
 const THEMES: Record<string, Theme> = {
   helpdesk: withTypical(helpdeskJson as unknown as Theme),
   retail: withTypical(retailJson as unknown as Theme),
+  privnet: withTypical(privnetJson as unknown as Theme),
 };
+const MOCK_PSC_IP = "10.70.250.10";
+const MOCK_PUBLIC_IP = "34.143.77.2";
+const regionOf = (t: Theme) => t.region ?? "us-east4";
+const gatewayOf = (t: Theme) => (isPrivateNetworking(t) ? "agdemo-pn-egress" : "agdemo-egress");
+const NO_MA = { enabled: false, available: false, status: "removed", detail: "Model Armor isn't part of the Private Networking mode", typical_seconds: null, changed_at: null };
 // Live-mode propagation delay in the mock (?pending=<seconds>, default 15 s so the timers are visible).
 const LIVE_DELAY_MS = (Number(QS.get("pending")) || 15) * 1000;
 const MA_TYPICAL_SECONDS = TYPICAL_OVERRIDE || 240;
@@ -135,11 +142,12 @@ function stateFor(theme: Theme, mode: Mode): ThemeState {
   for (const p of theme.policies) policies[p.id] = policyStatus(s, p.id);
   const intended = new Set(s.applied);
   for (const [pid, p] of s.pending) p.target ? intended.add(pid) : intended.delete(pid);
-  const expected = evaluate(theme, intended, s.maPending?.target ?? s.modelArmor, null, "simulated");
+  const maOn = !isPrivateNetworking(theme) && (s.maPending?.target ?? s.modelArmor);
+  const expected = evaluate(theme, intended, maOn, null, "simulated");
   let edges: Record<string, EdgeState>;
   if (mode === "demo") edges = expected;
   else {
-    edges = evaluate(theme, s.applied, s.modelArmor, null, "live");
+    edges = evaluate(theme, s.applied, !isPrivateNetworking(theme) && s.modelArmor, null, "live");
     for (const e of Object.keys(edges)) if (edgeTouchedByPending(theme, s, e)) edges[e] = { state: "pending", governed: true, source: "live", detail: "Policy change propagating" };
   }
   const gw = (path: string) => {
@@ -150,7 +158,7 @@ function stateFor(theme: Theme, mode: Mode): ThemeState {
   return {
     policies,
     gateways: { egress: gw("egress"), ingress: gw("ingress") },
-    model_armor: {
+    model_armor: isPrivateNetworking(theme) ? { ...NO_MA } : {
       enabled: s.maPending?.target ?? s.modelArmor,
       status: s.maPending ? "pending" : s.modelArmor ? "applied" : "removed",
       detail: s.maPending ? "Updating gateways (mock)" : "",
@@ -269,7 +277,7 @@ function mockRegistry(theme: Theme, applied: Set<string>, live: boolean): Regist
       }));
   const base = { label: undefined, protocol: null, card: null, access_error: null, error: null };
   const res = (kind: string, id: string) => `projects/${GW_PROJECT}/locations/us-east4/${kind}/${id}`;
-  const host = (cid: string) => `https://agdemo-${theme.id}-${cid}-${GW_PROJECT_NUM}.us-east4.run.app`;
+  const host = (cid: string) => `https://agdemo-${theme.id}-${cid}-${GW_PROJECT_NUM}.${regionOf(theme)}.run.app`;
   const agents: RegistryItem[] = theme.components
     .filter((c) => c.kind === "a2a_agent")
     .map((c) => {
@@ -310,37 +318,45 @@ function mockRegistry(theme: Theme, applied: Set<string>, live: boolean): Regist
 
 function synthEntry(theme: Theme, edge: string, decision: "allowed" | "denied" | "blocked", ts: number): GatewayLogEntry {
   const [comp, tool] = splitSource(edge)[1].split(":");
-  const host = `agdemo-${theme.id}-${comp}-${GW_PROJECT_NUM}.us-east4.run.app`;
+  const region = regionOf(theme);
+  const pn = isPrivateNetworking(theme);
+  const host = `agdemo-${theme.id}-${comp}-${GW_PROJECT_NUM}.${region}.run.app`;
   const status = decision === "allowed" ? 200 : 403;
   const url = tool ? `https://${host}/mcp` : `https://${host}/`;
-  const polName = (n: string) => `projects/${GW_PROJECT_NUM}/locations/us-east4/authzPolicies/${n}`;
-  const pols = [{ name: polName(GW_POLICY.denied), result: decision === "denied" ? "DENIED" : "ALLOWED" }];
+  const polName = (n: string) => `projects/${GW_PROJECT_NUM}/locations/${region}/authzPolicies/${n}`;
+  const iapPol = pn ? "agdemo-pn-egress-iap-policy" : GW_POLICY.denied;
+  // T4: allowed entries carry httpRequest.serverIp (denied ones don't): the PSC endpoint for an internal target.
+  const serverIp = pn && decision === "allowed" ? `${isInternal(theme, comp) ? MOCK_PSC_IP : MOCK_PUBLIC_IP}:443` : null;
+  const privatePath = !!serverIp && serverIp.startsWith("10.");
+  const pols = [{ name: polName(iapPol), result: decision === "denied" ? "DENIED" : "ALLOWED" }];
   if (decision === "blocked") pols.push({ name: polName(GW_POLICY.blocked), result: "DENIED" });
   const insertId = hex(14);
   const iso = new Date(ts).toISOString();
   const raw = {
-    httpRequest: { latency: `${(0.02 + Math.random() * 0.25).toFixed(6)}s`, protocol: "HTTP/1.1", requestMethod: "POST", requestUrl: url, status, userAgent: "python-httpx2/2.13.1" },
+    httpRequest: { latency: `${(0.02 + Math.random() * 0.25).toFixed(6)}s`, protocol: "HTTP/1.1", requestMethod: "POST", requestUrl: url, status, userAgent: "python-httpx2/2.13.1", ...(serverIp ? { serverIp } : {}) },
     insertId,
     jsonPayload: {
       "@type": "type.googleapis.com/google.cloud.loadbalancing.type.LoadBalancerLogEntry",
       agentGatewayInfo: {
-        agentRegistryResource: `projects/${GW_PROJECT_NUM}/locations/us-east4/${tool ? "mcpServers" : "agents"}/agentregistry-${theme.id}-${comp}`,
+        agentRegistryResource: `projects/${GW_PROJECT_NUM}/locations/${region}/${tool ? "mcpServers" : "agents"}/agentregistry-${theme.id}-${comp}`,
         ...(tool ? { mcpInfo: { method: "tools/call", parameter: tool } } : {}),
       },
       authzPolicyInfo: { policies: pols, result: decision === "allowed" ? "ALLOWED" : "DENIED" },
       enforcedGatewaySecurityPolicy: { hostname: host, matchedRules: [{ action: "ALLOWED", name: "default_denied" }], requestWasTlsIntercepted: true },
     },
     logName: `projects/${GW_PROJECT}/logs/networkservices.googleapis.com%2Fgateway_requests`,
-    resource: { labels: { gateway_name: "agdemo-egress", gateway_type: "SECURE_WEB_GATEWAY", location: "us-east4" }, type: "networkservices.googleapis.com/Gateway" },
+    resource: { labels: { gateway_name: gatewayOf(theme), gateway_type: "SECURE_WEB_GATEWAY", location: region }, type: "networkservices.googleapis.com/Gateway" },
     severity: status === 200 ? "INFO" : "WARNING",
     timestamp: iso,
   };
-  const denying = GW_POLICY[decision] ?? null;
+  const denying = decision === "denied" ? iapPol : (GW_POLICY[decision] ?? null);
   const what = tool ? `tools/call ${tool}` : "POST /";
   return {
     id: insertId,
     timestamp: iso,
-    gateway: "agdemo-egress",
+    gateway: gatewayOf(theme),
+    server_ip: serverIp,
+    private_path: privatePath,
     decision,
     status,
     method: "POST",
@@ -352,7 +368,7 @@ function synthEntry(theme: Theme, edge: string, decision: "allowed" | "denied" |
     component: comp,
     policies: pols.map((p) => ({ name: p.name.split("/").pop()!, kind: p.name.includes("-ma-") ? "model_armor" : "iap", result: p.result })),
     decided_by: denying,
-    summary: `${decision.toUpperCase()}${denying ? ` by ${denying}` : ""} · ${what} · ${status}`,
+    summary: `${decision.toUpperCase()}${denying ? ` by ${denying}` : ""} · ${what} · ${status}${privatePath ? " · private path" : ""}`,
     console_url: consoleQueryUrl(`insertId="${insertId}" timestamp="${iso}"`),
     simulated: true,
     raw,
@@ -397,7 +413,8 @@ async function* runEvents(themeId: string, testId: string, scenarioId: string | 
   // CONTRACTS §12: probes are grouped per orchestrator; a natural-language run goes to the test's agent.
   const agents = [...new Set(test.probes.filter((p) => !p.edge.startsWith("ingress:")).map((p) => splitSource(p.edge)[0]))];
   const who = useLlm || agents.length <= 1 ? agentName(t, test.agent ?? agents[0] ?? null) : agents.map((a) => agentName(t, a)).join(" and ");
-  yield {
+  if (test.via === "direct") yield { type: "status", text: "Calling the MCP servers directly from the demo UI backend (no agent, no gateway)…" };
+  else yield {
     type: "status",
     text: ingress
       ? `Sending prompt to ${t.orchestrator.display_name} through its Agent Runtime endpoint…`
@@ -419,7 +436,9 @@ async function* runEvents(themeId: string, testId: string, scenarioId: string | 
     logEdges(t, { [p.edge]: st });
     yield { type: "edge", edge: p.edge, state: st };
     const text =
-      st.state === "denied"
+      st.state === "unreachable"
+        ? `${edgeLabel(t, p.edge)} → 404: not reachable (Cloud Run ingress internal)`
+        : st.state === "denied"
         ? `${edgeLabel(t, p.edge)} → ${st.http_status ?? 403} denied by Agent Gateway`
         : st.state === "blocked"
           ? p.edge.startsWith("ingress:")
@@ -434,7 +453,13 @@ async function* runEvents(themeId: string, testId: string, scenarioId: string | 
   }
   await sleep(500, signal);
   const states = Object.values(done).map((d) => d.state);
-  const summary = states.includes("blocked")
+  const summary = test.via === "direct"
+    ? states.includes("unreachable")
+      ? "The internal service isn't reachable from outside your VPC (404); the public one answered."
+      : "Direct calls answered."
+    : states.every((x) => x === "unreachable")
+      ? "Payroll is not reachable from where I run (404): it only accepts traffic from your VPC."
+    : states.includes("blocked")
     ? "I can't help with that — the request was blocked by Model Armor (prompt injection / sensitive data)."
     : states.every((x) => x === "denied")
       ? "Access was blocked by policy: Agent Gateway denied the call(s)."
@@ -451,7 +476,8 @@ export const mockApi: Api = {
   isMock: true,
   async getConfig(): Promise<AppConfig> {
     return delay({
-      themes: Object.values(THEMES).map((t) => ({ id: t.id, name: t.name, description: t.description, deployed: t.id === "helpdesk" })),
+      themes: Object.values(THEMES).map((t) => ({ id: t.id, name: t.name, description: t.description, deployed: t.id === "helpdesk", network_mode: t.network_mode ?? "internet", region: regionOf(t), model_armor: !isPrivateNetworking(t) })),
+      private_networking: { enabled: true, region: "us-west1" },
       default_theme: "helpdesk",
       default_mode: "live_with_fallback",
       environment: { project_id: "my-demo-project", region: "us-east4", prefix: "agdemo" },
@@ -530,9 +556,11 @@ export const mockApi: Api = {
       const ok = !s?.applied && s?.status === "removed";
       return { id: p.id, label: p.text, ok, detail: ok ? "not present" : s?.status ?? "unknown" };
     });
-    checks.push({ id: "model-armor", label: "Model Armor is off", ok: !st.model_armor.enabled, detail: st.model_armor.status });
-    const bad = Object.entries(st.edges).filter(([e, v]) => !e.startsWith("ingress:") && v.state !== "direct").map(([e]) => e);
-    checks.push({ id: "connections", label: "Every connection goes direct (no gateway)", ok: bad.length === 0, detail: bad.join(", ") || "all direct" });
+    const pn = isPrivateNetworking(theme);
+    if (!pn) checks.push({ id: "model-armor", label: "Model Armor is off", ok: !st.model_armor.enabled, detail: st.model_armor.status });
+    const start = evaluate(theme, new Set(), false, null);
+    const bad = Object.entries(st.edges).filter(([e, v]) => !e.startsWith("ingress:") && v.state !== start[e]?.state).map(([e]) => e);
+    checks.push({ id: "connections", label: pn ? "Every connection is at the start state (no gateway: public direct, internal 404)" : "Every connection goes direct (no gateway)", ok: bad.length === 0, detail: bad.join(", ") || (pn ? "all at the start state" : "all direct") });
     return delay({ ok: checks.every((c) => c.ok), checks }, 600);
   },
   async record(id, testId, body) {
@@ -563,6 +591,43 @@ export const mockApi: Api = {
       .slice(0, limit);
     const filter = GW_FILTER(id);
     return delay({ source: "simulated", filter, console_url: consoleQueryUrl(filter), entries }, 150);
+  },
+  async network(id): Promise<NetworkView> {
+    const t = getThemeOrThrow(id);
+    if (!isPrivateNetworking(t)) return delay({ theme: id, network_mode: "internet", region: regionOf(t), source: "none", pieces: null });
+    const r = regionOf(t);
+    const P = GW_PROJECT;
+    return delay({
+      theme: id,
+      network_mode: "private_networking",
+      region: r,
+      source: "config",
+      internal_components: t.components.filter((c) => c.ingress === "internal").map((c) => c.id),
+      public_components: t.components.filter((c) => c.ingress !== "internal").map((c) => c.id),
+      pieces: {
+        network: `projects/${P}/global/networks/agdemo-pn-vpc`,
+        subnet: `projects/${P}/regions/${r}/subnetworks/agdemo-pn-att`,
+        subnet_range: "10.70.0.0/28",
+        attachment: `projects/${P}/regions/${r}/networkAttachments/agdemo-pn-att`,
+        psc_address: `projects/${P}/global/addresses/agdemo-pn-psc-ip`,
+        psc_ip: MOCK_PSC_IP,
+        psc_forwarding_rule: `projects/${P}/global/forwardingRules/agdemopnpsc`,
+        psc_target: "all-apis",
+        dns_zone: `projects/${P}/managedZones/agdemo-pn-run-app`,
+        dns_name: "run.app.",
+        dns_records: ["*.run.app.", "run.app."],
+        template: `projects/${P}/locations/${r}/agentConnectivityTemplates/agdemo-pn-tmpl-3f9a1c`,
+        template_id: "agdemo-pn-tmpl-3f9a1c",
+        template_ref: `projects/${GW_PROJECT_NUM}/locations/${r}/agentConnectivityTemplates/agdemo-pn-tmpl-3f9a1c`,
+        deployment_model: "CENTRALIZED",
+        vpc_egress: "PRIVATE_RANGES_ONLY",
+        dns_domains: ["run.app."],
+        service_agent: `serviceAccount:service-${GW_PROJECT_NUM}@gcp-sa-agentgateway.iam.gserviceaccount.com`,
+        service_agent_roles: ["roles/compute.networkAdmin", "roles/dns.peer"],
+        gateway: `projects/${P}/locations/${r}/agentGateways/agdemo-pn-egress`,
+      },
+      notes: ["Mock backend: names as ./agdemo up would create them."],
+    });
   },
   async registry(id, mode): Promise<RegistryView> {
     const theme = getThemeOrThrow(id);

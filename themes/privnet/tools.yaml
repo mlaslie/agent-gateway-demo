@@ -1,0 +1,43 @@
+payroll-mcp:
+  display_name: Payroll MCP
+  description: Internal payroll system (Cloud Run, ingress internal; reachable only through the VPC)
+  instructions: Read payslips and update bank details for payroll.
+  tools:
+    - name: get_payslip
+      description: Get an employee's payslip for a month (YYYY-MM).
+      read_only: true
+      params:
+        employee_id: {type: string, description: "Employee id, e.g. jdoe", required: true}
+        month: {type: string, description: "Month, YYYY-MM"}
+      response: {employee_id: "{employee_id}", month: "2026-09", gross: 15166.67, net: 9874.12, currency: USD}
+      probe_args: {employee_id: jdoe, month: "2026-09"}
+    - name: update_bank_details
+      description: Change the bank account an employee's salary is paid into.
+      read_only: false
+      params:
+        employee_id: {type: string, required: true}
+        iban: {type: string, required: true}
+      response: {employee_id: "{employee_id}", status: updated, account: "****{iban}"}
+      probe_args: {employee_id: jdoe, iban: "0000"}
+benefits-mcp:
+  display_name: Benefits MCP
+  description: Benefits catalog (public Cloud Run service)
+  instructions: List benefit plans and enroll employees.
+  tools:
+    - name: list_plans
+      description: List the benefit plans an employee can choose.
+      read_only: true
+      params:
+        employee_id: {type: string, description: "Employee id"}
+      response:
+        - {plan: "Health PPO", monthly: 120}
+        - {plan: "Dental", monthly: 18}
+      probe_args: {employee_id: jdoe}
+    - name: enroll
+      description: Enroll an employee in a benefit plan.
+      read_only: false
+      params:
+        employee_id: {type: string, required: true}
+        plan: {type: string, required: true}
+      response: {employee_id: "{employee_id}", plan: "{plan}", status: enrolled}
+      probe_args: {employee_id: jdoe, plan: Dental}

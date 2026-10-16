@@ -262,6 +262,21 @@ def run(cfg: DemoConfig, ops, dry_run: bool = False, log=c.log) -> Report:
     return rep
 
 
+def run_regions(cfg: DemoConfig, make_ops, dry_run: bool = False, log=c.log) -> Report:
+    """`reset --all` over every region of the environment (T4): the base, then the Private Networking region.
+    make_ops() -> the base region's ops; make_ops(view) -> another region's. Reports are merged."""
+    total = Report()
+    for v in cfg.region_views():
+        if not v.is_home:
+            log(f"[bold]Region {v.region}[/] (Private Networking)")
+        rep = run(v, make_ops() if v.is_home else make_ops(v), dry_run=dry_run, log=log)
+        total.done += rep.done
+        total.reported += rep.reported
+        total.errors += rep.errors
+        total.engines += rep.engines
+    return total
+
+
 # ------------------------------------------------------------------ live operations
 class LiveOps:
     def __init__(self, cfg: DemoConfig, r=None, log=c.log):
@@ -273,9 +288,10 @@ class LiveOps:
         return load_state()
 
     def themes(self) -> list[str]:
-        from ..themes import list_themes
+        """The deployed themes that run in this ops' region (T4: a Private Networking theme in its own region)."""
+        from ..themes import list_themes, themes_in_region
         have = set(list_themes())
-        return [t for t in sorted(self.state().get("themes") or {}) if t in have]
+        return themes_in_region(self.cfg, [t for t in sorted(self.state().get("themes") or {}) if t in have])
 
     def _ctx(self):
         from ..policies import Ctx
@@ -297,6 +313,8 @@ class LiveOps:
         return reset_theme(self.cfg, tid, self._ctx(), log=self.log)
 
     def model_armor_on(self) -> bool:
+        if not self.cfg.has_model_armor:          # Model Armor exists only in the base region
+            return False
         from ..policies import model_armor_handler
         st = model_armor_handler().status(self._ctx())
         return bool(st.get("enabled")) or st.get("status") in ("pending", "error")

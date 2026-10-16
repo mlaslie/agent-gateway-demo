@@ -11,7 +11,7 @@ from ..gcp import gateways as gw
 from ..policies import Ctx, get_handler
 from ..policies import model_armor as ma_policy
 from ..state import load_state
-from ..themes import list_themes, load_theme
+from ..themes import list_themes, load_theme, theme_region
 from . import common as c
 
 
@@ -19,16 +19,27 @@ def run(cfg: DemoConfig, theme_id: str | None = None) -> None:
     r = c.client(cfg)
     st = load_state()
     ctx = Ctx(config=cfg, state=st)
-    t = Table(title=f"Shared resources: {cfg.project} / {cfg.region}")
+    t = Table(title=f"Shared resources: {cfg.project} / {', '.join(v.region for v in cfg.region_views())}")
     t.add_column("Resource")
     t.add_column("Status", overflow="fold")
-    for p in ("egress", "ingress"):
-        g = gw.get_gateway(cfg, p, r)
-        t.add_row(f"{p} gateway", g["name"] if g else "[red]missing[/]")
-        names = ([gw.iap_policy_name(cfg, p)] if p == "egress" else []) + [gw.ma_policy_name(cfg, p)]
-        for name in names:
-            pol = gw.get_policy(r, gw.gateway_project(cfg, p), cfg.region, name)
-            t.add_row(f"  authz policy {name}", (pol or {}).get("policyProfile", "[dim]absent[/]"))
+    for v in cfg.region_views():
+        tag = "" if v.is_home else f"[{v.region}] "
+        for p in ("egress", "ingress") if v.has_ingress_gateway else ("egress",):
+            g = gw.get_gateway(v, p, r)
+            t.add_row(f"{tag}{p} gateway", g["name"] if g else "[red]missing[/]")
+            if g and g.get("agentConnectivityTemplate"):
+                t.add_row(f"{tag}  connectivity template", g["agentConnectivityTemplate"])
+            names = ([gw.iap_policy_name(v, p)] if p == "egress" else []) + \
+                ([gw.ma_policy_name(v, p)] if v.has_model_armor else [])
+            for name in names:
+                pol = gw.get_policy(r, gw.gateway_project(v, p), v.region, name)
+                t.add_row(f"{tag}  authz policy {name}", (pol or {}).get("policyProfile", "[dim]absent[/]"))
+        if not v.is_home:
+            rs = (st.get("shared", {}).get("regions") or {}).get(v.region) or {}
+            t.add_row(f"{tag}platform endpoints", str(len(rs.get("platform_registry_ids") or {})))
+            for k, val in (rs.get("private_networking") or {}).items():
+                if k in ("network", "attachment", "psc_ip", "dns_zone", "template"):
+                    t.add_row(f"{tag}  {k}", str(val))
     ma = ma_policy.status(ctx)
     t.add_row("Model Armor checkbox", f"{ma['status']}: {ma['detail']}")
     t.add_row("platform endpoints", str(len(st.get("shared", {}).get("platform_registry_ids", {}))))
@@ -39,7 +50,7 @@ def run(cfg: DemoConfig, theme_id: str | None = None) -> None:
     for tid in themes:
         theme = load_theme(tid)
         ts = st.get("themes", {}).get(tid, {})
-        tt = Table(title=f"Theme {tid}")
+        tt = Table(title=f"Theme {tid} ({theme_region(cfg, theme)}, {theme.network_mode})")
         tt.add_column("Item")
         tt.add_column("State", overflow="fold")
         o = ts.get("orchestrator", {})
@@ -55,7 +66,8 @@ def run(cfg: DemoConfig, theme_id: str | None = None) -> None:
                 tt.add_row("  identity", f"{xe.get('spec', {}).get('identityType')} {x.get('principal', '')}")
                 tt.add_row("  agentGatewayConfig", str(engines.gateway_config(xe) or "{} (wide open)"))
         for cid, v in ts.get("components", {}).items():
-            tt.add_row(cid, f"{v.get('url', '')}  registry={v.get('registry', '')}")
+            extra = f"  ingress={v['ingress']}" if v.get("ingress") == "internal" else ""
+            tt.add_row(cid, f"{v.get('url', '')}  registry={v.get('registry', '')}{extra}")
         for p in theme.policies:
             try:
                 s = get_handler(p.type).status(ctx, theme, p)

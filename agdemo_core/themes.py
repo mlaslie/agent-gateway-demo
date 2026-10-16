@@ -16,12 +16,14 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-from .config import REPO_ROOT
+from .config import REPO_ROOT, DemoConfig
 
 THEMES_DIR = REPO_ROOT / "themes"
 INGRESS_EDGE = "ingress:user"         # the one ingress connection: user -> ingress gateway -> orchestrator
 
 ComponentKind = Literal["a2a_agent", "mcp_server"]
+NetworkMode = Literal["internet", "private_networking"]
+NETWORK_MODES: tuple[str, ...] = ("internet", "private_networking")
 PolicyType = Literal[
     "gateway_attach",     # params: {path: egress|ingress}       bind the theme's orchestrator to the gateway (default deny)
     "a2a_allow",          # params: {target: <a2a component id>}  egressor on that agent's registry entry
@@ -101,6 +103,9 @@ class Component(BaseModel):
     id: str                                     # e.g. tickets-mcp ; Cloud Run service = <prefix>-<theme>-<id>
     kind: ComponentKind
     role_label: str = ""                        # short diagram caption, e.g. "Agent C"
+    # Cloud Run ingress (T4): "internal" = reachable only from VPC networks of the project (here: through the
+    # VPC-enabled gateway's PSC endpoint for Google APIs). Its direct calls get 404. Needs a private_networking theme.
+    ingress: Literal["all", "internal"] = "all"
 
 
 class Policy(BaseModel):
@@ -127,6 +132,10 @@ class Theme(BaseModel):
     id: str
     name: str
     description: str = ""
+    # T4: where the theme runs. region None = environment.region (the base). A private_networking theme runs in
+    # private_networking.region behind the VPC-enabled gateway; it has no ingress gateway and no Model Armor.
+    region: str | None = None
+    network_mode: NetworkMode = "internet"
     orchestrator: Orchestrator
     # More Agent Runtime agents on the same shared gateways (docs/CONTRACTS.md §12). Each is its own engine with
     # its own Agent Identity; policies name it with params.source, its edges are "<id>/<edge>".
@@ -159,15 +168,41 @@ class Theme(BaseModel):
                     raise ValueError(f"policy {p.id}: unknown source {src} (not in additional_orchestrators)")
                 if p.type == "gateway_attach" and p.params.get("path", "egress") != "egress":
                     raise ValueError(f"policy {p.id}: ingress gateway policies are primary-only (no source)")
+        pn = self.network_mode == "private_networking"
+        if pn and not self.region:
+            raise ValueError("a private_networking theme must declare its region (the private_networking.region)")
+        for c in self.components:
+            if c.ingress == "internal" and not pn:
+                raise ValueError(f"component {c.id}: ingress internal needs network_mode private_networking")
+        for p in self.policies:
+            if pn and p.type == "gateway_attach" and p.params.get("path", "egress") != "egress":
+                raise ValueError(f"policy {p.id}: a private_networking theme has no ingress gateway")
         nodes = {f"orchestrator:{o}" for o in extra}
         for sc in self.scenarios:
             for n in sc.nodes:
                 if n.startswith("orchestrator:") and n not in nodes:
                     raise ValueError(f"scenario {sc.id}: unknown node {n}")
+            if pn and sc.flow == "ingress":
+                raise ValueError(f"scenario {sc.id}: a private_networking theme has no ingress flow")
             for t in sc.tests:
                 if t.agent is not None and t.agent not in extra:
                     raise ValueError(f"scenario {sc.id} test {t.id}: unknown agent {t.agent}")
+                if t.via == "direct" and any(":" not in p.edge.split("/")[-1] and p.edge.split("/")[-1] not in ids
+                                             for p in t.probes):
+                    raise ValueError(f"scenario {sc.id} test {t.id}: via direct probes must be component edges")
         return self
+
+    @property
+    def has_ingress(self) -> bool:
+        """Internet themes have the ingress gateway path (user -> ingress gateway -> orchestrator)."""
+        return self.network_mode == "internet"
+
+    @property
+    def has_model_armor(self) -> bool:
+        return self.network_mode == "internet"
+
+    def internal(self, cid: str) -> bool:
+        return any(c.id == cid and c.ingress == "internal" for c in self.components)
 
     def component(self, cid: str) -> Component:
         return next(c for c in self.components if c.id == cid)
@@ -197,6 +232,9 @@ class ScenarioTest(BaseModel):
     prompt: str                                 # natural-language prompt sent to the orchestrator (or ingress call)
     probes: list[Probe] = Field(default_factory=list)   # deterministic edge checks run alongside / instead of the LLM
     malicious: bool = False                     # Model Armor should block this when enabled
+    # T4 "bypass": "direct" = the call is made from outside every agent and gateway (the UI backend, over the
+    # internet) instead of by the orchestrator. An ingress=internal component answers it with 404.
+    via: Literal["agent", "direct"] = "agent"
     # Simulated runs (Demo mode, fallback replays) have no real model output. Optional canned answers per
     # edge id shown when that call goes through, e.g. {hr-records-agent: "jdoe earns $182,000."};
     # "ingress:user" is the orchestrator's answer on the ingress tab. MCP tools use their tools.yaml response.
@@ -278,10 +316,63 @@ def base_egress_edges(theme: Theme) -> list[str]:
 
 def edge_ids(theme: Theme) -> list[str]:
     """All egress + ingress edge ids for a theme (see docs/CONTRACTS.md#edges, §12): the primary's egress
-    edges, then every additional orchestrator's (prefixed '<id>/'), then the ingress edge."""
+    edges, then every additional orchestrator's (prefixed '<id>/'), then the ingress edge (Internet themes
+    only: a private_networking theme has no ingress gateway)."""
     base = base_egress_edges(theme)
     out: list[str] = []
     for oid in orchestrator_ids(theme):
         out += [source_edge(oid, e) for e in base]
-    out.append(INGRESS_EDGE)
+    if theme.has_ingress:
+        out.append(INGRESS_EDGE)
+    return out
+
+
+# ---------------- region-aware themes (T4) ----------------
+class ThemeRegionError(ValueError):
+    pass
+
+
+def theme_region(cfg: DemoConfig | None, theme: Theme) -> str:
+    """The region a theme runs in: its `region:`, else the config's base region (us-east4 without a config)."""
+    if theme.region:
+        return theme.region
+    return cfg.home_region if cfg is not None else "us-east4"
+
+
+def theme_config(cfg: DemoConfig, theme: Theme) -> DemoConfig:
+    """The config view for a theme: its region, that region's gateway, registry, IAP names and staging bucket.
+    Internet themes in the base region get the base view (unchanged behaviour)."""
+    region = theme_region(cfg, theme)
+    pn = cfg.private_networking
+    if theme.network_mode == "private_networking":
+        if not pn.enabled:
+            raise ThemeRegionError(f"theme {theme.id} needs Private Networking: set private_networking.enabled "
+                                   "in config/demo.yaml (and run ./agdemo up)")
+        if region != pn.region:
+            raise ThemeRegionError(f"theme {theme.id} declares region {region}, but private_networking.region is "
+                                   f"{pn.region}: edit one of them")
+        return cfg.for_region(region)
+    if region != cfg.home_region:
+        raise ThemeRegionError(f"theme {theme.id} declares region {region}; an Internet theme must run in "
+                               f"environment.region ({cfg.home_region})")
+    return cfg.home()
+
+
+def themes_in_region(cfg: DemoConfig, theme_ids: list[str]) -> list[str]:
+    """The theme ids (of `theme_ids`) that run in the config view's region. A theme that doesn't load counts
+    for the base region (the pre-T4 behaviour); a Private Networking theme whose mode is off counts nowhere."""
+    out = []
+    for tid in theme_ids:
+        try:
+            t = load_theme(tid)
+        except Exception:  # noqa: BLE001
+            if cfg.is_home:
+                out.append(tid)
+            continue
+        try:
+            region = theme_config(cfg, t).region
+        except ThemeRegionError:
+            region = None
+        if region == cfg.region:
+            out.append(tid)
     return out
