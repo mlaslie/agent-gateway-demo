@@ -39,5 +39,11 @@ resource "google_network_services_agent_gateway" "gw" {
     delete = "40m"
   }
 
+  lifecycle {
+    # Deprecated since google 7.37.0 and left unset here; bootstrap sent ["MCP"], which the live gateways
+    # keep. Without this, the T2 import would PATCH protocols to [] on the live gateways.
+    ignore_changes = [protocols]
+  }
+
   depends_on = [google_project_service.api]
 }

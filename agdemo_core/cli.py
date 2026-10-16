@@ -53,11 +53,31 @@ def preflight(fix: bool = typer.Option(False, "--fix", help="Enable missing APIs
     raise typer.Exit(1 if bad else 0)
 
 
+def bootstrap_refusal(state: dict) -> str | None:
+    """Deprecation (docs/TERRAFORM_PLAN.md §5.1 step 6, T2): once `tf output-sync` has recorded that Terraform
+    owns this environment (state.json shared.tf_environment), bootstrap needs --legacy. Offline check."""
+    env = (state.get("shared") or {}).get("tf_environment")
+    if env:
+        return (f"Terraform manages this environment ({env.get('project_id')}/{env.get('region')}, prefix "
+                f"{env.get('prefix')}): use ./agdemo tf plan / tf apply. bootstrap is deprecated; "
+                "./agdemo bootstrap --legacy runs the old path anyway.")
+    return None
+
+
 @app.command()
-def bootstrap():
-    """Create shared resources (idempotent): APIs, SAs, Artifact Registry, gateways, IAP + Model Armor authz,
-    platform endpoint allowlist. Writes ids to config/state.json."""
+def bootstrap(legacy: bool = typer.Option(False, "--legacy", help="Run the deprecated bootstrap path even "
+                                          "when Terraform manages this environment")):
+    """DEPRECATED (use ./agdemo tf init + tf apply). Create shared resources (idempotent): APIs, SAs, Artifact
+    Registry, gateways, IAP + Model Armor authz, platform endpoint allowlist. Writes ids to config/state.json."""
     from .infra import bootstrap as b
+    from .state import load_state
+    msg = bootstrap_refusal(load_state())
+    if msg and not legacy:
+        c.console.print(f"[red]{msg}[/]")
+        raise typer.Exit(2)
+    c.console.print("[yellow]bootstrap is deprecated: the foundation is built with ./agdemo tf init && "
+                    "./agdemo tf apply (docs/TERRAFORM_PLAN.md). It still works for environments Terraform "
+                    "doesn't manage yet.[/]")
     shared = b.run(_cfg(), me=_me())
     c.console.print_json(data=shared)
 
@@ -184,12 +204,14 @@ def _tf_vars(cfg, r, log=True):
 
 
 def _tf_live_guard(cfg) -> bool:
-    """True when the egress gateway exists in GCP but not in this Terraform state (an environment created
-    by bootstrap: it must be imported first, phase T2)."""
+    """True when the egress gateway exists in GCP but is neither in this Terraform state nor imported by
+    imports.tf (an environment created by bootstrap: run `./agdemo tf import` first, phase T2)."""
     from . import tf_foundation as tfm
+    from . import tf_import as tfi
     from .gcp import gateways as gw
-    addr = 'module.base.google_network_services_agent_gateway.gw["egress"]'
-    return bool(gw.get_gateway(cfg, "egress", c.client(cfg))) and addr not in tfm.state_addresses()
+    if tfi.imports_address(tfm.tf_dir(), tfi.EGRESS_GW_ADDR):
+        return False
+    return bool(gw.get_gateway(cfg, "egress", c.client(cfg))) and tfi.EGRESS_GW_ADDR not in tfm.state_addresses()
 
 
 def _tf_err(e: Exception):
@@ -222,8 +244,10 @@ def tf_init(local_state: Optional[str] = typer.Option(None, "--local-state",
 
 @tf_app.command("plan")
 def tf_plan(out: Optional[str] = typer.Option(None, "--out", help="Plan file (default infra/terraform/agdemo.tfplan)"),
+            json_out: Optional[str] = typer.Option(None, "--json", help="Also save `terraform show -json` here"),
             allow_replace: bool = typer.Option(False, "--allow-replace")):
-    """Refresh tfvars, terraform plan, then the plan-safety check (read-only)."""
+    """Refresh tfvars, terraform plan, then the plan-safety check (read-only). While imports.tf exists the
+    check runs in migration mode (only additive IAM/API creates allowed)."""
     from pathlib import Path
 
     from . import tf_foundation as tfm
@@ -232,11 +256,12 @@ def tf_plan(out: Optional[str] = typer.Option(None, "--out", help="Plan file (de
         _tf_vars(cfg, c.client(cfg))
         if _tf_live_guard(cfg):
             c.console.print("[yellow]The egress gateway already exists but isn't in this state: this environment "
-                            "was created by bootstrap. Apply is refused until it's imported (phase T2).[/]")
-        _, v = tfm.plan(Path(out) if out else None, allow_replace=allow_replace)
+                            "was created by bootstrap. Run ./agdemo tf import first; apply is refused until then.[/]")
+        _, v = tfm.plan(Path(out) if out else None, allow_replace=allow_replace,
+                        json_out=Path(json_out) if json_out else None)
     except tfm.TfError as e:
         _tf_err(e)
-    c.console.print(f"plan: {v.summary()}")
+    c.console.print(f"plan: {v.summary()}" + (" (migration mode: imports.tf present)" if tfm.migrating() else ""))
     for addr, actions in v.blockers:
         c.console.print(f"  [red]BLOCKED {'/'.join(actions)}[/]: {addr}")
     c.console.print("[green]plan-safety: OK[/]" if v.ok else "[red]plan-safety: REFUSED[/]")
@@ -256,13 +281,14 @@ def tf_apply(allow_replace: bool = typer.Option(False, "--allow-replace", help="
         _tf_vars(cfg, r)
         if _tf_live_guard(cfg):
             _tf_err(tfm.TfError(f"{cfg.egress_gateway_resource} exists but isn't in this Terraform state. "
-                                "Import it first (phase T2); refusing to apply."))
+                                "Run ./agdemo tf import first (phase T2); refusing to apply."))
         planfile, v = tfm.plan(allow_replace=allow_replace)
         c.console.print(f"plan: {v.summary()}")
         if not v.ok:
             for addr, actions in v.blockers:
                 c.console.print(f"  [red]BLOCKED {'/'.join(actions)}[/]: {addr}")
-            _tf_err(tfm.TfError("plan-safety: REFUSED (deletes or replaces)"))
+            _tf_err(tfm.TfError("plan-safety: REFUSED (deletes or replaces"
+                                + (", or creates that should be imports)" if tfm.migrating() else ")")))
         if not yes:
             typer.confirm(f"Apply to {cfg.project}/{cfg.region} (prefix {cfg.prefix})?", abort=True)
         rb = tfm.recordings_bucket(cfg)
@@ -293,13 +319,52 @@ def tf_output_sync(state: Optional[str] = typer.Option(None, "--state", help="st
     c.console.print(f"[green]merged[/] {len(st['shared'])} shared keys into {p}")
 
 
+@tf_app.command("recordings-bucket")
+def tf_recordings_bucket():
+    """Create the recordings bucket if missing (the same call `tf apply` makes first; outside Terraform, so
+    `down` keeps it). Prints its gs:// URL. Used by the T2 runbook to copy recordings before the apply."""
+    from . import tf_foundation as tfm
+    cfg = _cfg()
+    rb = tfm.recordings_bucket(cfg)
+    created = tfm.ensure_bucket(c.client(cfg), cfg.project, rb, cfg.region, cfg.labels, versioning=False)
+    c.console.print(f"gs://{rb} ({'created' if created else 'already exists'})")
+
+
+@tf_app.command("import")
+def tf_import(dry_run: bool = typer.Option(False, "--dry-run", help="Print the import blocks; write nothing")):
+    """Write infra/terraform/imports.tf (generated, git-ignored) that adopts the bootstrap-created environment:
+    state.json + read-only live lists (plan §5.1). Delete the file after the first successful apply."""
+    from . import tf_foundation as tfm
+    from . import tf_import as tfi
+    from .state import load_state
+    cfg = _cfg()
+    r = c.client(cfg)
+    existing = tfm.discover_existing_platform(cfg, r)
+    imp = tfi.build_imports(cfg, load_state().get("shared", {}), tfi.discover_live(cfg, r), existing)
+    for w in imp.warnings:
+        c.console.print(f"  [yellow]{w}[/]")
+    for m in imp.missing:
+        c.console.print(f"  [yellow]not live, Terraform will create it[/]: {m}")
+    for lg in imp.legacy_present:
+        c.console.print(f"  [red]legacy resource still present (delete it first, runbook step a)[/]: {lg}")
+    if dry_run:
+        c.console.print(tfi.render(imp))
+    else:
+        p = tfi.write(imp, tfm.tf_dir())
+        c.console.print(f"  wrote {p}")
+    c.console.print(f"[green]{imp.count} imports[/] ({len(imp.blocks)} blocks + for_each over "
+                    f"{len(imp.platform)} platform entries)")
+
+
 @tf_app.command("check-plan")
 def tf_check_plan(plan_json: str, allow_replace: bool = typer.Option(False, "--allow-replace"),
-                  allow_template_swap: bool = typer.Option(False, "--allow-template-swap")):
-    """Plan-safety check on `terraform show -json` output: exit 1 on any delete or replace."""
+                  allow_template_swap: bool = typer.Option(False, "--allow-template-swap"),
+                  migration: bool = typer.Option(False, "--migration", help="T2: refuse non-additive creates")):
+    """Plan-safety check on `terraform show -json` output: exit 1 on any delete or replace (and, with
+    --migration, on any create other than additive IAM/API)."""
     from . import tf_safety
     args = [plan_json] + (["--allow-replace"] if allow_replace else []) + \
-        (["--allow-template-swap"] if allow_template_swap else [])
+        (["--allow-template-swap"] if allow_template_swap else []) + (["--migration"] if migration else [])
     raise typer.Exit(tf_safety.main(args))
 
 

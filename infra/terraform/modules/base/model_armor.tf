@@ -8,13 +8,16 @@ locals {
   ma_settings = "[{\"request_template_id\": \"${local.ma_template_name}\", \"response_template_id\": \"${local.ma_template_name}\"}]"
   ma_roles    = ["roles/modelarmor.calloutUser", "roles/modelarmor.user", "roles/serviceusage.serviceUsageConsumer"]
 
-  # Static keys (values may be unknown until the gateways exist).
+  # Static keys (values may be unknown until the gateways exist). Only the egress (AGENT_TO_ANYWHERE) gateway
+  # has an agent_gateway_card with its own service-extensions service account; a CLIENT_TO_AGENT gateway has
+  # no card (the live ingress gateway returns none) and calls Model Armor as the project's
+  # gcp-sa-aiplatform-re agent, which is in model_armor_static_agents. bootstrap does the same.
   ma_agents = merge(
     { for s in var.model_armor_static_agents : s => "serviceAccount:service-${var.project_number}@${s}.iam.gserviceaccount.com" },
-    { for k, g in google_network_services_agent_gateway.gw : "gateway-${k}" => "serviceAccount:${g.agent_gateway_card[0].service_extensions_service_account}" },
+    { "gateway-egress" = "serviceAccount:${google_network_services_agent_gateway.gw["egress"].agent_gateway_card[0].service_extensions_service_account}" },
   )
   # Static project service agents are shared with any other environment in the project (shared_project_grants).
-  ma_agent_keys = concat(var.shared_project_grants ? var.model_armor_static_agents : [], ["gateway-egress", "gateway-ingress"])
+  ma_agent_keys = concat(var.shared_project_grants ? var.model_armor_static_agents : [], ["gateway-egress"])
   ma_grants = {
     for pair in setproduct(local.ma_agent_keys, local.ma_roles) :
     "${pair[0]} ${pair[1]}" => { agent = pair[0], role = pair[1] }

@@ -166,14 +166,16 @@ To take a policy state to production, `./agdemo export-terraform <theme> [--out 
 
 ### Terraform (preview)
 
-The foundation `bootstrap` creates can also be built with Terraform (`infra/terraform/`, `hashicorp/google` >= 8.7.0, Terraform >= 1.7; [docs/TERRAFORM_PLAN.md](docs/TERRAFORM_PLAN.md) phase T1). It's for **fresh** environments only so far: `bootstrap` stays the default, and an environment created by `bootstrap` must be imported first (phase T2), so `tf apply` refuses it.
+The foundation `bootstrap` creates can also be built with Terraform (`infra/terraform/`, `hashicorp/google` >= 8.7.0, Terraform >= 1.7; [docs/TERRAFORM_PLAN.md](docs/TERRAFORM_PLAN.md)). A fresh environment uses `tf init` + `tf apply` directly. An environment created by `bootstrap` is adopted with `./agdemo tf import` first (phase T2; `tf apply` refuses it until then): follow [docs/TERRAFORM_MIGRATION_RUNBOOK.md](docs/TERRAFORM_MIGRATION_RUNBOOK.md). `bootstrap` is deprecated: it still works for environments Terraform doesn't manage, and refuses (unless `--legacy`) once `output-sync` has recorded Terraform ownership in state.json.
 
 ```bash
 ./agdemo tf init                 # tfvars from config/demo.yaml, state bucket <project>-agdemo-tfstate (versioned), terraform init
 ./agdemo tf plan                 # terraform plan + plan-safety check (refuses deletes and replaces); read-only
 ./agdemo tf apply                # recordings bucket (outside Terraform), plan, check, apply, then output-sync
 ./agdemo tf output-sync          # merge outputs into config/state.json `shared` (same keys bootstrap writes)
-./agdemo tf check-plan plan.json # plan-safety check on `terraform show -json` output
+./agdemo tf check-plan plan.json # plan-safety check on `terraform show -json` output (--migration: only additive creates)
+./agdemo tf import               # T2: imports.tf (generated, git-ignored) adopting a bootstrap-created environment
+./agdemo tf recordings-bucket    # create the recordings bucket (outside Terraform) before copying recordings into it
 ```
 
 Each environment has its own state prefix (`<prefix>/<project>/<region>`). `tf init --local-state PATH` uses a local scratch state instead, and `output-sync --state PATH` writes to another state file. For a second environment in a project that already has one, set `terraform.shared_project_grants: false` in its config.

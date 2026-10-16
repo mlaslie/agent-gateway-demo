@@ -10,7 +10,7 @@ output "state_shared" {
     ingress_gateway     = google_network_services_agent_gateway.gw["ingress"].id
     ingress_gateway_url = "https://${var.region}-aiplatform.googleapis.com"
     gateway_service_agents = sort(distinct(compact([
-      for g in google_network_services_agent_gateway.gw : g.agent_gateway_card[0].service_extensions_service_account
+      for g in google_network_services_agent_gateway.gw : try(g.agent_gateway_card[0].service_extensions_service_account, "")
     ])))
 
     egress_iap_extension = google_network_services_authz_extension.egress_iap.id

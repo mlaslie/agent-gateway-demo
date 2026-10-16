@@ -9,7 +9,9 @@
   never delete it (plan §7b).
 - Outputs: `state_shared` is merged into config/state.json `shared` under bootstrap's keys; other keys stay.
 
-`bootstrap` is unchanged and stays the default until T2/T3. Pure helpers (tfvars, merge) make no GCP calls.
+T2: `./agdemo tf import` (agdemo_core/tf_import.py) writes the git-ignored imports.tf that adopts a
+bootstrap-created environment; while it exists, plans are checked in migration mode (tf_safety).
+Pure helpers (tfvars, merge) make no GCP calls.
 """
 from __future__ import annotations
 
@@ -197,14 +199,23 @@ def init(cfg: DemoConfig, r=None, local_state: str | None = None, log: Callable[
             f"-backend-config=prefix={state_prefix(cfg)}"], d)
 
 
-def plan(out: Path | None = None, allow_replace: bool = False):
-    """terraform plan -out, then the plan-safety check. Returns (plan file, Verdict)."""
+def migrating(d: Path | None = None) -> bool:
+    """True while infra/terraform/imports.tf exists (T2 adoption of a bootstrap-created environment)."""
+    from .tf_import import IMPORTS_NAME
+    return ((d or tf_dir()) / IMPORTS_NAME).exists()
+
+
+def plan(out: Path | None = None, allow_replace: bool = False, json_out: Path | None = None):
+    """terraform plan -out, then the plan-safety check (migration mode while imports.tf exists).
+    Returns (plan file, Verdict). json_out: also save `terraform show -json`."""
     from . import tf_safety
     d = tf_dir()
     out = out or d / PLAN_NAME
     run_tf(["plan", "-input=false", f"-out={out}"], d)
     js = run_tf(["show", "-json", str(out)], d, capture=True)
-    return out, tf_safety.check(json.loads(js), allow_replace=allow_replace)
+    if json_out:
+        Path(json_out).write_text(js)
+    return out, tf_safety.check(json.loads(js), allow_replace=allow_replace, migration=migrating(d))
 
 
 def state_addresses() -> set[str]:

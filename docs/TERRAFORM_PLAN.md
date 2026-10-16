@@ -1,6 +1,6 @@
 # Terraform foundation plan (base + private egress)
 
-**Status:** T1 built (2026-10-16; see §7a). T2–T5 not started. Nothing in GCP was changed while writing it: the only calls were read-only lists and GETs against the demo project, plus a read of the provider schema and source.
+**Status:** T1 built (2026-10-16; see §7a). **T2: the read-only part is done** (2026-10-16; see §7d): the `tf import` generator, a migration-mode plan-safety check and a read-only plan against the live demo with only imports and additive creates. The live steps (legacy cleanup, state bucket, recordings copy, apply, UI redeploy) are in [TERRAFORM_MIGRATION_RUNBOOK.md](TERRAFORM_MIGRATION_RUNBOOK.md) and haven't been run. T3–T5 not started. Nothing in GCP was changed while writing it: the only calls were read-only lists and GETs against the demo project, plus a read of the provider schema and source.
 
 **Goal:** deploy the demo's whole foundation with Terraform, for both the public (non-VPC) setup and the private-egress (VPC) test bed. Clean up in two steps: first a **reset** through the API/CLI that removes everything that isn't base, then `terraform destroy` for the foundation.
 
@@ -443,7 +443,7 @@ The provider has no gateway data source, so this reads it with the `http` provid
 | Phase | Content | Size |
 |---|---|---|
 | T1 **(built)** | Scaffold: `versions`, backend + `tf init` (state bucket), tfvars generator, `base` module for a **fresh** environment, outputs → state.json, CI validate, unit tests | 2–3 d |
-| T2 | Import the live demo: legacy cleanup (after asking), `tf import` generator, plan-safety check, iterate to a zero-diff plan, apply, deprecate `bootstrap` | 1–2 d |
+| T2 **(read-only part built; live steps in the runbook)** | Import the live demo: legacy cleanup (after asking), `tf import` generator, plan-safety check, iterate to a zero-diff plan, apply, deprecate `bootstrap` | 1–2 d |
 | T3 | Lifecycle: `up`, `reset --all`, `down`, `tf check-clean`, guard resource, teardown additions (GE unregister, Policy Studio leftovers) | 2 d |
 | T4 | `private_egress` module, `migrate-gateway`, preconditions, env var in `deploy-theme`, private MCP component (internal ingress, both URLs registered), status/UI showing private egress | 2–3 d |
 | T5 | E2E up/down ×2 in us-west1 + negative tests, then the in-place migration of `agdemo-egress` (§5.2) in a quiet window; docs (SETUP, TROUBLESHOOTING, README, TESTBED pointer) | 1–2 d |
@@ -544,6 +544,30 @@ It's still created by `up` and destroyed by `down`, with the same guard and orde
 **Effort:** about 3–4 days on top of T1–T5 (region-aware themes, the mode switch, the new theme and scenarios, the VPC diagram, log highlight). T4 changes accordingly: no gateway migration, so the second-region module plus the theme.
 
 **Standing cost:** PSC endpoint about USD 8/month, plus the extra orchestrator's idle cost and the second gateway. Gateway pricing isn't checked.
+
+## 7d. T2 read-only part (2026-10-16)
+
+Live steps: [TERRAFORM_MIGRATION_RUNBOOK.md](TERRAFORM_MIGRATION_RUNBOOK.md) (a legacy cleanup, b `tf init` on GCS, c plan + compare, d recordings copy, e apply + 0/0/0 plan, f UI redeploy, g status/Verify, h rollback). No GCP writes were made: snapshots, plans and checks only, with a local scratch state.
+
+**What exists:**
+- `agdemo_core/tf_import.py` + `./agdemo tf import [--dry-run]`. It writes `infra/terraform/imports.tf`, which is **generated and git-ignored**: it holds the real project id, and it's needed only until the first apply (the runbook deletes it after). Inputs: demo.yaml names (the same helpers as the tfvars), `state.json shared` (cross-checked; a mismatch is a warning, the config name wins) and read-only live lists. Only resources that exist live get an import; missing ones are reported and left to create. The legacy resources are never imported and are reported while they exist.
+- **Imports (35):** 10 blocks (both gateways, the IAP extension and policy, the Model Armor template, the Model Armor extension per gateway project, both SAs, the repo, the staging bucket) plus one `for_each` import over the 25 platform entries (`module.base.google_agent_registry_service.platform[<url>]`, from `local.agdemo_platform_imports`). The real addresses differ from the §5.1 table in two names: `…artifact_registry_repository.repo` and `…model_armor["<project>"]`.
+- **Migration-mode plan-safety** (`tf_safety.check(migration=True)`, `--migration`; automatic in `tf plan`/`tf apply` while `imports.tf` exists): on top of no delete/replace, it refuses every create except `google_project_service` and the `*_iam_member` types, so a missing import can't recreate a live resource.
+- **Apply guard:** `tf apply` accepts a live egress gateway that isn't in state when `imports.tf` imports it.
+- `./agdemo tf recordings-bucket`: the recordings-bucket create that `tf apply` does, on its own, so the runbook can copy recordings before the apply. `tf plan --json PATH` saves the plan JSON.
+- **`bootstrap` deprecation (offline-safe part):** it prints a deprecation notice, and refuses (exit 2) once `state.json shared.tf_environment` exists, i.e. after `output-sync` recorded that Terraform owns the environment; `--legacy` runs it anyway. The thin `./agdemo up` alias waits for T3, because `up` doesn't exist yet.
+- Tests: `ui/backend/tests/test_tf_import.py` (generator, legacy exclusion, missing resources, cross-project, HCL rendering and `terraform fmt`, git-ignore, addresses exist in the module, migration mode, bootstrap refusal).
+
+**Module fixes found by the live plan:**
+1. **The ingress gateway has no `agent_gateway_card`** (CLIENT_TO_AGENT). T1 indexed `[0]` for both gateways, so the plan failed. Now only the egress gateway's service-extensions SA is a Model Armor grantee (the ingress path uses the static `gcp-sa-aiplatform-re` agent, as bootstrap does), and the output uses `try()`. A fresh environment's plan has 3 fewer grants than §7a's 99.
+2. **`protocols`:** bootstrap sent `["MCP"]`; Terraform leaves the deprecated field unset, so the plan would PATCH it to `[]` on both live gateways. Now `ignore_changes = [protocols]`.
+
+**Final read-only plan** (local state, generated imports, legacy still present and excluded): **35 to import, 68 to add, 8 to change, 0 to destroy, 0 replaces; plan-safety (migration mode) OK.** Saved in `config/generated/tf-migration/` (git-ignored): `plan.txt`, `plan.json`, `plan-actions.txt`, `snapshot/`.
+- **68 creates, all additive and already live** (checked against the project policy, the enabled services and each platform entry's IAP policy), except one: 21 APIs; 21 project grants (UI SA 9, targets SA 2, presenter 1, Model Armor 3 roles × 3 agents); 25 `roles/iap.egressor` on the platform entries; **new:** the UI SA's `roles/storage.objectUser` on the recordings bucket.
+- **8 in-place updates, none of which calls the API:** `labels`/`terraform_labels` on every imported labelled resource (an import leaves `labels` empty in state; `effective_labels`, which drives the update mask, is unchanged, and the provider skips the PATCH when the mask is empty), `timeouts` on the gateways and `force_destroy` on the staging bucket (both Terraform-only). They can't be removed without `ignore_changes = [labels]`, which would stop Terraform managing labels.
+- `output-sync` after the apply changes only `recordings_bucket` (new) and `tf_environment` in `state.json shared`; every other key already equals the Terraform outputs.
+
+**Legacy safety findings** (runbook step a): `agdemo-ingress-iap-policy` is attached to `agdemo-ingress` but CLIENT_TO_AGENT doesn't evaluate REQUEST_AUTHZ (§10 of ARCHITECTURE.md), and `agdemo-ingress-iap-authz` is referenced only by it. The two caller SAs have only Google-managed keys, project `roles/aiplatform.user`, and their own `serviceAccountTokenCreator` IAM; nothing runs as them and no IAP policy names them; their last use was the 2026-10-08 ingress test. The only code references are `teardown`'s cleanup by name. All four are safe to delete.
 
 ## 8. Open questions
 
