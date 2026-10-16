@@ -45,3 +45,6 @@ gemini_enterprise:                    # optional: GE Demo mode (paste prompts in
   app_url: ""                         # link shown in the UI header when GE Demo is on
 
 default_mode: live_with_fallback      # live | demo | live_with_fallback
+
+terraform:                            # Terraform foundation (preview, ./agdemo tf ...; docs/TERRAFORM_PLAN.md)
+  shared_project_grants: true         # false for a second environment in a project that already has one

@@ -9,3 +9,10 @@ ui/frontend/dist/
 .env
 .pytest_cache/
 *.tsbuildinfo
+# Terraform foundation (infra/terraform): local working files; the lock file is committed
+infra/terraform/.terraform/
+infra/terraform/generated.auto.tfvars.json
+infra/terraform/*_override.tf
+infra/terraform/*.tfplan
+*.tfstate
+*.tfstate.backup

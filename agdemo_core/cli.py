@@ -14,6 +14,9 @@ app = typer.Typer(help="Agent Gateway & Agent Registry demo CLI", no_args_is_hel
                   pretty_exceptions_show_locals=False)
 ui_app = typer.Typer(help="Demo UI: deploy to Cloud Run behind IAP, or run locally")
 app.add_typer(ui_app, name="ui")
+tf_app = typer.Typer(help="Terraform foundation (preview, docs/TERRAFORM_PLAN.md T1). bootstrap stays the default.",
+                     no_args_is_help=True)
+app.add_typer(tf_app, name="tf")
 
 
 def _cfg():
@@ -164,6 +167,140 @@ def ui_local(mode: Optional[str] = typer.Option(None, help="live | demo | live_w
     """Run the UI backend locally (serves ui/frontend/dist if built)."""
     from .infra import ui as u
     u.local(mode=mode, port=port, reload=reload)
+
+
+# ---------------------------------------------------------------------- Terraform foundation (preview, T1)
+def _tf_vars(cfg, r, log=True):
+    from . import tf_foundation as tfm
+    from .gcp.rest import organization_id
+    org = organization_id(cfg.project) or ""
+    existing = tfm.discover_existing_platform(cfg, r)
+    for u in existing:
+        c.console.print(f"  [yellow]{u} is already registered by a service we don't own; granted, not created[/]")
+    p = tfm.write_tfvars(cfg, organization_id=org, existing_platform=existing)
+    if log:
+        c.console.print(f"  wrote {p}")
+    return org, existing
+
+
+def _tf_live_guard(cfg) -> bool:
+    """True when the egress gateway exists in GCP but not in this Terraform state (an environment created
+    by bootstrap: it must be imported first, phase T2)."""
+    from . import tf_foundation as tfm
+    from .gcp import gateways as gw
+    addr = 'module.base.google_network_services_agent_gateway.gw["egress"]'
+    return bool(gw.get_gateway(cfg, "egress", c.client(cfg))) and addr not in tfm.state_addresses()
+
+
+def _tf_err(e: Exception):
+    c.console.print(f"[red]{e}[/]")
+    raise typer.Exit(1)
+
+
+@tf_app.command("vars")
+def tf_vars():
+    """Write infra/terraform/generated.auto.tfvars.json from config/demo.yaml (read-only GCP lookups)."""
+    cfg = _cfg()
+    _tf_vars(cfg, c.client(cfg))
+
+
+@tf_app.command("init")
+def tf_init(local_state: Optional[str] = typer.Option(None, "--local-state",
+                                                      help="Use a local state file (scratch plans); no bucket")):
+    """Write tfvars, ensure the GCS state bucket (versioning on) and run terraform init for this environment."""
+    from . import tf_foundation as tfm
+    cfg = _cfg()
+    r = c.client(cfg)
+    try:
+        org, existing = _tf_vars(cfg, r, log=False)
+        tfm.init(cfg, r, local_state=local_state, organization_id=org, existing_platform=existing)
+    except tfm.TfError as e:
+        _tf_err(e)
+    c.console.print(f"[green]initialized[/] state: "
+                    f"{local_state or f'gs://{tfm.state_bucket(cfg)}/{tfm.state_prefix(cfg)}'}")
+
+
+@tf_app.command("plan")
+def tf_plan(out: Optional[str] = typer.Option(None, "--out", help="Plan file (default infra/terraform/agdemo.tfplan)"),
+            allow_replace: bool = typer.Option(False, "--allow-replace")):
+    """Refresh tfvars, terraform plan, then the plan-safety check (read-only)."""
+    from pathlib import Path
+
+    from . import tf_foundation as tfm
+    cfg = _cfg()
+    try:
+        _tf_vars(cfg, c.client(cfg))
+        if _tf_live_guard(cfg):
+            c.console.print("[yellow]The egress gateway already exists but isn't in this state: this environment "
+                            "was created by bootstrap. Apply is refused until it's imported (phase T2).[/]")
+        _, v = tfm.plan(Path(out) if out else None, allow_replace=allow_replace)
+    except tfm.TfError as e:
+        _tf_err(e)
+    c.console.print(f"plan: {v.summary()}")
+    for addr, actions in v.blockers:
+        c.console.print(f"  [red]BLOCKED {'/'.join(actions)}[/]: {addr}")
+    c.console.print("[green]plan-safety: OK[/]" if v.ok else "[red]plan-safety: REFUSED[/]")
+    raise typer.Exit(0 if v.ok else 1)
+
+
+@tf_app.command("apply")
+def tf_apply(allow_replace: bool = typer.Option(False, "--allow-replace", help="Allow replaces (never deletes)"),
+             state: Optional[str] = typer.Option(None, "--state", help="state.json to merge outputs into"),
+             yes: bool = typer.Option(False, "--yes", "-y")):
+    """Plan, check (no delete/replace), apply, then merge outputs into state.json. Creates the recordings
+    bucket first (outside Terraform, so `down` keeps it)."""
+    from . import tf_foundation as tfm
+    cfg = _cfg()
+    r = c.client(cfg)
+    try:
+        _tf_vars(cfg, r)
+        if _tf_live_guard(cfg):
+            _tf_err(tfm.TfError(f"{cfg.egress_gateway_resource} exists but isn't in this Terraform state. "
+                                "Import it first (phase T2); refusing to apply."))
+        planfile, v = tfm.plan(allow_replace=allow_replace)
+        c.console.print(f"plan: {v.summary()}")
+        if not v.ok:
+            for addr, actions in v.blockers:
+                c.console.print(f"  [red]BLOCKED {'/'.join(actions)}[/]: {addr}")
+            _tf_err(tfm.TfError("plan-safety: REFUSED (deletes or replaces)"))
+        if not yes:
+            typer.confirm(f"Apply to {cfg.project}/{cfg.region} (prefix {cfg.prefix})?", abort=True)
+        rb = tfm.recordings_bucket(cfg)
+        if tfm.ensure_bucket(r, cfg.project, rb, cfg.region, cfg.labels, versioning=False):
+            c.console.print(f"  created recordings bucket gs://{rb} (outside Terraform; survives down)")
+        tfm.run_tf(["apply", "-input=false", str(planfile)])
+    except tfm.TfError as e:
+        _tf_err(e)
+    tf_output_sync(state=state, force=False)
+
+
+@tf_app.command("output-sync")
+def tf_output_sync(state: Optional[str] = typer.Option(None, "--state", help="state.json path "
+                                                       "(default config/state.json)"),
+                   force: bool = typer.Option(False, "--force", help="Merge even if state.json describes "
+                                              "another environment")):
+    """Merge terraform outputs into state.json `shared` (bootstrap's keys; other keys kept)."""
+    from pathlib import Path
+
+    from . import tf_foundation as tfm
+    from .state import STATE_PATH, load_state, save_state
+    p = Path(state) if state else STATE_PATH
+    try:
+        st = tfm.merge_outputs(load_state(p), tfm.outputs(), force=force)
+    except tfm.TfError as e:
+        _tf_err(e)
+    save_state(st, p)
+    c.console.print(f"[green]merged[/] {len(st['shared'])} shared keys into {p}")
+
+
+@tf_app.command("check-plan")
+def tf_check_plan(plan_json: str, allow_replace: bool = typer.Option(False, "--allow-replace"),
+                  allow_template_swap: bool = typer.Option(False, "--allow-template-swap")):
+    """Plan-safety check on `terraform show -json` output: exit 1 on any delete or replace."""
+    from . import tf_safety
+    args = [plan_json] + (["--allow-replace"] if allow_replace else []) + \
+        (["--allow-template-swap"] if allow_template_swap else [])
+    raise typer.Exit(tf_safety.main(args))
 
 
 def main() -> None:  # pragma: no cover

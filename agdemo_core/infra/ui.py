@@ -46,10 +46,13 @@ def deploy(cfg: DemoConfig, skip_build: bool = False) -> str:
         build(cfg)
     svc = c.ui_service_name(cfg)
     ui_sa = c.sa(cfg, c.ui_sa_id(cfg))
+    state = load_state()
+    # Recordings survive restarts and redeploys: the Terraform-era recordings bucket (kept by `down`,
+    # docs/TERRAFORM_PLAN.md §7b) when state.json has one, else the staging bucket as before.
+    rec = state.get("shared", {}).get("recordings_bucket")
     env = {"AGDEMO_CONFIG_YAML": config_path().read_text(),
-           "AGDEMO_STATE_JSON": json.dumps(load_state()),
-           # Recordings go to the staging bucket so they survive restarts and redeploys.
-           "AGDEMO_RECORDINGS_URI": f"gs://{c.staging_bucket(cfg)}/recordings"}
+           "AGDEMO_STATE_JSON": json.dumps(state),
+           "AGDEMO_RECORDINGS_URI": f"gs://{rec}/recordings" if rec else f"gs://{c.staging_bucket(cfg)}/recordings"}
     envf = CONFIG_DIR / "generated" / "ui.env.yaml"
     envf.write_text(yaml.safe_dump(env))
     labels = ",".join(f"{k}={v}" for k, v in cfg.labels.items())

@@ -1,6 +1,6 @@
 # Terraform foundation plan (base + private egress)
 
-**Status:** plan only (2026-10-16). Nothing is built. Nothing in GCP was changed while writing it: the only calls were read-only lists and GETs against the demo project, plus a read of the provider schema and source.
+**Status:** T1 built (2026-10-16; see §7a). T2–T5 not started. Nothing in GCP was changed while writing it: the only calls were read-only lists and GETs against the demo project, plus a read of the provider schema and source.
 
 **Goal:** deploy the demo's whole foundation with Terraform, for both the public (non-VPC) setup and the private-egress (VPC) test bed. Clean up in two steps: first a **reset** through the API/CLI that removes everything that isn't base, then `terraform destroy` for the foundation.
 
@@ -442,13 +442,56 @@ The provider has no gateway data source, so this reads it with the `http` provid
 
 | Phase | Content | Size |
 |---|---|---|
-| T1 | Scaffold: `versions`, backend + `tf init` (state bucket), tfvars generator, `base` module for a **fresh** environment, outputs → state.json, CI validate, unit tests | 2–3 d |
+| T1 **(built)** | Scaffold: `versions`, backend + `tf init` (state bucket), tfvars generator, `base` module for a **fresh** environment, outputs → state.json, CI validate, unit tests | 2–3 d |
 | T2 | Import the live demo: legacy cleanup (after asking), `tf import` generator, plan-safety check, iterate to a zero-diff plan, apply, deprecate `bootstrap` | 1–2 d |
 | T3 | Lifecycle: `up`, `reset --all`, `down`, `tf check-clean`, guard resource, teardown additions (GE unregister, Policy Studio leftovers) | 2 d |
 | T4 | `private_egress` module, `migrate-gateway`, preconditions, env var in `deploy-theme`, private MCP component (internal ingress, both URLs registered), status/UI showing private egress | 2–3 d |
 | T5 | E2E up/down ×2 in us-west1 + negative tests, then the in-place migration of `agdemo-egress` (§5.2) in a quiet window; docs (SETUP, TROUBLESHOOTING, README, TESTBED pointer) | 1–2 d |
 
 **Total about 8–12 days.** T1 and T2 deliver value without T4. T4's live migration must wait for T5's throwaway run.
+
+## 7a. T1 as built (2026-10-16)
+
+**What exists:**
+- `infra/terraform/`: `versions.tf` (Terraform >= 1.7, google >= 8.7.0, < 9.0; lock file committed, 8.7.0), `backend.tf` (partial `gcs`), `main.tf`, `variables.tf`, `outputs.tf`, and `modules/base/` (`apis.tf`, `iam.tf`, `storage.tf`, `gateways.tf`, `authz.tf`, `model_armor.tf`, `registry.tf`, `outputs.tf`).
+- `agdemo_core/tf_foundation.py`: the tfvars generator, the outputs → state.json merge, the CLI-owned buckets, and the terraform wrapper.
+- `agdemo_core/tf_safety.py`: the plan-safety check (§6). `python -m agdemo_core.tf_safety plan.json` or `./agdemo tf check-plan`.
+- CLI: `./agdemo tf vars | init [--local-state PATH] | plan | apply | output-sync [--state PATH] | check-plan`. `bootstrap` is unchanged.
+- Tests: `ui/backend/tests/test_tf_foundation.py` (tfvars, merge, plan-safety on fixture plans, `terraform fmt`, no real identifiers in the Terraform files).
+
+**Read-only plan, fresh environment** (same project, us-east1, prefix `agdtest`, local scratch state, `shared_project_grants: false`): **99 to add, 0 to change, 0 to destroy**; plan-safety OK. With `shared_project_grants: true` it's 106 (+1 presenter grant, +6 static Model Armor service-agent grants). No apply was run.
+
+| Resource | Count (99 plan) |
+|---|---|
+| `google_project_service` | 21 |
+| `google_service_account` | 2 |
+| `google_project_iam_member` | 17 (UI SA 9, targets SA 2, Model Armor roles × 2 gateway service agents 6) |
+| `google_artifact_registry_repository`, `google_storage_bucket` (staging), `google_storage_bucket_iam_member` (recordings) | 1 each |
+| `google_network_services_agent_gateway` | 2 |
+| `google_network_services_authz_extension` (IAP, Model Armor) | 2 |
+| `google_network_security_authz_policy` (REQUEST_AUTHZ) | 1 |
+| `google_model_armor_template` | 1 |
+| `google_agent_registry_service` (platform) + `google_iap_agent_registry_endpoint_iam_member` | 25 + 25 |
+
+**Deviations from the plan:**
+1. **Recordings bucket** (§7b): created by the CLI (`tf apply`, through the API, like the state bucket), never by Terraform, so no `destroy` can delete it. Terraform only grants the UI SA `roles/storage.objectUser` on it. New `state.json shared.recordings_bucket`; `ui deploy` uses it when present, else `staging/recordings` as before. Moving the existing recordings is T2.
+2. **Plan-safety check** is built now (the table had it in T2). `tf plan` and `tf apply` run it.
+3. **State prefix** is `<resource_prefix>/<project>/<region>` (not a fixed `agdemo/…`), so two prefixes in one project and region can't share a state. The bucket stays `<project>-agdemo-tfstate`.
+4. **Names come from Python.** The `names` and `platform_endpoints` variables are computed with bootstrap's own helpers (`cfg.name`, `common.platform_service_id`, …), so naming has one source.
+5. **URLs registered by someone else** (bootstrap's `url_owner` branch): the CLI lists the registry (read-only) and passes `platform_endpoints_existing` (url → registry resource). They're granted, not created. No data source is used.
+6. **`ignore_changes`**: `[fail_open, metadata]` on the IAP extension and `[custom_provider]` on the IAP policy (§8 Q1, both halves).
+7. **Provider `add_terraform_attribution_label = false`**, so the labels match bootstrap exactly (no `goog-terraform-provisioned` diff at import).
+8. **New config `terraform.shared_project_grants`** (default true). Set it to false for a second environment in a project that already has one: then presenters' `aiplatform.user` and the static Model Armor service-agent grants aren't managed, so that environment's destroy can't strip them from the first.
+9. **Apply guard:** `tf apply` refuses when the egress gateway exists in GCP but isn't in the state (a bootstrap-created environment, i.e. the live demo before T2). `tf plan` warns.
+10. **The Model Armor extension's `model_armor_settings`** is built as a literal string with bootstrap's `json.dumps` separators (`", "`, `": "`), not `jsonencode`, for a byte-exact T2 import.
+11. **CI:** the repo has no workflow. `terraform fmt -check` runs inside pytest; `terraform validate` was run by hand.
+12. **Private Networking (T4):** a `private_networking` variable that must stay disabled (validation), plus marked placeholders. Nothing else.
+
+**Bootstrap behaviour Terraform doesn't express:**
+- **Best-effort Model Armor grants.** bootstrap logs and continues when a service agent can't be granted. Terraform fails the apply. In a truly fresh project, `gcp-sa-aiplatform-re` (and possibly `gcp-sa-dep`) may not exist yet. Mitigations: `depends_on` the gateways is in place; `model_armor_static_agents` can be trimmed. Settle with Q7.
+- **`gateways.create: false`** (reuse existing gateways): not supported. Use import (T2).
+- **"registryResource not ready, re-run":** Terraform reads `registry_resource` after create. If the API returned it empty, the egressor grant would fail; re-run apply. Not observed (no apply yet).
+- **`_member` grants aren't reference-counted.** Two environments in one project can share a principal: the ingress gateway's service agent is the project's `gcp-sa-aiplatform-re`. Destroying one environment then removes a role the other still uses, even with `shared_project_grants: false`. For T3: `down` (or `check-clean`) should re-check the remaining environment's Model Armor roles.
 
 ---
 

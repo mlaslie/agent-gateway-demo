@@ -62,6 +62,14 @@ class ThemesCfg(BaseModel):
     default: str = "helpdesk"
 
 
+class TerraformCfg(BaseModel):
+    """Terraform foundation (preview, docs/TERRAFORM_PLAN.md)."""
+    # Project-wide grants other environments in the same project also rely on: presenters' aiplatform.user
+    # and the Model Armor roles of the project service agents. false for a second environment in a project
+    # that already has one, so its `terraform destroy` can't strip the first one's grants.
+    shared_project_grants: bool = True
+
+
 class DemoConfig(BaseModel):
     environment: Environment
     gateways: Gateways = Gateways()
@@ -71,6 +79,7 @@ class DemoConfig(BaseModel):
     ui: UI = UI()
     themes: ThemesCfg = ThemesCfg()
     gemini_enterprise: GeminiEnterprise = GeminiEnterprise()
+    terraform: TerraformCfg = TerraformCfg()
     default_mode: Mode = "live_with_fallback"
 
     # ---- derived names (single place for resource naming) ----

@@ -164,6 +164,20 @@ No Google Cloud project? `./agdemo ui local --mode demo` runs the whole UI in si
 
 To take a policy state to production, `./agdemo export-terraform <theme> [--out DIR] [--include-shared]` writes Terraform for the theme's current Live policy state (default `config/generated/terraform/<theme>`; read-only). The same export is in the UI (**Export Terraform** on the Policies card).
 
+### Terraform (preview)
+
+The foundation `bootstrap` creates can also be built with Terraform (`infra/terraform/`, `hashicorp/google` >= 8.7.0, Terraform >= 1.7; [docs/TERRAFORM_PLAN.md](docs/TERRAFORM_PLAN.md) phase T1). It's for **fresh** environments only so far: `bootstrap` stays the default, and an environment created by `bootstrap` must be imported first (phase T2), so `tf apply` refuses it.
+
+```bash
+./agdemo tf init                 # tfvars from config/demo.yaml, state bucket <project>-agdemo-tfstate (versioned), terraform init
+./agdemo tf plan                 # terraform plan + plan-safety check (refuses deletes and replaces); read-only
+./agdemo tf apply                # recordings bucket (outside Terraform), plan, check, apply, then output-sync
+./agdemo tf output-sync          # merge outputs into config/state.json `shared` (same keys bootstrap writes)
+./agdemo tf check-plan plan.json # plan-safety check on `terraform show -json` output
+```
+
+Each environment has its own state prefix (`<prefix>/<project>/<region>`). `tf init --local-state PATH` uses a local scratch state instead, and `output-sync --state PATH` writes to another state file. For a second environment in a project that already has one, set `terraform.shared_project_grants: false` in its config.
+
 ## What gets created
 
 Names below use the default prefix `agdemo` (`environment.resource_prefix`); `<project>` and `<region>` come from `config/demo.yaml`. Everything is in that one region and labeled `app=agent-gateway-demo, demo-prefix=agdemo`. `./agdemo status` lists what exists; `./agdemo teardown --all` removes it.
@@ -275,6 +289,7 @@ A new theme is a folder of YAML. Start from `themes/_template/` and follow [docs
 agdemo                 CLI entry point (preflight, bootstrap, deploy-theme, publish-ge, ui, status, reset, teardown)
 agdemo_core/           shared Python: config loader, state, theme schema, simulator, policy handlers
 agdemo_core/infra/     step implementations used by the CLI (gateways, registry, IAM, Model Armor, IAP)
+infra/terraform/       Terraform foundation (preview): root + modules/base; driven by ./agdemo tf
 runtimes/
   orchestrator/        generic ADK agent for Agent Runtime, configured per theme
   a2a_agent/           generic ADK A2A agent image for Cloud Run
