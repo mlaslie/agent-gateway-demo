@@ -185,7 +185,8 @@ def check_clean(strict: bool = typer.Option(False, "--strict", help="Also fail o
                        else "[green]CLEAN[/]" + ("" if strict else " (default mode; --strict also fails on warnings)")))
     if bad and expect:
         c.console.print("[red]Destroy aborted by the teardown guard: run ./agdemo down (or reset --all) first. "
-                        "Nothing was deleted.[/]")
+                        "Nothing was deleted.[/] Terraform has removed the root outputs from state; ./agdemo down "
+                        "still works, and ./agdemo tf apply (no resource changes) restores them.")
     raise typer.Exit(1 if bad else 0)
 
 

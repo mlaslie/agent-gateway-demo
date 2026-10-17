@@ -281,10 +281,40 @@ def outputs() -> dict[str, Any]:
     return json.loads(run_tf(["output", "-json"], capture=True) or "{}")
 
 
+GUARD_ADDR = "terraform_data.teardown_guard"
+
+
+def guard_environment(show: dict[str, Any]) -> dict[str, Any] | None:
+    """The environment the destroy guard recorded (`input.environment` = <project>/<region>/<prefix>, the
+    gateway project from its gateway ids), from `terraform show -json`. None without a well-formed guard."""
+    for res in ((show.get("values") or {}).get("root_module") or {}).get("resources") or []:
+        if res.get("address") != GUARD_ADDR:
+            continue
+        inp = (res.get("values") or {}).get("input") or {}
+        parts = str(inp.get("environment") or "").split("/")
+        if len(parts) != 3 or not all(parts):
+            return None
+        gws = [g.split("/") for g in inp.get("gateways") or [] if g]
+        gw_project = gws[0][1] if gws and len(gws[0]) > 1 and gws[0][0] == "projects" else ""
+        return {"project_id": parts[0], "region": parts[1], "prefix": parts[2],
+                "gateway_project_id": "" if gw_project == parts[0] else gw_project}
+    return None
+
+
 def environment_output() -> dict[str, Any] | None:
-    """The `environment` output of the current state (None when nothing is applied)."""
+    """The `environment` output of the current state (None when nothing is applied).
+
+    Any `terraform destroy` removes the root outputs from state, even one the guard aborts before deleting
+    anything (T5, §7i). Then the guard's recorded environment stands in, so `down` can still run (or re-run
+    after a half-finished destroy). `./agdemo tf apply` (no resource changes) writes the outputs back."""
     try:
-        return (outputs().get("environment") or {}).get("value")
+        env = (outputs().get("environment") or {}).get("value")
+    except (TfError, ValueError):
+        env = None
+    if env:
+        return env
+    try:
+        return guard_environment(json.loads(run_tf(["show", "-json"], capture=True) or "{}"))
     except (TfError, ValueError):
         return None
 

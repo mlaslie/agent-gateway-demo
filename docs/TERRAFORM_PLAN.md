@@ -308,6 +308,7 @@ Because the guard **depends on** the gateways, Terraform destroys it **first**. 
 Caveats:
 - `-target` or `terraform state rm` can bypass the guard.
 - Destroy provisioners don't run if the guard is tainted.
+- An aborted destroy still removes the root outputs from state (Terraform drops them at the start of every destroy). `down` then reads the environment from the guard's recorded `input.environment` instead (§7i); `./agdemo tf apply` (no resource changes) writes the outputs back.
 - Without the guard, the provider's in-use retry would keep the gateway delete going for up to 30 min, then fail with an unclear error.
 
 `deletion_policy = "PREVENT"` on the gateways was considered and rejected: it would need an extra apply to flip it before every legitimate `down`.
@@ -708,7 +709,78 @@ Runbook steps a–g ran on the live demo (us-east4) in a quiet window, after a h
 - **Finding (follow-up):** **Benefits calls through the gateway also go to the PSC IP.** The template's DNS peering for `run.app.` resolves *every* `*.run.app` name in the VPC.
   - Benefits is "public" only in that it also answers internet callers directly.
   - The theme/UI copy should say so, or Benefits needs a non-run.app hostname for a true internet-path contrast.
-- **T5 (throwaway `up`/`down`) is not run yet.** It needs a separate checkout, because state.json and `infra/terraform/.terraform` are per checkout. Commands are in HANDOFF §8.
+- **T5 (throwaway `up`/`down`) is not run yet.** It needs a separate checkout, because state.json and `infra/terraform/.terraform` are per checkout. Commands are in HANDOFF §8. (Run on 2026-10-17: §7i.)
+
+## 7i. T5 results: throwaway up / down (2026-10-17)
+
+The test environment was in the live demo's project, in a separate checkout (git worktree, branch `t5-test`):
+- prefix `agdtest`, region us-east1, Private Networking off;
+- `terraform.shared_project_grants: false`;
+- `helpdesk` theme only, `--no-ui`.
+
+Before anything was written, I snapshotted the live demo and the project IAM policy (read-only lists in us-east1, us-east4, us-west1 and us-central1). Every plan was checked for names other than `agdtest-*` before applying.
+
+**Timings**
+
+| Step | Run 1 | Run 2 |
+|---|---|---|
+| `up` total | **18m29s** | **13m10s** |
+| ↳ Terraform plan | 97 to add, 0 change, 0 destroy; plan-safety OK | same |
+| ↳ apply | about 7 min | 5m53s |
+| ↳ egress gateway create | 2m45s | 2m33s |
+| ↳ ingress gateway create | 31s | 11s |
+| ↳ IAP policy create | 3m14s | 3m6s |
+| ↳ Images (Cloud Build, both in parallel) | n/a | 53s |
+| ↳ Cloud Run × 4 + registry | n/a | about 40s |
+| ↳ Engines (sequential) | n/a | 2m36s, 2m56s |
+| `down` total | **9m34s** | **10m20s** |
+| ↳ `reset --all` (nothing applied) | 19s | 14s |
+| ↳ CLI teardown (engines, Cloud Run, registry) | 23s | 23s |
+| ↳ `terraform destroy` | 8m28s | 9m6s |
+| ↳ IAP policy delete | 2m34s | 3m15s |
+| ↳ egress gateway delete | 5m8s | 5m12s |
+| ↳ ingress gateway delete | 11s | 11s |
+
+Run 1's log had no timestamps, so its per-step figures after the apply aren't available. Engines were much faster than §4.3's estimate of 4.5–7 min each. `Destroy complete! 97 destroyed` counts the 21 `google_project_service` entries, which are removed from state only (`disable_on_destroy = false`).
+
+**Helpdesk, live, against `agdtest`** (local UI backend, `--mode live`, through the same API as the UI toggles):
+1. **Bind `gw-egress`:** applied after **5m18s**. The engine PATCH took about 4m50s, then the enforcement wait.
+2. **Probe:** all 8 orchestrator edges **403** "Egress request is not authorized", with no 401s. The `hr-assistant` edges stay direct 200, because that engine is unbound.
+3. **Grant `allow-kb`:** `kb-agent` **200** after **1m36s**. Every other edge stays 403.
+4. **Reset:** the grant was removed in about 40s and the engine unbound in **2m46s**. The state shows nothing applied.
+
+**Destroy guard** (after the reset, with engines and Cloud Run still deployed):
+- `check-clean --strict` found 10 blocking items: 2 engines, 4 Cloud Run services, 4 registry entries.
+- A bare `terraform -chdir=infra/terraform destroy` (no `-target`, `yes` typed at its prompt) planned 97 destroys. It ran only `terraform_data.teardown_guard`'s destroy, which failed the check, and **aborted after 28s: "Nothing was deleted."**
+- `terraform state list` was identical before and after (99 entries).
+- `./agdemo tf plan` showed **0 / 0 / 0**, so the guard wasn't tainted.
+
+**Failure found, and fixed on `t5-test`:**
+- **Symptom:** after the guard-aborted destroy, `./agdemo down` refused with "the Terraform state describes nothing (no outputs)".
+- **Cause:** Terraform removes the root outputs from state at the start of every destroy. Its plan says "Changes to Outputs: - environment", and the aborted run wrote a new state serial with `outputs: {}`, though no resource changed. `down` identifies the environment from the `environment` output. The same thing would also stop a re-run of `down` after a half-finished destroy, which §4.4 promises works.
+- **Fix:**
+  - `tf_foundation.environment_output()` falls back to the guard's recorded `input.environment` (`<project>/<region>/<prefix>`; the gateway project comes from its gateway ids) when the state has no outputs.
+  - A missing, malformed or different guard still refuses.
+  - The guard's abort message now says the outputs were removed and that `./agdemo tf apply` (no resource changes) restores them.
+  - §4.4 records the caveat.
+  - Two new tests in `test_lifecycle.py`; `ui/backend/tests`: 201 passed.
+- **Proven live:** run 1's `down` ran on exactly that output-less state and passed.
+
+**`down` and verify (both runs):**
+- The guard ran `check-clean --strict --expect <project>/us-east1/agdtest` and passed (**CLEAN**). The destroy then deleted the gateways, policy, extensions, Model Armor template, 25 platform entries, SAs, repo and staging bucket.
+- `./agdemo check-clean --strict`: 0 / 0 / 0.
+- Read-only lists in us-east1 show no gateways, authz extensions or policies, engines, Cloud Run services, Model Armor templates, Artifact Registry repos or `agdtest` SAs. `config/state.json` has empty `shared` and `themes`.
+- **Kept by design:** the state bucket (prefix `agdtest/…`) and `<project>-agdtest-recordings`.
+- **Live demo unchanged:** the us-east4, us-west1 and us-central1 lists are identical to the pre-T5 snapshot (`agdemo-egress`, `agdemo-ingress`, `agdemo-pn-egress`, their extensions, policies, engines and services; the unrelated us-central1 gateway).
+- **Project IAM policy identical to the pre-T5 snapshot** after each `down`. The 3 Model Armor grants Terraform made for the new egress gateway's own service agent were removed with it, and nothing the live demo holds was touched. This confirms §7e decision 1: each AGENT_TO_ANYWHERE gateway has its own agent.
+
+**Repeatability:** run 2 (`up` then `down`) planned the same 97 creates. It needed no fixes, left the same clean inventory, and left IAM identical to the pre-T5 snapshot.
+
+**Not covered by T5:**
+- Q7 (a truly fresh project: the gateway service agents already existed here).
+- Private Networking `up`/`down` in a throwaway environment.
+- `ui deploy` and `--ge`.
+- `reset --all` with real leftovers to clean: both runs found nothing to remove.
 
 ## 8. Open questions
 

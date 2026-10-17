@@ -2,6 +2,7 @@
 up/down ordering, write-command safety, the down confirmation, shared grants and the destroy guard.
 Everything runs on fakes: no GCP and no Terraform calls."""
 
+import json
 import re
 
 import pytest
@@ -540,6 +541,56 @@ def test_down_refusals():
     assert lc.same_env(CFG, {**TF_ENV, "gateway_project_id": ""})  # empty = the project itself
 
 
+def _show(env: str | None, gw_project: str = P) -> dict:
+    """`terraform show -json` with the destroy guard (env None = no guard) and no outputs."""
+    res = [{"address": "module.base.x", "values": {}}]
+    if env is not None:
+        res.append({"address": "terraform_data.teardown_guard", "values": {"input": {
+            "environment": env,
+            "gateways": [f"projects/{gw_project}/locations/{R}/agentGateways/{X}-egress"]}}})
+    return {"values": {"root_module": {"resources": res}}}
+
+
+def test_guard_environment():
+    from agdemo_core import tf_foundation as tfm
+
+    env = tfm.guard_environment(_show(f"{P}/{R}/{X}"))
+    assert env == {"project_id": P, "region": R, "prefix": X, "gateway_project_id": ""}
+    assert lc.same_env(CFG, env)
+    assert tfm.guard_environment(_show(f"{P}/{R}/{X}", "gw-proj"))["gateway_project_id"] == "gw-proj"
+    assert not lc.same_env(CFG, tfm.guard_environment(_show(f"{P}/{R}/{X}", "gw-proj")))
+    for bad in (None, "", f"{P}/{R}", f"{P}//{X}", f"{P}/{R}/{X}/extra"):
+        assert tfm.guard_environment(_show(bad)) is None
+    assert tfm.guard_environment({}) is None
+
+
+def test_environment_output_falls_back_to_guard(monkeypatch):
+    """T5 (§7i): a guard-aborted `terraform destroy` deletes nothing but removes the root outputs; down must
+    still recognise its environment, and refuse another one."""
+    from agdemo_core import tf_foundation as tfm
+    from agdemo_core.tf_import import EGRESS_GW_ADDR
+
+    calls = []
+    show = {"v": _show(f"{P}/{R}/{X}")}
+    outs = {"v": {}}
+
+    def fake_run_tf(args, d=None, capture=False):
+        calls.append(args[0])
+        return json.dumps(outs["v"] if args[0] == "output" else show["v"])
+
+    monkeypatch.setattr(tfm, "run_tf", fake_run_tf)
+    env = tfm.environment_output()
+    assert lc.down_refusal_tf(CFG, env, {EGRESS_GW_ADDR}, migrating=False) is None
+    show["v"] = _show(f"{P}/{R}/agdemo")
+    assert "describes" in lc.down_refusal_tf(CFG, tfm.environment_output(), {EGRESS_GW_ADDR}, migrating=False)
+    show["v"] = _show(None)
+    assert "nothing" in lc.down_refusal_tf(CFG, tfm.environment_output(), {EGRESS_GW_ADDR}, migrating=False)
+    # Outputs present: they win, and the state isn't read.
+    outs["v"] = {"environment": {"value": TF_ENV}}
+    calls.clear()
+    assert tfm.environment_output() == TF_ENV and calls == ["output"]
+
+
 def test_confirm_down():
     asked = []
 
@@ -814,7 +865,7 @@ def test_guard_command_runs_check_clean(monkeypatch):
     res = runner.invoke(cli.app, ["check-clean", "--strict", "--expect", f"{P}/us-east4/agdemo"])
     assert res.exit_code == 2 and called == []
     res = runner.invoke(cli.app, ["check-clean", "--strict", "--expect", f"{P}/{R}/{X}"])
-    assert res.exit_code == 1 and called == [X] and "Destroy aborted" in res.output
+    assert res.exit_code == 1 and called == [X] and "Destroy aborted" in res.output and "tf apply" in res.output
     res = runner.invoke(cli.app, ["check-clean"])  # default mode: a warning doesn't fail
     assert res.exit_code == 0
 
