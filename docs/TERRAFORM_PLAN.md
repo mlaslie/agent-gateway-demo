@@ -688,6 +688,28 @@ Runbook steps a–g ran on the live demo (us-east4) in a quiet window, after a h
 - **`status`:** the shared table matches the pre-migration baseline exactly, and all engines are unbound.
 - **Runbook fix:** `--out` / `--json` paths are resolved from `infra/terraform`, so pass absolute paths.
 
+## 7h. Private Networking mode live (2026-10-17)
+
+- **`tf apply` with `private_networking.enabled`:** **67 added, 1 changed** (the guard's region list), **0 destroyed**.
+  - `agdemo-pn-egress` was created with the connectivity template from the start, in 3m45s.
+  - The attachment, PSC endpoint (`agdemopnpsc`) and template `agdemo-pn-tmpl-*` were created in seconds.
+- **`deploy-theme privnet`:**
+  - Payroll MCP: ingress internal, both run.app URLs registered in us-west1;
+  - Benefits MCP: public;
+  - orchestrator: Agent Identity, with the token-sharing env var.
+- **Demo steps, run live through the UI backend API (the same path as the UI toggles):**
+  1. **Direct from the internet:** Payroll **404**, Benefits **200**.
+  2. **Unbound agent:** Payroll is **unreachable** (public path, 404), Benefits direct.
+  3. **Bind to `agdemo-pn-egress`:** a PATCH on a running engine, **about 4m20s**. **This verifies post-create binding to a template gateway,** which P0 never tested.
+  4. **Bound, no grants:** all four tools **403** "Egress request is not authorized". No 401s.
+  5. **Grant Payroll read-only (by name) + Benefits:** after **about 1m45s**, `get_payslip` **200**, `update_bank_details` **403**, Benefits both **200**.
+  6. **Gateway log:** Payroll calls have `httpRequest.serverIp` **10.70.250.10:443**, the PSC endpoint, which proves the private path.
+  7. **Reset** back to wide open: unbound, verified.
+- **Finding (follow-up):** **Benefits calls through the gateway also go to the PSC IP.** The template's DNS peering for `run.app.` resolves *every* `*.run.app` name in the VPC.
+  - Benefits is "public" only in that it also answers internet callers directly.
+  - The theme/UI copy should say so, or Benefits needs a non-run.app hostname for a true internet-path contrast.
+- **T5 (throwaway `up`/`down`) is not run yet.** It needs a separate checkout, because state.json and `infra/terraform/.terraform` are per checkout. Commands are in HANDOFF §8.
+
 ## 8. Open questions
 
 1. **Enforce / dry run ownership:** should Terraform own `iap_enforcement` from demo.yaml, or `ignore_changes` on the extension's `fail_open` and `metadata` so Policy Studio's toggle sticks? (Recommended: ignore.) The same question applies to the IAP policy's `custom_provider`, which Policy Studio's "own extension" flow repoints.
