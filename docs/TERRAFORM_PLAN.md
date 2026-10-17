@@ -677,6 +677,17 @@ No GCP writes were made: unit tests on fakes, plan-only Terraform runs with a lo
 - Cloud Run `--ingress=internal` with `public_targets` false (id-token auth over the PSC path).
 - `reset --all` and `check-clean` against real us-west1 resources.
 
+## 7g. T2 live migration: done (2026-10-17)
+
+Runbook steps a–g ran on the live demo (us-east4) in a quiet window, after a helpdesk reset.
+- **Legacy cleanup:** the ingress IAP policy and extension and the two caller SAs (and their project grants) were deleted and verified gone.
+- **Terraform state:** in its GCS bucket, versioning on.
+- **Apply:** **35 imported, 69 added, 8 changed, 0 destroyed.** The follow-up plan shows **No changes**.
+- **state.json:** only `recordings_bucket` and `tf_environment` were added.
+- **Recordings:** 20 objects / 50,676 bytes copied to the recordings bucket, with identical counts and sizes. The UI was redeployed and `AGDEMO_RECORDINGS_URI` points at the new bucket. The old copies are still in staging.
+- **`status`:** the shared table matches the pre-migration baseline exactly, and all engines are unbound.
+- **Runbook fix:** `--out` / `--json` paths are resolved from `infra/terraform`, so pass absolute paths.
+
 ## 8. Open questions
 
 1. **Enforce / dry run ownership:** should Terraform own `iap_enforcement` from demo.yaml, or `ignore_changes` on the extension's `fail_open` and `metadata` so Policy Studio's toggle sticks? (Recommended: ignore.) The same question applies to the IAP policy's `custom_provider`, which Policy Studio's "own extension" flow repoints.
