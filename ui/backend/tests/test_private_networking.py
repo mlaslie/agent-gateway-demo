@@ -226,7 +226,8 @@ def test_demo_steps():
     assert _run(t, "grant", "bank-details", {"gw-egress", "payroll-readonly"})["payroll-mcp:update_bank_details"]["state"] == "denied"
     assert _run(t, "grant", "bank-details", {"gw-egress", "payroll-all"})["payroll-mcp:update_bank_details"]["state"] == "allowed"
     s5 = _run(t, "public-contrast", "side-by-side", {"gw-egress", "payroll-readonly", "allow-benefits"})
-    assert s5["benefits-mcp:list_plans"]["path"] == "internet" and s5["payroll-mcp:get_payslip"]["path"] == "private"
+    # run.app is DNS-peered into the VPC: through the gateway both servers take the PSC endpoint (§7h, live)
+    assert s5["benefits-mcp:list_plans"]["path"] == "private" and s5["payroll-mcp:get_payslip"]["path"] == "private"
     assert _run(t, "public-contrast", "side-by-side", {"gw-egress"})["benefits-mcp:list_plans"]["state"] == "denied"
 
 
@@ -277,7 +278,7 @@ def test_sim_log_private_path():
     e = SimLogBook._entry(t, "payroll-mcp:get_payslip", "allowed", 0, "agdtest", "agdtest-pn-egress", "us-west1")
     assert e["private_path"] and e["raw"]["httpRequest"]["serverIp"].startswith("10.")
     e = SimLogBook._entry(t, "benefits-mcp:list_plans", "allowed", 0, "agdtest", "agdtest-pn-egress", "us-west1")
-    assert not e["private_path"] and e["server_ip"]
+    assert e["private_path"] and e["raw"]["httpRequest"]["serverIp"].startswith("10.")   # public run.app also via PSC
     e = SimLogBook._entry(t, "payroll-mcp:get_payslip", "denied", 0, "agdtest", "agdtest-pn-egress", "us-west1")
     assert e["decided_by"] == "agdtest-pn-egress-iap-policy" and "serverIp" not in e["raw"]["httpRequest"]
 

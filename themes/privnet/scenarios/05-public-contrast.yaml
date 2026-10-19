@@ -1,10 +1,12 @@
 id: public-contrast
 order: 5
 title: "Public MCP, same policy"
-subtitle: "Internet path, same registry + IAP"
+subtitle: "Also open to the internet, same registry + IAP"
 description: |
-  Benefits MCP is a normal public Cloud Run service. Through the same gateway it follows exactly the same
-  policy (403 until granted, then 200), but the gateway log shows a public serverIp: the internet path.
+  Benefits MCP is a normal public Cloud Run service: unlike Payroll, internet callers reach it directly.
+  Through the same gateway it follows exactly the same policy (403 until granted, then 200). Its gateway
+  log also shows the PSC endpoint as serverIp: the gateway resolves every *.run.app name inside the VPC
+  (DNS peering for run.app.), so public Cloud Run services take the private path too.
   Not shown, only explained: an agent with its own PSC interface would reach the VPC without the gateway
   (ungoverned), which is why the demo never gives the agent one.
 flow: egress

@@ -30,10 +30,12 @@ UNREACHABLE_DETAIL = ("404: {name} has Cloud Run ingress internal. {who} reaches
 
 
 def _net_path(theme: Theme, base: str) -> str | None:
-    """Private Networking themes: which network path an allowed call takes (None for Internet themes)."""
+    """Private Networking themes: which network path a call through the VPC-enabled gateway takes (None for
+    Internet themes). The gateway's DNS peering covers run.app., so every Cloud Run destination resolves to
+    the PSC endpoint inside the VPC, public ones too (verified live 2026-10-17, TERRAFORM_PLAN §7h)."""
     if theme.network_mode != "private_networking":
         return None
-    return "private" if theme.internal(split_edge(base)[0]) else "internet"
+    return "private"
 
 
 def _applied_policies(theme: Theme, applied: Iterable[str]) -> list[Policy]:
@@ -164,7 +166,7 @@ def evaluate(theme: Theme, applied: Iterable[str], model_armor: bool,
                                     detail=UNREACHABLE_DETAIL.format(name=_label(theme, split_edge(base)[0]),
                                                                      who=who))
             elif not egress_on:
-                out[e] = edge_state("direct", governed=False, http_status=200, path=net,
+                out[e] = edge_state("direct", governed=False, http_status=200, path="internet" if net else None,
                                     detail="Direct call; no Agent Gateway attached")
             elif (p := _egress_allowing_policy(theme, mine, base)):
                 via = {"private": " via the private path (gateway -> network attachment -> PSC endpoint in "

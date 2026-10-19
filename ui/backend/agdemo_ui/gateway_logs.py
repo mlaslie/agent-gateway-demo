@@ -18,7 +18,7 @@ from agdemo_core.themes import Theme, split_source
 POLICY = {"denied": "agdemo-egress-iap-policy", "blocked": "agdemo-egress-ma-policy"}
 PN_POLICY = {"denied": "agdemo-pn-egress-iap-policy"}
 SIM_PSC_IP = "10.70.250.10"          # demo.example.yaml private_networking.psc_ip
-SIM_PUBLIC_IP = "34.143.77.2"        # a public Google front-end IP shape, for the internet path
+SIM_PUBLIC_IP = "34.143.77.2"        # a public Google front-end IP shape (unused for run.app under Private Networking)
 
 
 def parse_ts(iso: str) -> float:
@@ -70,7 +70,7 @@ class SimLogBook:
         # Denied entries carry no serverIp (P0 §2.3); allowed ones do.
         sip = None
         if pn and decision == "allowed":
-            sip = f"{psc_ip}:443" if theme.internal(comp) else f"{SIM_PUBLIC_IP}:443"
+            sip = f"{psc_ip}:443"   # run.app is DNS-peered into the VPC: every run.app call takes the PSC endpoint
         insert_id = uuid.uuid4().hex[:14]
         raw = {
             "insertId": insert_id, "timestamp": _iso(ts), "severity": "INFO" if status == 200 else "WARNING",

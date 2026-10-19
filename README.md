@@ -321,7 +321,7 @@ The header's **Network** switch picks **Internet** (the themes above, base regio
 2. **Through the gateway:** attach the gateway; route exists, no permission: 403.
 3. **Registered ≠ allowed:** Payroll MCP is in Agent Registry (both URLs, tool spec); still 403.
 4. **Grant:** all tools or read-only only: 200, and the gateway log entry is marked **private path** (`httpRequest.serverIp` = the PSC endpoint, 10.x).
-5. **Public MCP, same policy:** Benefits MCP follows the same registry + IAP rules over the internet path (public serverIp).
+5. **Public MCP, same policy:** Benefits MCP follows the same registry + IAP rules. Unlike Payroll it is also reachable from the internet directly, but through this gateway it takes the private path too (serverIp is the PSC endpoint), because the gateway resolves every `*.run.app` name inside the VPC.
 
 The diagram shows the VPC between the gateway and Payroll MCP (attachment, PSC endpoint, DNS); **Under the hood: private network** in the side panel lists the pre-built pieces and the template, from `state.json shared.regions` after `up` (or as `up` would name them). No ingress gateway and no Model Armor in this mode.
 

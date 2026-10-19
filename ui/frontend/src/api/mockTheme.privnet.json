@@ -1,7 +1,7 @@
 {
  "id": "privnet",
  "name": "Private networking",
- "description": "An HR payroll agent behind a VPC-enabled Agent Gateway (Private Networking mode, docs/TERRAFORM_PLAN.md \u00a77c). Payroll MCP is an internal-only Cloud Run service reachable only through your VPC; Benefits MCP is a public one, for side-by-side contrast. The same registry + IAP policy governs both.\n",
+ "description": "An HR payroll agent behind a VPC-enabled Agent Gateway (Private Networking mode, docs/TERRAFORM_PLAN.md \u00a77c). Payroll MCP is an internal-only Cloud Run service reachable only through your VPC; Benefits MCP is a public one that internet callers can also reach directly, for side-by-side contrast. The same registry + IAP\npolicy governs both, and through the gateway both take the private path (run.app is DNS-peered into the VPC).\n",
  "region": "us-west1",
  "network_mode": "private_networking",
  "orchestrator": {
@@ -414,8 +414,8 @@
    "id": "public-contrast",
    "order": 5,
    "title": "Public MCP, same policy",
-   "subtitle": "Internet path, same registry + IAP",
-   "description": "Benefits MCP is a normal public Cloud Run service. Through the same gateway it follows exactly the same\npolicy (403 until granted, then 200), but the gateway log shows a public serverIp: the internet path.\nNot shown, only explained: an agent with its own PSC interface would reach the VPC without the gateway\n(ungoverned), which is why the demo never gives the agent one.\n",
+   "subtitle": "Also open to the internet, same registry + IAP",
+   "description": "Benefits MCP is a normal public Cloud Run service: unlike Payroll, internet callers reach it directly.\nThrough the same gateway it follows exactly the same policy (403 until granted, then 200). Its gateway\nlog also shows the PSC endpoint as serverIp: the gateway resolves every *.run.app name inside the VPC\n(DNS peering for run.app.), so public Cloud Run services take the private path too.\nNot shown, only explained: an agent with its own PSC interface would reach the VPC without the gateway\n(ungoverned), which is why the demo never gives the agent one.\n",
    "flow": "egress",
    "nodes": [
     "orchestrator",

@@ -49,7 +49,7 @@ export function evaluate(
 
   const out: Record<string, EdgeState> = {};
   const pn = isPrivateNetworking(theme);
-  const netPath = (comp: string): EdgeState["path"] | undefined => (pn ? (isInternal(theme, comp) ? "private" : "internet") : undefined);
+  const netPath = (_comp: string): EdgeState["path"] | undefined => (pn ? "private" : undefined) /* run.app is DNS-peered into the VPC: through the gateway every run.app destination takes the PSC endpoint */;
   if (test?.via === "direct") {
     // T4 bypass: from the demo UI backend, outside every agent and gateway.
     for (const e of edgeIds(theme)) {

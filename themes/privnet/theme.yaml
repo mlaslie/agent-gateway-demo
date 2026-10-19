@@ -3,7 +3,8 @@ name: Private networking
 description: >
   An HR payroll agent behind a VPC-enabled Agent Gateway (Private Networking mode, docs/TERRAFORM_PLAN.md §7c).
   Payroll MCP is an internal-only Cloud Run service reachable only through your VPC; Benefits MCP is a
-  public one, for side-by-side contrast. The same registry + IAP policy governs both.
+  public one that internet callers can also reach directly, for side-by-side contrast. The same registry + IAP
+  policy governs both, and through the gateway both take the private path (run.app is DNS-peered into the VPC).
 
 # Runs in private_networking.region, behind <prefix>-pn-egress (created by ./agdemo up with the connectivity
 # template). No ingress gateway and no Model Armor in this mode.
