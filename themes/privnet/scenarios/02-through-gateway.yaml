@@ -1,11 +1,13 @@
 id: through-gateway
 order: 2
 title: "Through the gateway"
-subtitle: "Route exists, no permission → 403"
+subtitle: "Route + registry entry, no permission → 403"
 description: |
   Attach the VPC-enabled gateway. Its connectivity template gives it a network attachment in your VPC, where
-  run.app resolves to the PSC endpoint, so Payroll MCP is now reachable. Reachable isn't allowed: default
-  deny answers 403 for both servers.
+  run.app resolves to the PSC endpoint, so Payroll MCP is now reachable. Both servers are also registered in
+  Agent Registry (open the registry: Payroll has both run.app URL forms and its tool spec). But no identity
+  holds roles/iap.egressor on them, so default deny answers 403 for both: a route and a registry entry
+  aren't permission.
 flow: egress
 nodes: [orchestrator, egress_gateway, registry, payroll-mcp, benefits-mcp]
 preconditions: [gw-egress]

@@ -1,11 +1,12 @@
 id: grant
-order: 4
-title: "Grant: private path"
+order: 3
+title: "Grant Payroll: private path"
 subtitle: "200, serverIp = PSC endpoint (10.x)"
 description: |
   Grant Payroll Agent's Agent Identity roles/iap.egressor on Payroll MCP (all tools, or read-only only).
   About 2 minutes later the call succeeds, and the gateway log entry's httpRequest.serverIp is the private
-  PSC endpoint IP: the request took the private path through your VPC.
+  PSC endpoint IP: the request took the private path through your VPC. With the read-only grant,
+  update_bank_details stays 403: tool-level policy works over the private path too. Benefits stays 403.
 flow: egress
 nodes: [orchestrator, egress_gateway, registry, payroll-mcp]
 preconditions: [gw-egress]

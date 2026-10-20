@@ -192,7 +192,7 @@ def test_privnet_theme_loads():
     assert {x.name: x.read_only for x in t.mcp_servers["payroll-mcp"].tools} == {"get_payslip": True,
                                                                                  "update_bank_details": False}
     assert {p.type for p in t.policies} == {"gateway_attach", "mcp_tool_allow", "mcp_server_allow"}
-    assert [s.order for s in t.scenarios] == [1, 2, 3, 4, 5]
+    assert [s.order for s in t.scenarios] == [1, 2, 3, 4]
 
 
 def test_internal_needs_private_networking():
@@ -219,8 +219,9 @@ def test_demo_steps():
     s1b = _run(t, "internal-only", "agent-no-gateway", set())
     assert s1b["payroll-mcp:get_payslip"]["state"] == "unreachable" and s1b["benefits-mcp:list_plans"]["state"] == "direct"
     assert _run(t, "through-gateway", "payslip-no-grant", {"gw-egress"})["payroll-mcp:get_payslip"]["http_status"] == 403
-    s3 = _run(t, "registered", "registered-no-grant", {"gw-egress"})
-    assert {v["state"] for v in s3.values()} == {"denied"}
+    s2 = _run(t, "through-gateway", "payslip-no-grant", {"gw-egress"})   # route + registry entry, no grant
+    assert s2["payroll-mcp:get_payslip"]["state"] == "denied"
+    assert [sc.id for sc in sorted(t.scenarios, key=lambda x: x.order)] == ["internal-only", "through-gateway", "grant", "public-contrast"]
     ok = _run(t, "grant", "payslip", {"gw-egress", "payroll-readonly"})["payroll-mcp:get_payslip"]
     assert ok["state"] == "allowed" and ok["path"] == "private" and "PSC endpoint" in ok["detail"]
     assert _run(t, "grant", "bank-details", {"gw-egress", "payroll-readonly"})["payroll-mcp:update_bank_details"]["state"] == "denied"

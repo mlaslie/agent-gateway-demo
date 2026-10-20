@@ -536,11 +536,10 @@ It's still created by `up` and destroyed by `down`, with the same guard and orde
 
 **Demo steps in Private Networking mode** (toggles and tests):
 1. Payroll MCP is internal-only: a direct call is rejected with 404.
-2. Through the gateway (route exists, no permission): 403.
-3. Registered in Agent Registry: still 403. Reachable and registered isn't the same as allowed.
-4. Grant (optionally read-only tools): 200, and the gateway log shows the private 10.x IP.
-5. Contrast: the public MCP follows the same policy. It is also reachable from the internet directly, but through the gateway it takes the private path too (run.app is DNS-peered; verified live, §7h).
-6. Optional: the diagram explains a "direct VPC access" agent (PSC interface) that bypasses the gateway. It's explained only, not deployed.
+2. Through the gateway: there's a route and both servers are registered, but no grant, so 403. A route and a registry entry aren't permission. (The former separate "registered" step was dropped on 2026-10-20: it showed the same state as this one.)
+3. Grant Payroll (optionally read-only tools): 200, and the gateway log shows the private 10.x IP. With read-only, the write tool stays 403.
+4. Contrast: the public MCP follows the same policy. It is also reachable from the internet directly, but through the gateway it takes the private path too (run.app is DNS-peered; verified live, §7h).
+5. Optional: the diagram explains a "direct VPC access" agent (PSC interface) that bypasses the gateway. It's explained only, not deployed.
 
 **Effort:** about 3–4 days on top of T1–T5 (region-aware themes, the mode switch, the new theme and scenarios, the VPC diagram, log highlight). T4 changes accordingly: no gateway migration, so the second-region module plus the theme.
 

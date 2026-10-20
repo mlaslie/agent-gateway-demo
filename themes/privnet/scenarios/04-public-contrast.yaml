@@ -1,6 +1,6 @@
 id: public-contrast
-order: 5
-title: "Public MCP, same policy"
+order: 4
+title: "Grant Benefits: same policy"
 subtitle: "Also open to the internet, same registry + IAP"
 description: |
   Benefits MCP is a normal public Cloud Run service: unlike Payroll, internet callers reach it directly.

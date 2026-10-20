@@ -1,7 +1,7 @@
 {
  "id": "privnet",
  "name": "Private networking",
- "description": "An HR payroll agent behind a VPC-enabled Agent Gateway (Private Networking mode, docs/TERRAFORM_PLAN.md \u00a77c). Payroll MCP is an internal-only Cloud Run service reachable only through your VPC; Benefits MCP is a public one that internet callers can also reach directly, for side-by-side contrast. The same registry + IAP\npolicy governs both, and through the gateway both take the private path (run.app is DNS-peered into the VPC).\n",
+ "description": "An HR payroll agent behind a VPC-enabled Agent Gateway (Private Networking mode, docs/TERRAFORM_PLAN.md \u00a77c). Payroll MCP is an internal-only Cloud Run service reachable only through your VPC; Benefits MCP is a public one that internet callers can also reach directly, for side-by-side contrast. The same registry + IAP policy governs both, and through the gateway both take the private path (run.app is DNS-peered into the VPC).\n",
  "region": "us-west1",
  "network_mode": "private_networking",
  "orchestrator": {
@@ -278,8 +278,8 @@
    "id": "through-gateway",
    "order": 2,
    "title": "Through the gateway",
-   "subtitle": "Route exists, no permission \u2192 403",
-   "description": "Attach the VPC-enabled gateway. Its connectivity template gives it a network attachment in your VPC, where\nrun.app resolves to the PSC endpoint, so Payroll MCP is now reachable. Reachable isn't allowed: default\ndeny answers 403 for both servers.\n",
+   "subtitle": "Route + registry entry, no permission \u2192 403",
+   "description": "Attach the VPC-enabled gateway. Its connectivity template gives it a network attachment in your VPC, where\nrun.app resolves to the PSC endpoint, so Payroll MCP is now reachable. Both servers are also registered in\nAgent Registry (open the registry: Payroll has both run.app URL forms and its tool spec). But no identity\nholds roles/iap.egressor on them, so default deny answers 403 for both: a route and a registry entry\naren't permission.\n",
    "flow": "egress",
    "nodes": [
     "orchestrator",
@@ -314,52 +314,11 @@
    ]
   },
   {
-   "id": "registered",
-   "order": 3,
-   "title": "Registered \u2260 allowed",
-   "subtitle": "In Agent Registry, still 403",
-   "description": "Open Agent Registry: Payroll MCP is registered with both run.app URL forms (SERVICE-NUMBER.REGION.run.app\nand SERVICE-HASH.a.run.app; the registry matches URLs exactly) and its tool spec. No identity holds\nroles/iap.egressor on it, so the gateway still denies the call.\n",
-   "flow": "egress",
-   "nodes": [
-    "orchestrator",
-    "egress_gateway",
-    "registry",
-    "payroll-mcp"
-   ],
-   "preconditions": [
-    "gw-egress"
-   ],
-   "policies": [],
-   "tests": [
-    {
-     "id": "registered-no-grant",
-     "label": "Registered, no grant",
-     "agent": null,
-     "prompt": "Update jdoe's bank account to IBAN 0000 and show the payslip.",
-     "probes": [
-      {
-       "edge": "payroll-mcp:get_payslip",
-       "message": null,
-       "args": null
-      },
-      {
-       "edge": "payroll-mcp:update_bank_details",
-       "message": null,
-       "args": null
-      }
-     ],
-     "malicious": false,
-     "via": "agent",
-     "sample_replies": {}
-    }
-   ]
-  },
-  {
    "id": "grant",
-   "order": 4,
-   "title": "Grant: private path",
+   "order": 3,
+   "title": "Grant Payroll: private path",
    "subtitle": "200, serverIp = PSC endpoint (10.x)",
-   "description": "Grant Payroll Agent's Agent Identity roles/iap.egressor on Payroll MCP (all tools, or read-only only).\nAbout 2 minutes later the call succeeds, and the gateway log entry's httpRequest.serverIp is the private\nPSC endpoint IP: the request took the private path through your VPC.\n",
+   "description": "Grant Payroll Agent's Agent Identity roles/iap.egressor on Payroll MCP (all tools, or read-only only).\nAbout 2 minutes later the call succeeds, and the gateway log entry's httpRequest.serverIp is the private\nPSC endpoint IP: the request took the private path through your VPC. With the read-only grant,\nupdate_bank_details stays 403: tool-level policy works over the private path too. Benefits stays 403.\n",
    "flow": "egress",
    "nodes": [
     "orchestrator",
@@ -412,8 +371,8 @@
   },
   {
    "id": "public-contrast",
-   "order": 5,
-   "title": "Public MCP, same policy",
+   "order": 4,
+   "title": "Grant Benefits: same policy",
    "subtitle": "Also open to the internet, same registry + IAP",
    "description": "Benefits MCP is a normal public Cloud Run service: unlike Payroll, internet callers reach it directly.\nThrough the same gateway it follows exactly the same policy (403 until granted, then 200). Its gateway\nlog also shows the PSC endpoint as serverIp: the gateway resolves every *.run.app name inside the VPC\n(DNS peering for run.app.), so public Cloud Run services take the private path too.\nNot shown, only explained: an agent with its own PSC interface would reach the VPC without the gateway\n(ungoverned), which is why the demo never gives the agent one.\n",
    "flow": "egress",

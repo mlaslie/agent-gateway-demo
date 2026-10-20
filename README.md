@@ -318,10 +318,9 @@ The header's **Network** switch picks **Internet** (the themes above, base regio
 
 **Demo steps** (theme `privnet`, all live toggles; they also run in Demo mode without GCP):
 1. **Internal only:** the *Bypass* test calls Payroll MCP from the UI backend (no agent, no gateway): 404. The agent without the gateway also gets 404. Benefits MCP answers directly.
-2. **Through the gateway:** attach the gateway; route exists, no permission: 403.
-3. **Registered ≠ allowed:** Payroll MCP is in Agent Registry (both URLs, tool spec); still 403.
-4. **Grant:** all tools or read-only only: 200, and the gateway log entry is marked **private path** (`httpRequest.serverIp` = the PSC endpoint, 10.x).
-5. **Public MCP, same policy:** Benefits MCP follows the same registry + IAP rules. Unlike Payroll it is also reachable from the internet directly, but through this gateway it takes the private path too (serverIp is the PSC endpoint), because the gateway resolves every `*.run.app` name inside the VPC.
+2. **Through the gateway:** attach the gateway. There's a route into the VPC and both servers are in Agent Registry (Payroll with both URLs and its tool spec), but no grant: 403 for both. A route and a registry entry aren't permission.
+3. **Grant Payroll:** all tools or read-only only: 200, and the gateway log entry is marked **private path** (`httpRequest.serverIp` = the PSC endpoint, 10.x). With read-only, `update_bank_details` stays 403.
+4. **Grant Benefits, same policy:** Benefits MCP follows the same registry + IAP rules. Unlike Payroll it is also reachable from the internet directly, but through this gateway it takes the private path too (serverIp is the PSC endpoint), because the gateway resolves every `*.run.app` name inside the VPC.
 
 The diagram shows the VPC between the gateway and Payroll MCP (attachment, PSC endpoint, DNS); **Under the hood: private network** in the side panel lists the pre-built pieces and the template, from `state.json shared.regions` after `up` (or as `up` would name them). No ingress gateway and no Model Armor in this mode.
 
