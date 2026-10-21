@@ -6,7 +6,8 @@ import type { Theme } from "../api/types";
 import { glossaryEntry, glossSegments } from "../teach/glossary";
 import type { Decoded } from "../teach/decode";
 import { GlassModal } from "./Glass";
-import { ArrowIcon, HelpIcon, LockIcon } from "./Icons";
+import { ArrowIcon, CodeIcon, HelpIcon, LockIcon } from "./Icons";
+import { openBuildByHand } from "../build/route";
 
 // ---------- context: what the decoder needs to know about the current theme and policy state ----------
 
@@ -230,9 +231,16 @@ export function HowItWorks({ privateNetworking, onClose }: { privateNetworking: 
         not registered, or no grant, means 403. A registry entry{privateNetworking ? " or a route" : ""} isn't permission.
       </p>
       <div className="hw-foot">
-        {/* TODO: link to the "Build it by hand" page once it exists (designed separately as mockups/build-by-hand.html). */}
-        <button type="button" className="glass-btn" disabled aria-disabled="true" title="Coming soon">
-          Build it by hand <span className="hw-soon">coming soon</span>
+        <button
+          type="button"
+          className="glass-btn"
+          onClick={() => {
+            onClose();
+            openBuildByHand();
+          }}
+          title="Every step of the build, in order, as curl, gcloud, Terraform and Python"
+        >
+          <CodeIcon size={15} /> Build it by hand
         </button>
       </div>
     </GlassModal>

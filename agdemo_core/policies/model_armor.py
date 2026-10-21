@@ -66,7 +66,7 @@ def describe(ctx: Ctx) -> list[str]:
         lines += [f"cat > {name}.yaml <<EOF", f"name: {name}", "target:", "  resources:",
                   f"  - {gw.gateway_resource(cfg, path)}", "policyProfile: CONTENT_AUTHZ", "action: CUSTOM",
                   "customProvider:", "  authzExtension:", "    resources:", f"    - {ext}", "EOF",
-                  f"gcloud network-security authz-policies import {name} --source={name}.yaml "
+                  f"gcloud beta network-security authz-policies import {name} --source={name}.yaml "
                   f"--location={cfg.region} --project={proj}"]
     lines.append("# Off: gcloud network-security authz-policies delete <name> --location=" + cfg.region)
     return lines

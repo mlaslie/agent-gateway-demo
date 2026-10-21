@@ -8,7 +8,7 @@
     "dev:mock": "VITE_MOCK=1 vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "node --test src/teach/*.test.ts"
+    "test": "node --test src/teach/*.test.ts src/build/*.test.ts"
   },
   "dependencies": {
     "@xyflow/react": "^12.12.0",

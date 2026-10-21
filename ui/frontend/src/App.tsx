@@ -8,10 +8,14 @@ import { RegistrySheet } from "./components/RegistrySheet";
 import { CheckIcon, CloseIcon, WarnIcon } from "./components/Icons";
 import { useDemo } from "./useDemo";
 import { TeachContext, type TeachInfo } from "./components/Teach";
-import { useMemo } from "react";
+import { lazy, Suspense, useMemo } from "react";
+import { closeBuildByHand, useBuildByHandOpen } from "./build/route";
+
+const BuildByHand = lazy(() => import("./components/BuildByHand").then((m) => ({ default: m.BuildByHand })));
 
 export default function App({ api }: { api: Api }) {
   const d = useDemo(api);
+  const byHand = useBuildByHandOpen();
   const policies = d.state?.policies;
   const teach = useMemo<TeachInfo>(
     () => ({ theme: d.theme, active: new Set(Object.entries(policies ?? {}).filter(([, p]) => p.applied).map(([id]) => id)) }),
@@ -44,7 +48,7 @@ export default function App({ api }: { api: Api }) {
   const sc = d.scenario;
   return (
     <TeachContext.Provider value={teach}>
-    <div className="app">
+    <div className="app" inert={byHand}>
       <Header d={d} />
       {notices.length > 0 && (
         <div className={`notice notice-${notices.some((n) => n.tone === "warn") ? "warn" : "info"}`}>{notices.map((n) => n.text).join("  ·  ")}</div>
@@ -98,6 +102,11 @@ export default function App({ api }: { api: Api }) {
         </div>
       )}
     </div>
+    {byHand && (
+      <Suspense fallback={<div className="bbh bb-loading">Loading…</div>}>
+        <BuildByHand privateNetworking={d.networkMode === "private_networking"} onBack={closeBuildByHand} />
+      </Suspense>
+    )}
     </TeachContext.Provider>
   );
 }

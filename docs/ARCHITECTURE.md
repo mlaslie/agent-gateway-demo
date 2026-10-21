@@ -87,7 +87,7 @@ customProvider: {authzExtension: {resources: [projects/P/locations/R/authzExtens
 
 ```bash
 gcloud beta service-extensions authz-extensions import agdemo-egress-iap-authz --source=ext.yaml --location=R
-gcloud network-security authz-policies import agdemo-egress-iap-policy --source=policy.yaml --location=R
+gcloud beta network-security authz-policies import agdemo-egress-iap-policy --source=policy.yaml --location=R
 ```
 
 Each authz policy create or delete is a long-running operation that takes **about 4 minutes** (measured 260 s for two policies in parallel).
