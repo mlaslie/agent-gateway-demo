@@ -155,7 +155,8 @@ a {
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  flex-wrap: wrap; /* narrow screens: "How it works" drops below the title instead of being cut off */
+  gap: 8px 12px;
   min-width: 0;
 }
 .brand-logo {
@@ -3815,18 +3816,121 @@ a {
 }
 
 /* header ? button + How it works */
-.help-btn {
-  color: var(--text-2);
-  width: 32px;
-  height: 32px;
+/* "How it works" in the header: a pill that's easy to spot. The label's colours flow slowly, a light sweep
+   crosses the button now and then, and the icon pulses gently. All motion stops with prefers-reduced-motion. */
+.how-btn {
+  --how-a: #1a73e8;
+  --how-b: #9334e6;
+  --how-c: #1e8e3e;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  height: 34px;
+  padding: 0 14px 0 8px;
+  border-radius: 999px;
+  border: 1.5px solid transparent;
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(90deg, var(--how-a), var(--how-b), var(--how-c), var(--how-a)) border-box;
+  background-size: 100% 100%, 300% 100%;
+  animation: how-flow 6s linear infinite;
+  cursor: pointer;
+  overflow: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow-1);
+  transition: transform 0.15s, box-shadow 0.15s;
 }
-.help-btn:hover {
-  color: var(--blue);
-  background: var(--blue-weak);
+@media (prefers-color-scheme: dark) {
+  .how-btn {
+    --how-a: #8ab4f8;
+    --how-b: #c58af9;
+    --how-c: #81c995;
+  }
 }
-.help-btn:focus-visible {
+.how-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.55) 50%, transparent 70%);
+  transform: translateX(-120%);
+  animation: how-sweep 5s ease-in-out 1.5s infinite;
+  pointer-events: none;
+}
+.how-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-2);
+}
+.how-btn:focus-visible {
   outline: 2px solid var(--blue);
-  outline-offset: 1px;
+  outline-offset: 2px;
+}
+.how-btn-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #fff;
+  background: linear-gradient(135deg, var(--how-a), var(--how-b));
+  animation: how-pulse 2.4s ease-in-out infinite;
+}
+@media (prefers-color-scheme: dark) {
+  .how-btn-icon {
+    color: #202124;
+  }
+}
+.how-btn-text {
+  background: linear-gradient(90deg, var(--how-a), var(--how-b), var(--how-c), var(--how-a));
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: how-flow-text 6s linear infinite;
+}
+@keyframes how-flow {
+  to {
+    background-position: 0 0, 300% 0;
+  }
+}
+@keyframes how-flow-text {
+  to {
+    background-position: 300% 0;
+  }
+}
+@keyframes how-sweep {
+  0%,
+  55% {
+    transform: translateX(-120%);
+  }
+  85%,
+  100% {
+    transform: translateX(120%);
+  }
+}
+@keyframes how-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--how-a) 45%, transparent);
+  }
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--how-a) 0%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .how-btn,
+  .how-btn-text,
+  .how-btn-icon,
+  .how-btn::after {
+    animation: none;
+  }
+  .how-btn::after {
+    display: none;
+  }
 }
 .sheet-how {
   width: min(760px, 100%);

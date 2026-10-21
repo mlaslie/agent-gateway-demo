@@ -172,8 +172,11 @@ export const whyFixText = (d: Decoded) => `${d.title}\nWhy: ${d.why}\nFix: ${d.f
 
 export function HelpButton({ onClick }: { onClick: () => void }) {
   return (
-    <button type="button" className="icon-btn help-btn" onClick={onClick} aria-label="How it works" title="How it works: the call path in one picture">
-      <HelpIcon size={20} />
+    <button type="button" className="how-btn" onClick={onClick} title="How it works: the call path in one picture, and how to build it by hand">
+      <span className="how-btn-icon" aria-hidden="true">
+        <HelpIcon size={16} />
+      </span>
+      <span className="how-btn-text">How it works</span>
     </button>
   );
 }
