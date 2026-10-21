@@ -25,12 +25,12 @@ Architecture details: `docs/ARCHITECTURE.md`.
 - **A project with billing**, in an org where you can turn on IAP. A dedicated or sandbox project is recommended.
 - **A supported region.** Agent Gateway, Agent Runtime, Agent Registry and Cloud Run must all be available there, because the gateway and the agent must be in the same region. `./agdemo preflight` checks this.
 - **No conflicting gateway bindings.** All Agent Runtime agents in a project and region must share the same egress and ingress gateway. If that region already has agents bound to other gateways, either pick another region or set `gateways.create: false` and reuse the existing gateways.
-- **Tools:** `gcloud` (recent, with beta components), Python 3.11+, `uv`, Node 20+ (only for local UI development), `jq`.
+- **Tools:** `gcloud` (recent, with beta components), **Terraform 1.7+** (`./agdemo up` builds the shared foundation with it), Python 3.11+, `uv`, `jq`. Node 20+ only for local UI development.
 - **Your permissions.** Project Owner is simplest. Otherwise you need admin rights for Network Services, Network Security, Service Extensions, IAP, Agent Registry, Vertex AI / Agent Runtime, Cloud Run, Model Armor, Artifact Registry, Cloud Build, Service Accounts, Project IAM and Service Usage. Preflight lists anything missing.
 - **Agent Runtime restrictions:**
   - Agents bound to a gateway can't use revisions or traffic splitting.
   - Engines created before 2026-04-29 can't be bound.
-  - VPC Service Controls isn't supported with Agent Gateway.
+  - VPC Service Controls only works with a gateway created after 2026-09-08 that uses a connectivity template with `ALL_TRAFFIC` egress (not used by this demo).
 
 ## 3. Configure
 
@@ -49,15 +49,26 @@ Edit `config/demo.yaml`. At minimum, set:
 | `environment.project_id` | Your project |
 | `environment.region` | A supported region (see prerequisites) |
 | `environment.resource_prefix` | A short unique prefix (lowercase, 10 characters or fewer), so several copies can share a project |
-| `ui.iap_access` / `ui.admin_access` | Who can view the UI / who can change Live policy (bootstrap also grants `ui.admin_access` members `roles/aiplatform.user`, see §7) |
+| `ui.iap_access` / `ui.admin_access` | Who can view the UI / who can change Live policy (`./agdemo up` also grants `ui.admin_access` members `roles/aiplatform.user`, see §7) |
 
 Optional: `gateway_project_id` (egress gateway in another project), `gateways.create: false` (reuse existing gateways), `themes.enabled` / `themes.default`, `default_mode`, `models.default`, `model_armor.filters`, `cloud_run.public_targets` (whether the mock Cloud Run targets allow unauthenticated invocation; enforcement happens at the gateway either way).
 
-Authenticate:
+Optional, for **Private Networking mode** (a VPC-enabled gateway, README "Private Networking mode"):
+
+| Key | What to set |
+|---|---|
+| `private_networking.enabled` | `true` to build the VPC side too |
+| `private_networking.region` | A second supported region, **different** from `environment.region`: a project can have only one egress gateway per region serving agents, so the VPC-enabled gateway needs its own region |
+
+Authenticate (two logins, both with your Google account):
 
 ```bash
 gcloud auth login && gcloud auth application-default login
 ```
+
+- `gcloud auth login` lets the `gcloud` command line act as you (builds, deploys, IAM).
+- `gcloud auth application-default login` creates **Application Default Credentials (ADC)**: a credentials file on your machine that libraries and tools use automatically. Terraform and the Python SDK use ADC.
+- Neither is used by the deployed UI. It runs on Cloud Run as its own **service account** (`<prefix>-ui`) with only the roles it needs. People reach it through **IAP** (Identity-Aware Proxy, a Google sign-in gate in front of the app), limited to `ui.iap_access`.
 
 ## 4. Deploy
 
@@ -127,7 +138,7 @@ GE Demo mode shows the agent-to-anywhere policies from the Gemini Enterprise UI:
 4. In the UI, tick **GE Demo**. Clicking a test now copies its prompt to the clipboard instead of running it. Paste the prompt into Gemini Enterprise and pick the agent ("Helpdesk Agent (Agent Gateway demo)" or "Store Ops Agent (Agent Gateway demo)"). **Show what happened** probes the connections so the diagram reflects the current policy.
 
 Notes:
-- Gemini Enterprise calls the agent with the signed-in user's credentials, so presenters need `roles/aiplatform.user` on the project (bootstrap grants it to every `ui.admin_access` member).
+- Gemini Enterprise calls the agent with the signed-in user's credentials, so presenters need `roles/aiplatform.user` on the project (`./agdemo up` grants it to every `ui.admin_access` member).
 - Gemini Enterprise supports the egress gateway only. Use GE Demo for the egress scenarios (1–4 and 6) and detach the ingress gateway first (scenario 5, Model Armor on ingress, runs from the demo UI); whether Gemini Enterprise calls succeed with an ingress gateway attached hasn't been tested.
 
 ## 8. Adding themes and scenarios
@@ -153,7 +164,7 @@ Costs come from the gateways, the Agent Runtime agents (which run continuously),
 | Symptom | Usual cause |
 |---|---|
 | Every tool call fails, even allowed ones | `iap.egressor` binding not in effect yet, or a registry hostname variant (regional / `.mtls.`) isn't registered |
-| Agent can't reach the model once the gateway is attached | Platform endpoints missing from the allowlist; re-run `bootstrap` |
+| Agent can't reach the model once the gateway is attached | Platform endpoints missing from the allowlist; re-run `./agdemo up` (or `./agdemo tf apply`) |
 | Binding the gateway fails | A different gateway is already bound in this project and region, or the engine is older than 2026-04-29 or has revisions |
 | Model Armor never blocks anything | Engine wasn't created with Agent Identity, or the Model Armor authz policy isn't attached |
 | UI changes in Live mode don't show | Still taking effect. The line shows *pending*; use Live with fallback |

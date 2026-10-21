@@ -86,6 +86,21 @@ The three flows:
 
 More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Interfaces between the parts: [docs/CONTRACTS.md](docs/CONTRACTS.md).
 
+## Words you'll see
+
+| Term | In plain words |
+|---|---|
+| **Agent Gateway** | A Google-managed checkpoint every call goes through. **Egress** (Agent-to-Anywhere) checks calls *from* your agent; **ingress** (Client-to-Agent) screens calls *to* your agent |
+| **Agent Runtime** | Google's managed hosting for agents (formerly Agent Engine / reasoning engines) |
+| **Bound** | An agent attached to a gateway, so its traffic goes through it. All agents in a project and region share the same gateways |
+| **Agent Registry** | The address book of destinations (agents, MCP servers, APIs). Egress only reaches what's registered: **default deny** |
+| **`roles/iap.egressor`** | The permission slip: an agent may call a registry entry only if it holds this role on it (optionally only certain MCP tools) |
+| **Agent Identity** | The agent's own identity (its "badge"), set when it's created. Grants are given to it |
+| **IAP** | Identity-Aware Proxy: Google's access check. It decides egress calls, and signs people in to the demo UI |
+| **Model Armor** | Content screening (prompt injection, sensitive data) the gateway can apply |
+| **Service account** | A non-human identity that a deployed service runs as |
+| **Private Networking terms** | Network attachment, PSC endpoint, connectivity template: see [Private Networking mode](#private-networking-mode) |
+
 ## Install in your own environment
 
 Allow about 30–45 minutes, mostly waiting on Google Cloud. The full guide, with permissions and options, is **[docs/SETUP.md](docs/SETUP.md)**.
@@ -93,7 +108,7 @@ Allow about 30–45 minutes, mostly waiting on Google Cloud. The full guide, wit
 **1. Prerequisites**
 - A Google Cloud project with billing, where you are Owner (or hold the admin roles `preflight` checks for).
 - A region where Agent Gateway, Agent Runtime, Agent Registry and Cloud Run are all available (us-east4 is tested). All Agent Runtime agents in a project and region must share the same gateways, so pick a region where no agents are bound to other gateways.
-- `gcloud` (with beta components), [`uv`](https://docs.astral.sh/uv/) and Python 3.11+. Images are built with Cloud Build, so Docker isn't required. Node is only needed for UI development; `agents-cli` only for the optional Gemini Enterprise step.
+- `gcloud` (with beta components), **Terraform 1.7+**, [`uv`](https://docs.astral.sh/uv/) and Python 3.11+. Images are built with Cloud Build, so Docker isn't required. Node is only needed for UI development; `agents-cli` only for the optional Gemini Enterprise step.
 
 **2. Get the code and configure it**
 
@@ -102,6 +117,8 @@ git clone https://github.com/mlaslie/agent-gateway-demo.git && cd agent-gateway-
 cp config/demo.example.yaml config/demo.yaml
 gcloud auth login && gcloud auth application-default login
 ```
+
+Two logins, both as you: the first lets the `gcloud` command act as you; the second creates **Application Default Credentials (ADC)**, which Terraform and the Python SDK pick up automatically. The deployed UI uses neither. It runs as its own service account, and viewers sign in through IAP (a Google sign-in gate in front of the app).
 
 In `config/demo.yaml` set at least:
 
@@ -113,6 +130,7 @@ In `config/demo.yaml` set at least:
 | `ui.iap_access` | Who can open the UI, e.g. `group:demo-viewers@example.com` |
 | `ui.admin_access` | Presenters who can change policies (they also get `roles/aiplatform.user`) |
 | `gemini_enterprise.*` | Optional: your Gemini Enterprise app, for GE Demo mode |
+| `private_networking.enabled` / `.region` | Optional: Private Networking mode. The region must differ from `environment.region` (one egress gateway per project and region) |
 
 **3. Check the environment**
 
@@ -313,6 +331,20 @@ A new theme is a folder of YAML. Start from `themes/_template/` and follow [docs
 ## Private Networking mode
 
 The header's **Network** switch picks **Internet** (the themes above, base region, `agdemo-egress` without a VPC) or **Private Networking**: a VPC-enabled egress gateway, `<prefix>-pn-egress`, in a second region (default us-west1), created by Terraform **with** an agent connectivity template from the start. Design and decisions: [docs/TERRAFORM_PLAN.md](docs/TERRAFORM_PLAN.md) §7c and §7f; gotchas: [docs/PRIVATE_EGRESS_TESTBED.md](docs/PRIVATE_EGRESS_TESTBED.md).
+
+**The pieces, in plain words:**
+
+| Piece | What it does |
+|---|---|
+| **VPC + /28 subnet** (Private Google Access on) | Your private network, plus a small dedicated subnet the gateway plugs into |
+| **Network attachment** | The gateway's door into your VPC: Google's side connects to it automatically |
+| **PSC endpoint for Google APIs** | A private IP inside your VPC that leads to Google services such as Cloud Run, so internal-only services can be reached without the internet |
+| **Private DNS zone `run.app.`** | Your VPC's phone book entry: inside the VPC, `*.run.app` names resolve to the PSC endpoint's private IP |
+| **DNS peering** | Lets the gateway look names up in your VPC's phone book |
+| **Agent connectivity template** | One resource holding the gateway's private-network settings: which attachment (VPC), which domains to look up there, which traffic goes in. The gateway points at it |
+| **Gateway service agent roles** | Permission for Google's gateway identity to use your attachment and read your DNS |
+
+Policy doesn't change: the agent still needs a registry entry and `roles/iap.egressor`. The VPC only adds a private route.
 
 **Turn it on:** set `private_networking.enabled: true` in `config/demo.yaml` (block in `demo.example.yaml`), then `./agdemo up`. Terraform adds `modules/private_egress` (VPC, /28 subnet with Private Google Access, network attachment, PSC endpoint for Google APIs, private `run.app.` zone with apex and wildcard records, `gcp-sa-agentgateway` networkAdmin + dns.peer, the content-hashed template) and `modules/regional` (the gateway, its IAP extension and REQUEST_AUTHZ policy, the region's 25 platform registry entries with their egressor grant, a staging bucket). The base region's plan doesn't change. `deploy-theme privnet` deploys Payroll MCP with `--ingress=internal`, registers both run.app URL forms, and deploys the orchestrator with `GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false`. `status`, `reset --all`, `check-clean` and `down` cover both regions.
 
