@@ -3,6 +3,7 @@ import { memo } from "react";
 import type { AgentState, DNode } from "./build";
 import { BookIcon, CloudIcon, GatewayIcon, LockIcon, NetworkIcon, PencilIcon, PersonIcon, OpenInNewIcon, RegistryIcon, RobotIcon, ServerIcon, ShieldIcon } from "../components/Icons";
 import { STATE_LABEL } from "./edges";
+import { Glossed } from "../components/Teach";
 
 const H = ({ type, pos, id, style }: { type: "source" | "target"; pos: Position; id: string; style?: React.CSSProperties }) => (
   <Handle type={type} position={pos} id={id} isConnectable={false} className="hnd" style={style} />
@@ -14,7 +15,7 @@ function Chips({ chips }: { chips?: DNode["data"]["chips"] }) {
     <div className="node-chips">
       {chips.map((c) => (
         <span key={c.text} className={`chip chip-${c.tone}`}>
-          {c.text}
+          <Glossed text={c.text} />
         </span>
       ))}
     </div>
@@ -74,8 +75,12 @@ const GatewayNode = memo(({ data }: NodeProps<DNode>) => (
         <GatewayIcon size={22} />
       </span>
       <div className="node-titles">
-        <div className="node-title">{data.label}</div>
-        <div className="node-sub">{data.sublabel}</div>
+        <div className="node-title">
+          <Glossed text={data.label} />
+        </div>
+        <div className="node-sub">
+          <Glossed text={data.sublabel} />
+        </div>
       </div>
     </div>
     <Chips chips={data.chips} />
@@ -93,7 +98,7 @@ const OrchestratorNode = memo(({ data }: NodeProps<DNode>) => (
   <div className={`node node-orch ${data.accent !== undefined ? `has-accent accent-${data.accent}` : ""}`}>
     <H type="target" pos={Position.Left} id="in" />
     <div className="node-badge badge-runtime">
-      <SparkleDot /> {data.badge}
+      <SparkleDot /> <Glossed text={data.badge} />
     </div>
     <div className="node-head">
       <span className="node-icon icon-orch">
@@ -120,7 +125,9 @@ const RegistryNode = memo(({ data }: NodeProps<DNode>) => (
         <RegistryIcon size={20} />
       </span>
       <div className="node-titles">
-        <div className="node-title">{data.label}</div>
+        <div className="node-title">
+          <Glossed text={data.label} />
+        </div>
         <div className="node-sub">{data.sublabel}</div>
       </div>
     </div>
@@ -189,7 +196,9 @@ const VpcNode = memo(({ data }: NodeProps<DNode>) => (
     <div className="vpc-pieces">
       {data.pieces?.map((p) => (
         <div key={p.key} className={`vpc-piece vp-${p.key}`} title={p.hint}>
-          <div className="vpc-piece-label">{p.label}</div>
+          <div className="vpc-piece-label">
+            <Glossed text={p.label} />
+          </div>
           <div className="vpc-piece-value mono">{p.value}</div>
         </div>
       ))}

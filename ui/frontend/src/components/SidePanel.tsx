@@ -11,6 +11,8 @@ import { TerraformSheet } from "./TerraformSheet";
 import { LogList } from "./LogList";
 import { ChevronIcon, ClockIcon, CloseIcon, CodeIcon, CopyIcon, ExpandIcon, EyeIcon, LogIcon, OpenInNewIcon, PopupIcon, PlayIcon, RefreshIcon, ShieldIcon, SparkIcon, WarnIcon } from "./Icons";
 import { PendingProgress, SettledPop, useSettled } from "./Progress";
+import { changeKind } from "../teach/timing";
+import { Glossed, Term } from "./Teach";
 
 const STATUS_TEXT: Record<string, string> = {
   applied: "Applied",
@@ -90,7 +92,7 @@ function PolicyCard({ d, api, policy }: { d: Demo; api: Api; policy: Policy }) {
         />
         <div className="policy-text">
           <AgentChip theme={d.theme} source={policySource(policy)} />
-          {policy.text}
+          <Glossed text={policy.text} />
         </div>
         <Pill st={st} settled={!!settled} />
       </div>
@@ -100,7 +102,7 @@ function PolicyCard({ d, api, policy }: { d: Demo; api: Api; policy: Policy }) {
           what="policy"
           removing={removing}
           since={d.pendingSince(policy.id, st?.changed_at)}
-          typical={removing ? policy.typical_remove_seconds : policy.typical_seconds}
+          kind={changeKind(policy.type)}
         />
       )}
       {!pending && settled && <SettledPop status={settled} what="Policy" />}
@@ -184,7 +186,7 @@ function NetworkCard({ d }: { d: Demo }) {
       </div>
       {!open && (
         <p className="network-sum muted">
-          Pre-built by Terraform: VPC, attachment, PSC endpoint{p ? ` ${p.psc_ip}` : ""}, run.app zone and the connectivity template the gateway was created with.
+          <Glossed text={`Pre-built by Terraform: VPC, network attachment, PSC endpoint${p ? ` ${p.psc_ip}` : ""}, run.app zone and the connectivity template the gateway was created with.`} />
         </p>
       )}
       {open && (
@@ -193,7 +195,9 @@ function NetworkCard({ d }: { d: Demo }) {
           <dl className="network-list">
             {rows.map(([k, v, t]) => (
               <div key={k} className="network-row" title={t}>
-                <dt>{k.trim()}</dt>
+                <dt>
+                  <Glossed text={k.trim()} />
+                </dt>
                 <dd className="mono">{v}</dd>
               </div>
             ))}
@@ -241,11 +245,19 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
       <div className="side-scroll" ref={scrollRef}>
         <section className="card scenario-card">
           <div className="eyebrow">
-            Scenario {sc.order} · {sc.flow === "ingress" ? "Ingress" : "Egress"}
+            Scenario {sc.order} · {sc.flow === "ingress" ? <Term id="ingress">Ingress</Term> : <Term id="egress">Egress</Term>}
           </div>
           <h2 className="scenario-title">{sc.title}</h2>
-          {sc.subtitle && <div className="scenario-sub">{sc.subtitle}</div>}
-          {sc.description && <p className="scenario-desc">{sc.description}</p>}
+          {sc.subtitle && (
+            <div className="scenario-sub">
+              <Glossed text={sc.subtitle} />
+            </div>
+          )}
+          {sc.description && (
+            <p className="scenario-desc">
+              <Glossed text={sc.description} />
+            </p>
+          )}
         </section>
 
         <NetworkCard d={d} />
@@ -263,7 +275,7 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
                   <li key={p.id}>
                     <span className="precond-text">
                       <AgentChip theme={theme} source={policySource(p)} />
-                      {p.text}
+                      <Glossed text={p.text} />
                     </span>
                     <Pill st={st} />
                   </li>
@@ -298,7 +310,9 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
           <section className="card ma-callout" role="note">
             <ShieldIcon size={18} />
             <div>
-              <div>Turn on Model Armor (top right) to screen prompts at the ingress gateway.</div>
+              <div>
+                <Glossed text="Turn on Model Armor (top right) to screen prompts at the ingress gateway." />
+              </div>
               <button
                 className="btn btn-sm ma-callout-btn"
                 disabled={!d.canAdmin}

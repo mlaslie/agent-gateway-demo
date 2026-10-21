@@ -2196,7 +2196,7 @@ a {
   content: "";
   position: absolute;
   top: -6px;
-  left: calc(50% - 6px);
+  left: calc(50% - 6px + var(--pp-caret, 0px));
   width: 12px;
   height: 12px;
   transform: rotate(45deg);
@@ -3702,4 +3702,228 @@ a {
   padding-left: 18px;
   font-size: 12px;
   color: var(--text-2);
+}
+
+/* ======================================================================
+   Teaching aids (components/Teach.tsx): glossary terms, why / fix, How it works
+   ====================================================================== */
+.term {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  white-space: inherit;
+  cursor: help;
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  border-radius: 3px;
+}
+.term:hover {
+  text-decoration-color: currentColor;
+}
+.term:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.term-tip {
+  position: fixed;
+  z-index: 200;
+  max-width: min(300px, calc(100vw - 16px));
+  padding: 8px 11px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1.42;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: normal;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+}
+.term-tip b {
+  font-weight: 600;
+}
+.term-tip b::after {
+  content: " ·";
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+/* failed call: why / fix */
+.whyfix {
+  margin: 3px 0 1px;
+  padding: 4px 8px;
+  border-left: 2px solid color-mix(in srgb, var(--red) 55%, transparent);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--red-weak) 60%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+.wf-row {
+  display: flex;
+  gap: 6px;
+}
+.wf-k {
+  flex: 0 0 26px;
+  font-weight: 600;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding-top: 1px;
+  color: var(--red);
+}
+.wf-k.wf-fix {
+  color: var(--green);
+}
+.whyfix.wf-block {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+.gw-why-row td {
+  padding-top: 0 !important;
+  cursor: pointer;
+}
+.gw-why-row .whyfix {
+  margin: 0 0 2px;
+}
+
+/* pending card: takes effect in … */
+.pp-left {
+  margin-left: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.pp-est {
+  color: var(--text-3);
+}
+.pp-due {
+  color: var(--green);
+}
+.progress-pop.phase-due .pp-fill {
+  background: linear-gradient(90deg, var(--yellow), var(--green));
+}
+
+/* header ? button + How it works */
+.help-btn {
+  color: var(--text-2);
+  width: 32px;
+  height: 32px;
+}
+.help-btn:hover {
+  color: var(--blue);
+  background: var(--blue-weak);
+}
+.help-btn:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.sheet-how {
+  width: min(760px, 100%);
+}
+.hw-flow,
+.hw-checks ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.hw-flow {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+.hw-step {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-top: 3px solid var(--hw-c, var(--border-strong));
+}
+.hw-name {
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.hw-line {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+.hw-agent { --hw-c: var(--agent-0); }
+.hw-gateway { --hw-c: var(--blue); }
+.hw-registry { --hw-c: var(--purple); }
+.hw-grant { --hw-c: var(--amber); }
+.hw-dest { --hw-c: var(--green); }
+.hw-vpc { --hw-c: var(--teal); }
+.hw-checks {
+  flex: 1.25 1 0;
+  min-width: 0;
+}
+.hw-checks ul {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100%;
+}
+.hw-arrow {
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  flex: 0 0 auto;
+}
+.hw-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 14px 0 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--teal);
+}
+.hw-rule {
+  margin: 14px 0 0;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--red-weak);
+  line-height: 1.45;
+}
+.hw-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.hw-soon {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+@media (max-width: 640px) {
+  .hw-flow {
+    flex-direction: column;
+  }
+  .hw-arrow {
+    transform: rotate(90deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-fill {
+    transition: none;
+  }
+  .progress-pop .mini-spinner {
+    animation-duration: 3s;
+  }
 }

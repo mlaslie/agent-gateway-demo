@@ -285,7 +285,7 @@ Retail uses the same patterns with its own ids (`allow-merch`, `allow-pricing`, 
 
 | Mode | Policy toggles | Running a test |
 |---|---|---|
-| **Live** | Real GCP changes. Each one shows a progress timer with the typical time (gateway attach ~5½ min, detach ~2½ min, Model Armor ~4 min, allow policies ~1½–6 min) until GCP confirms it | Real calls through the real gateways |
+| **Live** | Real GCP changes. Each one shows a progress card with "takes effect in about N min" and a countdown (grants and revokes about 2 min, up to about 7; gateway bind / unbind about 5 min; Model Armor a few minutes), then "should be in effect now" until GCP confirms it | Real calls through the real gateways |
 | **Demo** | Simulated and instant; nothing changes in GCP | Replays a matching recording, otherwise simulates the outcome from the scenario rules (with sample answers). Works with no GCP project |
 | **Live + fallback** | Real GCP changes, as in Live | Real calls, but if a policy change is still pending or a call fails, it replays a recording or simulates instead (marked *replayed*) |
 
@@ -317,6 +317,12 @@ Use **Live + fallback** when presenting.
 Each line is a call, colored by outcome: **direct** (no gateway), **allowed**, **denied** (403 from the gateway), **blocked** (Model Armor), **pending** (a policy change in progress), **error** or **not tested**. MCP servers show each tool as its own row, so tool-level policy is visible per tool.
 
 Click the **Agent Registry** node on the diagram to browse what's registered: the theme's A2A agents with their skills, the MCP servers with each tool's READ / WRITE annotations, and the platform endpoints. Each entry lists who can call it (the `roles/iap.egressor` bindings, with any condition and the policy that created it) or "No one — default deny". In Live it reads Agent Registry and IAP (read-only) and refreshes every 10 s, so applying a policy shows the new binding appear.
+
+### Learning aids
+
+- **Terms on hover:** words with a dotted underline (Agent Gateway, egress, Agent Registry, `roles/iap.egressor`, Model Armor, PSC endpoint, …) show a one-line explanation on hover, keyboard focus or tap. The wording is the [Words you'll see](#words-youll-see) table and the Private Networking pieces table.
+- **Why / fix:** each failed call in the Activity log, Test results and Gateway logs (and the diagram line's tooltip) gets one line on why it failed and one on what to do: 403 not authorized (no registry entry or no grant, or a grant not in effect yet), Model Armor block, a write tool under a read-only grant, 404 from an internal Cloud Run service, 401 behind a template gateway, blocked platform endpoints, unreachable / timeout. See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for more.
+- **How it works (?):** the **?** next to the title opens the call path in one picture: agent → Agent Gateway (checkpoint) → Agent Registry (address book) + IAP grant (permission slip) → destination, with the default-deny rule; in Private Networking also network attachment → PSC endpoint → private service.
 
 ## Themes
 

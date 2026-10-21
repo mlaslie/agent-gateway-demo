@@ -5,8 +5,7 @@ import { MA_KEY } from "../useDemo";
 import { CopyIcon, GatewayIcon, OpenInNewIcon, RefreshIcon, ShieldIcon, CheckIcon } from "./Icons";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { PendingProgress, SettledPop, useSettled } from "./Progress";
-
-const MA_TYPICAL_FALLBACK_S = 240;
+import { HelpButton, HowItWorks, Term } from "./Teach";
 
 const MODES: { id: Mode; label: string; hint: string }[] = [
   { id: "live", label: "Live", hint: "Real GCP changes and real agent calls" },
@@ -16,6 +15,7 @@ const MODES: { id: Mode; label: string; hint: string }[] = [
 
 export function Header({ d }: { d: Demo }) {
   const [confirm, setConfirm] = useState(false);
+  const [how, setHow] = useState(false);
   const cfg = d.config;
   const env = cfg?.environment;
   const liveOk = !!cfg?.live_available;
@@ -35,10 +35,14 @@ export function Header({ d }: { d: Demo }) {
           <GatewayIcon size={22} />
         </span>
         <div className="brand-text">
-          <div className="brand-title">Agent Gateway &amp; Agent Registry</div>
+          <div className="brand-title">
+            <Term id="agent-gateway">Agent Gateway</Term> &amp; <Term id="agent-registry">Agent Registry</Term>
+          </div>
           <div className="brand-sub">Gemini Enterprise Agent Platform · governance demo</div>
         </div>
+        <HelpButton onClick={() => setHow(true)} />
       </div>
+      {how && <HowItWorks privateNetworking={pn} onClose={() => setHow(false)} />}
 
       {env && (
         <div className={`env-chip ${pn ? "env-pn" : ""}`} title={`Project ${env.project_id} · region ${region} · prefix ${env.prefix}${pn ? " · Private Networking (VPC-enabled gateway)" : ""}`}>
@@ -130,7 +134,7 @@ export function Header({ d }: { d: Demo }) {
             what="Model Armor"
             removing={!ma.enabled}
             since={d.pendingSince(MA_KEY, ma.changed_at)}
-            typical={ma.typical_seconds ?? MA_TYPICAL_FALLBACK_S}
+            kind="model_armor"
           />
         )}
         {!maPending && maSettled && <SettledPop floating status={maSettled} what="Model Armor" />}

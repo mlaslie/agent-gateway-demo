@@ -3,6 +3,8 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import type { LogEntry } from "../useDemo";
 import { fmtTime } from "../util";
 import { LogIcon, ShieldIcon, LockIcon } from "./Icons";
+import { decodeFailure, edgeFacts, logFacts, type Decoded } from "../teach/decode";
+import { useTeach, WhyFix, type TeachInfo } from "./Teach";
 
 type OpenLog = (g: NonNullable<LogEntry["gw"]>) => void;
 
@@ -17,7 +19,18 @@ function EdgeName({ e }: { e: LogEntry }) {
   );
 }
 
-export function LogLine({ e, onOpenLog }: { e: LogEntry; onOpenLog?: OpenLog }) {
+/** The known failed-call outcome of a log line (edge result, gateway log entry or test error), if any. */
+export function decodeEntry(e: LogEntry, t: TeachInfo): Decoded | null {
+  if (e.kind === "edge" && e.edgeState) {
+    const st = e.edgeState;
+    return decodeFailure({ state: st.state, status: st.http_status, detail: st.detail ?? e.text, ...edgeFacts(t.theme, t.active, e.edge) });
+  }
+  if (e.kind === "gwlog" && e.gw) return decodeFailure(logFacts(e.gw, t.theme, t.active));
+  if (e.kind === "error") return decodeFailure({ state: "error", detail: e.text });
+  return null;
+}
+
+export function LogLine({ e, onOpenLog, why }: { e: LogEntry; onOpenLog?: OpenLog; why?: Decoded | null }) {
   const s = e.edgeState?.state;
   return (
     <div className={`log-line log-${e.kind}`}>
@@ -72,6 +85,7 @@ export function LogLine({ e, onOpenLog }: { e: LogEntry; onOpenLog?: OpenLog }) 
             </a>
           ) : null
         )}
+        {why && <WhyFix d={why} />}
       </div>
     </div>
   );
@@ -116,11 +130,22 @@ export function LogList({
   live?: boolean;
 }) {
   const ref = useStickyBottom(log);
+  const teach = useTeach();
+  // One why / fix per run of identical outcomes (e.g. four denied tools of one server), not on every line.
+  let last: string | null = null;
+  const whys = log.map((e) => {
+    if (e.kind === "user" || e.kind === "done" || e.kind === "system") last = null;
+    const w = decodeEntry(e, teach);
+    if (!w) return null;
+    if (w.code === last) return null;
+    last = w.code;
+    return w;
+  });
   return (
     <div className={`log ${big ? "log-big" : ""} ${className}`} ref={ref} aria-live={(live ?? !big) ? "polite" : "off"} tabIndex={big ? 0 : undefined} aria-label={big || live === false ? label : undefined}>
       {log.length === 0 && <div className="muted log-empty">{empty}</div>}
-      {log.map((e) => (
-        <LogLine key={e.id} e={e} onOpenLog={onOpenLog} />
+      {log.map((e, i) => (
+        <LogLine key={e.id} e={e} onOpenLog={onOpenLog} why={whys[i]} />
       ))}
     </div>
   );

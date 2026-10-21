@@ -7,9 +7,16 @@ import { GatewayLogViewer } from "./components/GatewayLogs";
 import { RegistrySheet } from "./components/RegistrySheet";
 import { CheckIcon, CloseIcon, WarnIcon } from "./components/Icons";
 import { useDemo } from "./useDemo";
+import { TeachContext, type TeachInfo } from "./components/Teach";
+import { useMemo } from "react";
 
 export default function App({ api }: { api: Api }) {
   const d = useDemo(api);
+  const policies = d.state?.policies;
+  const teach = useMemo<TeachInfo>(
+    () => ({ theme: d.theme, active: new Set(Object.entries(policies ?? {}).filter(([, p]) => p.applied).map(([id]) => id)) }),
+    [d.theme, policies],
+  );
 
   if (d.fatal) {
     return (
@@ -36,6 +43,7 @@ export default function App({ api }: { api: Api }) {
 
   const sc = d.scenario;
   return (
+    <TeachContext.Provider value={teach}>
     <div className="app">
       <Header d={d} />
       {notices.length > 0 && (
@@ -90,6 +98,7 @@ export default function App({ api }: { api: Api }) {
         </div>
       )}
     </div>
+    </TeachContext.Provider>
   );
 }
 

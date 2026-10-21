@@ -2,6 +2,7 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { EdgeState, EdgeStateName, GatewayLogEntry, NetworkView, Scenario, Theme, ThemeState } from "../api/types";
 import { agentIndex, orchestratorNodeId, policySource, sourceEdge } from "../util";
+import { decodeFailure, edgeFacts, type Decoded } from "../teach/decode";
 
 export type NodeKind = "user" | "gateway" | "orchestrator" | "registry" | "a2a" | "mcp" | "vpc";
 
@@ -72,6 +73,8 @@ export interface DiagramEdgeData extends Record<string, unknown> {
   agent?: { idx: number; name: string };
   /** T4: the call took the private path (through the VPC / PSC endpoint). */
   privatePath?: boolean;
+  /** Failed call: the known outcome's why / fix (src/teach/decode.ts). */
+  why?: Decoded;
 }
 
 export type DNode = Node<DiagramNodeData>;
@@ -154,6 +157,7 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
   const edges: DEdge[] = [];
   const st = (id: string) => edgeStateOf(edgeStates, id);
   const expected = (id: string) => state?.expected?.[id]?.state;
+  const active = new Set(Object.entries(state?.policies ?? {}).filter(([, p]) => p.applied).map(([id]) => id));
 
   // ---------- orchestrators shown (CONTRACTS §12: primary + listed additional ones) ----------
   interface Orch {
@@ -389,6 +393,7 @@ export function buildDiagram({ theme, scenario, state, edgeStates, inFlight, edg
         expected: s.state === "pending" ? expected(edgeId) : undefined,
         replayed: s.source === "replayed",
         log: logged ? { summary: logged.summary, open: () => onOpenLog!(logged) } : undefined,
+        why: decodeFailure({ state: s.state, status: s.http_status, detail: s.detail, ...edgeFacts(theme, active, edgeId) }) ?? undefined,
       },
     };
   };

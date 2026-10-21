@@ -7,6 +7,8 @@ import { fmtTime } from "../util";
 import { CodeFull } from "./CodeView";
 import { CopyButton, GlassModal } from "./Glass";
 import { ChevronIcon, LogIcon, OpenInNewIcon, ShieldIcon } from "./Icons";
+import { decodeFailure, logFacts } from "../teach/decode";
+import { Glossed, useTeach, WhyFix } from "./Teach";
 
 const rawLines = (e: GatewayLogEntry) => JSON.stringify(e.raw ?? {}, null, 2).split("\n");
 const rawText = (e: GatewayLogEntry) => JSON.stringify(e.raw ?? {}, null, 2);
@@ -31,6 +33,8 @@ export function logTarget(theme: Theme | null, e: GatewayLogEntry): { name: stri
 
 /** Glass viewer for one entry: pretty-printed raw JSON, Copy, Open in Cloud Logging, Close. */
 export function GatewayLogViewer({ entry, onClose }: { entry: GatewayLogEntry; onClose: () => void }) {
+  const teach = useTeach();
+  const why = decodeFailure(logFacts(entry, teach.theme, teach.active));
   return (
     <GlassModal
       className="sheet-code sheet-gwentry"
@@ -76,6 +80,7 @@ export function GatewayLogViewer({ entry, onClose }: { entry: GatewayLogEntry; o
           </>
         )}
       </p>
+      {why && <WhyFix d={why} className="wf-block" />}
       <CodeFull lines={rawLines(entry)} />
     </GlassModal>
   );
@@ -92,6 +97,7 @@ export function GatewayLogsSheet({ d, api, onClose }: { d: Demo; api: Api; onClo
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
   const { themeId, mode, noteGatewayLogs, theme } = d;
+  const teach = useTeach();
   const seq = useRef(0);
 
   const load = useCallback(async () => {
@@ -158,7 +164,9 @@ export function GatewayLogsSheet({ d, api, onClose }: { d: Demo; api: Api; onClo
       }
       onClose={onClose}
     >
-      <p className="gw-note">{GW_SOURCE_NOTE}</p>
+      <p className="gw-note">
+        <Glossed text={GW_SOURCE_NOTE} />
+      </p>
       {err && <div className="policy-error">Couldn't load gateway logs: {err}</div>}
       {!resp && !err && <div className="muted">Loading…</div>}
       {resp && entries.length === 0 && (
@@ -187,6 +195,7 @@ export function GatewayLogsSheet({ d, api, onClose }: { d: Demo; api: Api; onClo
                 const isOpen = open === e.id;
                 const t = logTarget(theme, e);
                 const toggle = () => setOpen(isOpen ? null : e.id);
+                const why = e.decision === "allowed" ? null : decodeFailure(logFacts(e, teach.theme, teach.active));
                 return (
                   <Fragment key={e.id}>
                     <tr className={`gw-row ${isOpen ? "open" : ""}`} onClick={toggle}>
@@ -217,6 +226,14 @@ export function GatewayLogsSheet({ d, api, onClose }: { d: Demo; api: Api; onClo
                       <td className="mono">{e.status ?? "—"}</td>
                       <td className="mono gw-by">{e.decided_by ?? "—"}</td>
                     </tr>
+                    {why && (
+                      <tr className="gw-why-row" onClick={toggle}>
+                        <td />
+                        <td colSpan={6}>
+                          <WhyFix d={why} />
+                        </td>
+                      </tr>
+                    )}
                     {isOpen && (
                       <tr className="gw-raw-row">
                         <td colSpan={7}>

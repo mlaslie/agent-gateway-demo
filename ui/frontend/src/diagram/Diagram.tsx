@@ -7,6 +7,7 @@ import { orchestratorNodeId } from "../util";
 import { edgeTypes } from "./edges";
 import { nodeTypes } from "./nodes";
 import { ClockIcon, CloseIcon, LockIcon, ShieldIcon } from "../components/Icons";
+import { Glossed } from "../components/Teach";
 
 const PAD = { top: "46px", bottom: "48px", left: "24px", right: "56px" } as const;
 
@@ -156,7 +157,7 @@ function Legend({ agents, pn }: { agents: { name: string; idx: number }[]; pn?: 
             <line x1="1" y1="5" x2="29" y2="5" className={`edge-path st-${i.cls}`} />
           </svg>
           {i.icon && <span className={`legend-icon li-${i.cls.split(" ").pop()}`}>{i.icon}</span>}
-          {i.label}
+          <Glossed text={i.label} />
         </span>
       ))}
       <span className="legend-item">

@@ -50,9 +50,10 @@ function StateEdgeImpl({ id, sourceX, sourceY, targetX, targetY, sourcePosition,
         <ClockIcon size={13} />
       </span>
     ) : null;
-  const title = [agent ? `${agent.name}'s call` : "", STATE_LABEL[state] ?? state, data?.privatePath ? "private path (VPC / PSC endpoint)" : "", data?.httpStatus ? `HTTP ${data.httpStatus}` : "", data?.detail ?? "", data?.expected ? `expected: ${data.expected}` : "", data?.replayed ? "(replayed)" : ""]
-    .filter(Boolean)
-    .join(" · ");
+  const title =
+    [agent ? `${agent.name}'s call` : "", STATE_LABEL[state] ?? state, data?.privatePath ? "private path (VPC / PSC endpoint)" : "", data?.httpStatus ? `HTTP ${data.httpStatus}` : "", data?.detail ?? "", data?.expected ? `expected: ${data.expected}` : "", data?.replayed ? "(replayed)" : ""]
+      .filter(Boolean)
+      .join(" · ") + (data?.why ? `\nWhy: ${data.why.why}\nFix: ${data.why.fix}` : "");
   return (
     <>
       <defs>
@@ -91,7 +92,7 @@ function StateEdgeImpl({ id, sourceX, sourceY, targetX, targetY, sourcePosition,
                   e.stopPropagation();
                   data.log?.open();
                 }}
-                aria-label={`Open the gateway log entry: ${data.log.summary}`}
+                aria-label={`Open the gateway log entry: ${data.log.summary}${data.why ? `. Why: ${data.why.why}` : ""}`}
                 title={`Gateway log: ${data.log.summary}`}
               >
                 <LogIcon size={11} />
