@@ -27,7 +27,7 @@ Use cases are pluggable **themes** (YAML only). Two ship with the repo: *IT / HR
 
 > **All target services are mocks.** The A2A agents and MCP servers return fake data from the theme files. No real tickets, orders, refunds, HR records or prices are read or changed.
 
-![Demo UI: the scenario tabs across the top, the live diagram of Helpdesk Agent and its A2A agents and MCP tools, and the side panel with the talk track, policies, tests and activity log](docs/images/ui-overview.webp)
+![Demo UI (Retail Store Operations theme, Live, Internet network): the Network, Theme and Mode switches and the seven scenario tabs across the top; the live diagram of Store Ops Agent on Agent Runtime with its A2A agents and MCP tools on Cloud Run, the unattached Agent Gateway and Agent Registry; and the side panel with the talk track, policies, tests and activity log](docs/images/ui-overview.webp)
 
 *Scenario 1 (Wide open) in Live mode: Helpdesk Agent on Agent Runtime calls every A2A agent and MCP tool directly; the Agent Gateway is not attached yet.*
 
