@@ -37,7 +37,7 @@ test("404 on an internal Cloud Run service: not through the VPC path", () => {
   assert.match(DECODED["internal-404"].why, /ingress internal/);
 });
 
-test("401 on Google API calls behind a template gateway: the token-sharing env var", () => {
+test("401 on Google API calls behind a gateway: the token-sharing env var", () => {
   assert.equal(code({ state: "error", status: 401 }), "token-401");
   assert.equal(code({ state: "error", detail: "401 UNAUTHENTICATED from aiplatform.googleapis.com" }), "token-401");
   assert.match(DECODED["token-401"].fix, /GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false/);

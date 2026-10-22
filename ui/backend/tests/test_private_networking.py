@@ -296,9 +296,21 @@ def test_deploy_args(tmp_path):
     hd = load_theme("helpdesk")
     h = d.service_args(cfg(), hd, "tickets-mcp", tmp_path / "x.env")
     assert not any(x.startswith("--ingress") for x in h) and "--region=us-east1" in h   # unchanged
-    env = d.engine_env(v, t, {"MODEL": "m"})
-    assert env["GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES"] == "false" and env["MODEL"] == "m"
-    assert d.engine_env(cfg(), hd, {"MODEL": "m"}) == {"MODEL": "m"}
+
+
+def test_engine_env_token_sharing_all_themes():
+    """ISSUES #16: every engine gets the token-sharing switch, Internet and Private Networking alike."""
+    ds = d._load_module("agdemo_deploy_spec", d.RUNTIMES / "orchestrator" / "deploy_spec.py")
+
+    class MS:   # stand-in for the theme's model spec module: only the shape _engine_env reads
+        orchestrator_spec = staticmethod(lambda theme, urls, model, oid: {"model": model})
+        encode_spec = staticmethod(lambda spec: "b64")
+
+    for theme_id in ("helpdesk", "privnet"):
+        t = load_theme(theme_id)
+        env = d._engine_env(theme_config(cfg(), t), t, {}, MS, ds, None)
+        assert env["GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES"] == "false"
+        assert env["ORCHESTRATOR_SPEC"] == "b64"
 
 
 def test_register_both_urls(monkeypatch):

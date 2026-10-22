@@ -56,6 +56,9 @@ def env_vars(orchestrator_spec_b64: str, model: str, auth_mode: str = "none") ->
         "AUTH_MODE": auth_mode,
         "GOOGLE_GENAI_USE_VERTEXAI": "TRUE",
         "GOOGLE_GENAI_USE_ENTERPRISE": "TRUE",   # newer google-genai name for the same switch
+        # ISSUES #16 (P0 F44): without it, a new AGENT_IDENTITY engine behind an Agent Gateway got 401 on its
+        # Google API calls (Gemini included), with or without a connectivity template. Cause not isolated.
+        "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "false",
     }
 
 

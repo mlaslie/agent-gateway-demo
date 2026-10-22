@@ -50,9 +50,9 @@ export const DECODED: Record<FailureCode, Decoded> = {
   },
   "token-401": {
     code: "token-401",
-    title: "401 · Google API call behind a template gateway",
-    why: "Agents bound to a gateway with a connectivity template got 401 on Google API calls made through it (ISSUES #16).",
-    fix: "Redeploy the agent with GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false (deploy-theme sets it for Private Networking themes).",
+    title: "401 · Google API call behind a gateway",
+    why: "Agents bound to a gateway, with or without a connectivity template, got 401 on Google API calls made through it (ISSUES #16).",
+    fix: "Redeploy the agent with GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false (deploy-theme sets it for every agent).",
   },
   "platform-blocked": {
     code: "platform-blocked",

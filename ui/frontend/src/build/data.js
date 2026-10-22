@@ -649,11 +649,11 @@ remote = client.agent_engines.create(
         "identity_type": "AGENT_IDENTITY",  # fixed at create time: can't be added later
         "staging_bucket": "gs://PROJECT_ID-staging",
         "requirements": ["google-cloud-aiplatform[agent_engines,adk]", "google-adk"],
-        "extra_packages": ["my_agent"],${pn ? `
+        "extra_packages": ["my_agent"],
         "env_vars": {
-            # Needed behind a gateway with a connectivity template (else 401 on Google APIs)
+            # Needed behind a gateway, with or without a connectivity template (else 401 on Google APIs)
             "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "false",
-        },
+        },${pn ? `
         # Never also set psc_interface_config: a PSC interface plus a gateway breaks Google API access,
         # and a PSC interface without one is an ungoverned side door into the VPC.` : `
         # Optional: bind at create time instead of the later "Bind" step:
@@ -668,7 +668,7 @@ const agentTabs = (pn) => ({
 # REST is for reading it back: the agent's own principal is spec.effectiveIdentity.
 curl -sS ${AUTH} \\
   "https://REGION-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/REGION/reasoningEngines/ENGINE_ID" \\
-  | jq '{identityType: .spec.identityType, principal: ("principal://" + .spec.effectiveIdentity)${pn ? ", env: .spec.deploymentSpec.env" : ""}}'`, "Create with the Python SDK; REST shown for reading the identity."),
+  | jq '{identityType: .spec.identityType, principal: ("principal://" + .spec.effectiveIdentity), env: .spec.deploymentSpec.env}'`, "Create with the Python SDK; REST shown for reading the identity."),
   gcloud: NO(`No gcloud command manages Agent Runtime agents. Use the Python SDK. <span class="bb-unv">unverified</span> The Agent Platform CLI (<code>agents-cli deploy</code>) can also deploy, and has <code>--agent-gateway-egress</code> to bind as part of a deploy.`,
     `# Read it back with a gcloud token:
 curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" \\
@@ -684,11 +684,11 @@ curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" \\
     container_spec {
       image_uri = "REGION-docker.pkg.dev/PROJECT_ID/demo/agent:latest"
     }
-    deployment_spec {${pn ? `
+    deployment_spec {
       env {
         name  = "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES"
         value = "false"
-      }` : ""}
+      }
       # agent_gateway_config { agent_to_anywhere_config { agent_gateway = "projects/PROJECT_ID/locations/REGION/agentGateways/EGRESS_GW" } }
     }
   }
@@ -703,8 +703,8 @@ curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" \\
 S.agent = {
   title: "Create the agent with Agent Identity", sub: "ADK agent on Agent Runtime; identity fixed at create",
   who: ["cli", "deploy-theme"], time: "2.5–7 min",
-  what: "Deploys your ADK agent to <b>Agent Runtime</b> with <code>identity_type=AGENT_IDENTITY</code>. The agent gets its own principal (its \"badge\"): <code>principal://agents.global.org-ORG_ID.system.id.goog/…/reasoningEngines/ENGINE_ID</code>. It's registered in Agent Registry automatically.",
-  why: "Every per-agent grant needs that principal, so the agent comes after the foundation and before any agent policy. <b>Agent Identity can't be added later</b>: an agent created without it must be recreated. The demo creates it unbound (the wide-open starting point) and binds next.",
+  what: "Deploys your ADK agent to <b>Agent Runtime</b> with <code>identity_type=AGENT_IDENTITY</code>. The agent gets its own principal (its \"badge\"): <code>principal://agents.global.org-ORG_ID.system.id.goog/…/reasoningEngines/ENGINE_ID</code>. It's registered in Agent Registry automatically. It also sets one environment variable: <code>GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false</code>.",
+  why: "<span class=\"bb-gotcha\">Without the variable, a new agent bound to a gateway got <b>401 on its own Gemini call</b>, even without a connectivity template; the cause wasn't isolated.</span> Every per-agent grant needs that principal, so the agent comes after the foundation and before any agent policy. <b>Agent Identity can't be added later</b>: an agent created without it must be recreated. The demo creates it unbound (the wide-open starting point) and binds next.",
   tabs: agentTabs(false),
 };
 
@@ -1665,7 +1665,7 @@ s.post("https://agentregistry.googleapis.com/v1/projects/PROJECT_ID/locations/RE
 S.pnagent = {
   title: "Create the agent (identity + env var)", sub: "Agent Identity, token-sharing switch, no PSC interface",
   who: ["cli", "deploy-theme"], time: "2.5–7 min",
-  what: "The same agent creation as in Internet mode, plus one environment variable: <code>GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false</code>.",
+  what: "The same agent creation as in Internet mode, including the environment variable <code>GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false</code>.",
   why: "<span class=\"bb-gotcha\">Without the variable, an agent behind a gateway with a template got <b>401 on every Google API call</b>; the cause wasn't isolated, and the docs now include it in their examples. Never also give the agent its own PSC interface: create rejects both, and adding a gateway to such an agent breaks it.</span>",
   tabs: agentTabs(true),
 };

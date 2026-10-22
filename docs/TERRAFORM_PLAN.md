@@ -181,7 +181,7 @@ Outputs: `network`, `attachment`, `psc_ip`, `template`, plus `private_egress_ena
 | Theme Cloud Run services `agdemo-<theme>-<component>` | They need built images; their URLs feed the registry entries and the engine env. `deploy-theme` already handles it idempotently |
 | **Private MCP server** (internal ingress, `--ingress=internal`) | Same as the theme services: a theme component with `ingress: internal` (Q5). Deployed only when `private_egress_enabled` |
 | Theme registry entries (MCP tool specs read from the code; A2A cards fetched from the running service) | They depend on deployed code; deleted per theme |
-| Agent Runtime engines | §1.4. When private egress is on, `deploy-theme` adds `GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false` to the engine env (F44), read from `state.json shared.private_egress_enabled` |
+| Agent Runtime engines | §1.4. `deploy-theme` adds `GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false` to every engine's env (F44, ISSUES #16; first only with private egress, since 2026-10-21 for all) |
 | UI Cloud Run `agdemo-ui` + IAP | It needs the image and state.json as env vars, and `ui deploy` is re-run after every theme deploy |
 | GE registration (`publish-ge`) | No provider support |
 | **Live toggles:** gateway bindings, IAP grants on theme entries (including the private-MCP grant), Model Armor `CONTENT_AUTHZ` policies, enforce/dry run | They change during demos. Never in Terraform |

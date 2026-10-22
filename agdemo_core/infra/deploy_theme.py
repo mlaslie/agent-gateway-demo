@@ -23,10 +23,6 @@ from . import common as c
 RUNTIMES = REPO_ROOT / "runtimes"
 IMAGES = {"mcp_server": "mcp-server", "a2a_agent": "a2a-agent"}
 
-# T4 (P0 F44): engines bound to a VPC-enabled (connectivity template) gateway got 401 on every Google API call
-# without this; cause not isolated. Set on every engine of a Private Networking theme.
-TOKEN_SHARING_ENV = {"GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "false"}
-
 # Project roles for the orchestrator's Agent Identity (agent-gateway troubleshooting "basic roles").
 AGENT_ROLES = ["roles/aiplatform.user", "roles/agentregistry.viewer", "roles/logging.logWriter",
                "roles/monitoring.metricWriter", "roles/cloudtrace.agent", "roles/browser",
@@ -209,14 +205,8 @@ def find_engine(r: Rest, cfg: DemoConfig, display: str) -> dict | None:
 def _engine_env(cfg: DemoConfig, theme: Theme, urls: dict[str, str], ms, ds, orchestrator_id: str | None):
     spec = ms.orchestrator_spec(theme, urls, cfg.models.default, orchestrator_id)
     auth_mode = "none" if cfg.cloud_run.public_targets else "id_token"
-    return engine_env(cfg, theme, ds.env_vars(ms.encode_spec(spec), spec["model"], auth_mode))
-
-
-def engine_env(cfg: DemoConfig, theme: Theme, env: dict[str, str]) -> dict[str, str]:
-    """Theme-specific engine env on top of deploy_spec.env_vars: the token-sharing switch in Private Networking."""
-    if theme.network_mode == "private_networking" or cfg.is_private_networking:
-        return {**env, **TOKEN_SHARING_ENV}
-    return env
+    # deploy_spec.env_vars includes the token-sharing switch for every engine (ISSUES #16).
+    return ds.env_vars(ms.encode_spec(spec), spec["model"], auth_mode)
 
 
 def create_engine(cfg: DemoConfig, theme: Theme, urls: dict[str, str], ms,
