@@ -676,12 +676,12 @@ remote = client.agent_engines.create(
             "mcp==1.30.0",
             "cloudpickle==3.1.2",
             "pydantic==2.14.1",
+            # Newer google-auth has a known bug: 401 on the agent's own Google API calls once it's
+            # behind a gateway. The other workaround, the env var
+            # GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false, turns off token binding.
+            "google-auth==2.60.0",
         ],
-        "extra_packages": ["my_agent"],
-        "env_vars": {
-            # Needed once the agent is behind a gateway, or its own Google API calls get 401
-            "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "false",
-        },${pn ? `
+        "extra_packages": ["my_agent"],${pn ? `
         # Never also set psc_interface_config: a PSC interface plus a gateway breaks Google API access,
         # and a PSC interface without one is an ungoverned side door into the VPC.` : `
         # Optional: bind at create time instead of the later "Bind" step:
@@ -712,11 +712,8 @@ curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" \\
     container_spec {
       image_uri = "REGION-docker.pkg.dev/PROJECT_ID/demo/agent:latest"
     }
+    # Build the image with google-auth==2.60.0: newer versions get 401 behind a gateway (known bug).
     deployment_spec {
-      env {
-        name  = "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES"
-        value = "false" # needed once the agent is behind a gateway (else 401 on Google APIs)
-      }
       # agent_gateway_config { agent_to_anywhere_config { agent_gateway = "projects/PROJECT_ID/locations/REGION/agentGateways/EGRESS_GW" } }
     }
   }
@@ -732,7 +729,7 @@ S.agent = {
   title: "Create the agent with Agent Identity", sub: "ADK agent on Agent Runtime; identity fixed at create",
   who: ["cli", "deploy-theme"], time: "2.5–7 min",
   what: "Deploys your ADK agent to <b>Agent Runtime</b> with <code>identity_type=AGENT_IDENTITY</code>. The agent gets its own principal (its \"badge\"): <code>principal://agents.global.org-ORG_ID.system.id.goog/…/reasoningEngines/ENGINE_ID</code>. It's registered in Agent Registry automatically.",
-  why: "Every per-agent grant needs that principal, so the agent comes after the foundation and before any agent policy. <b>Agent Identity can't be added later</b>: an agent created without it must be recreated. The demo creates it unbound (the wide-open starting point) and binds next. <span class=\"bb-gotcha\">Set <code>GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false</code> at create: a new agent without it got <b>401 on its own Google API calls</b> as soon as it was bound (tested October 2026).</span>",
+  why: "Every per-agent grant needs that principal, so the agent comes after the foundation and before any agent policy. <b>Agent Identity can't be added later</b>: an agent created without it must be recreated. The demo creates it unbound (the wide-open starting point) and binds next. <span class=\"bb-gotcha\">Pin <code>google-auth==2.60.0</code> in the agent's requirements: newer versions have a known bug (being fixed) where the agent gets <b>401 on its own Google API calls</b> as soon as it's bound to a gateway. The other workaround, <code>GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false</code>, works but turns off the protection that stops stolen tokens being reused.</span>",
   tabs: agentTabs(false),
 };
 
@@ -1739,16 +1736,16 @@ s.post("https://agentregistry.googleapis.com/v1/projects/PROJECT_ID/locations/RE
 };
 
 S.pnagent = {
-  title: "Create the agent (identity + env var)", sub: "Agent Identity, token-sharing switch, no PSC interface",
+  title: "Create the agent", sub: "Agent Identity, google-auth pin, no PSC interface",
   who: ["cli", "deploy-theme"], time: "2.5–7 min",
-  what: "The same agent creation as in Internet mode, including <code>GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false</code>, and no PSC interface.",
-  why: "<span class=\"bb-gotcha\">Without the variable, an agent behind a gateway got <b>401 on every Google API call</b> (first seen with a template gateway, then with new agents on any gateway); the docs now include it in their examples. Never also give the agent its own PSC interface: create rejects both, and adding a gateway to such an agent breaks it.</span>",
+  what: "The same agent creation as in Internet mode, including the <code>google-auth==2.60.0</code> pin, and no PSC interface.",
+  why: "<span class=\"bb-gotcha\">Without the pin, an agent behind a gateway can get <b>401 on every Google API call</b> (a known google-auth bug, being fixed). Never also give the agent its own PSC interface: create rejects both, and adding a gateway to such an agent breaks it.</span>",
   tabs: agentTabs(true),
 };
 
 S.pnbind = Object.assign({}, S.bind, {
   sub: "Same PATCH, to the VPC-enabled gateway", time: "~4.5 min",
-  why: "Same rule as Internet mode: foundation first, then bind. Verified live: binding a running agent by PATCH to a template gateway works (about 4m20s), with no 401s thanks to the env var.",
+  why: "Same rule as Internet mode: foundation first, then bind. Verified live: binding a running agent by PATCH to a template gateway works (about 4m20s), with no 401s.",
 });
 
 S.privgrant = {

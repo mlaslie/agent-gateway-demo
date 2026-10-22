@@ -181,7 +181,7 @@ Outputs: `network`, `attachment`, `psc_ip`, `template`, plus `private_egress_ena
 | Theme Cloud Run services `agdemo-<theme>-<component>` | They need built images; their URLs feed the registry entries and the engine env. `deploy-theme` already handles it idempotently |
 | **Private MCP server** (internal ingress, `--ingress=internal`) | Same as the theme services: a theme component with `ingress: internal` (Q5). Deployed only when `private_egress_enabled` |
 | Theme registry entries (MCP tool specs read from the code; A2A cards fetched from the running service) | They depend on deployed code; deleted per theme |
-| Agent Runtime engines | §1.4. `deploy-theme` adds `GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false` to every engine's env (F44, ISSUES #16; first only with private egress, since 2026-10-21 for all) |
+| Agent Runtime engines | §1.4. Engines pin `google-auth==2.60.0`, which avoids the 401 behind a gateway (F44, ISSUES #16: a google-auth bug). The `GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false` env var this row used to describe was removed on 2026-10-22 |
 | UI Cloud Run `agdemo-ui` + IAP | It needs the image and state.json as env vars, and `ui deploy` is re-run after every theme deploy |
 | GE registration (`publish-ge`) | No provider support |
 | **Live toggles:** gateway bindings, IAP grants on theme entries (including the private-MCP grant), Model Armor `CONTENT_AUTHZ` policies, enforce/dry run | They change during demos. Never in Terraform |
@@ -525,7 +525,7 @@ It's still created by `up` and destroyed by `down`, with the same guard and orde
 
 **CLI:**
 - **The theme carries its region.** `deploy-theme`, policies, gateway logs and Verify follow the theme's region instead of the global config region.
-- **Deploys:** Payroll MCP (internal ingress) and the public MCP. The theme's orchestrator is deployed with the token-sharing env var.
+- **Deploys:** Payroll MCP (internal ingress) and the public MCP. The theme's orchestrator is deployed like any other (google-auth pinned, ISSUES #16).
 - **Registry and grants:** the theme's registry entries are created in us-west1. Grants stay live toggles.
 
 **Demo UI:**
@@ -696,7 +696,7 @@ Runbook steps a–g ran on the live demo (us-east4) in a quiet window, after a h
 - **`deploy-theme privnet`:**
   - Payroll MCP: ingress internal, both run.app URLs registered in us-west1;
   - Benefits MCP: public;
-  - orchestrator: Agent Identity, with the token-sharing env var.
+  - orchestrator: Agent Identity, google-auth pinned (ISSUES #16).
 - **Demo steps, run live through the UI backend API (the same path as the UI toggles):**
   1. **Direct from the internet:** Payroll **404**, Benefits **200**.
   2. **Unbound agent:** Payroll is **unreachable** (public path, 404), Benefits direct.

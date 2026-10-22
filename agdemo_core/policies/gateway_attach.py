@@ -86,7 +86,7 @@ class GatewayAttach:
             f"  -d '{{\"spec\":{{\"deploymentSpec\":{{\"agentGatewayConfig\":{{\"{key}\":"
             f"{{\"agentGateway\":\"{gw.gateway_resource(cfg, p)}\"}}}}}}}}}}'",
             "# Remove: PATCH the same field without this direction (the other direction is re-sent unchanged).",
-            "# Deploy the engine with GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false (ISSUES #16).",
+            "# The engine's requirements must pin google-auth==2.60.0, or its Google API calls get 401 (ISSUES #16).",
             *(["# VPC-enabled gateway (connectivity template): run.app names resolve to the PSC endpoint in your VPC."]
               if cfg.is_private_networking else []),
             "# The engine redeploys (minutes). Once attached, the gateway is default-deny: "

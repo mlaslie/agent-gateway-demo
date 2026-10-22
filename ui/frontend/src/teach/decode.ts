@@ -51,8 +51,8 @@ export const DECODED: Record<FailureCode, Decoded> = {
   "token-401": {
     code: "token-401",
     title: "401 · Google API call behind a gateway",
-    why: "Agents bound to a gateway, with or without a connectivity template, got 401 on Google API calls made through it (ISSUES #16).",
-    fix: "Redeploy the agent with GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false (deploy-theme sets it for every agent).",
+    why: "A known google-auth bug (being fixed): agents with a newer google-auth get 401 on their own Google API calls once bound to a gateway (ISSUES #16).",
+    fix: "Redeploy the agent with google-auth==2.60.0 in its requirements (deploy-theme pins it). Or set GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false, which turns off token binding.",
   },
   "platform-blocked": {
     code: "platform-blocked",

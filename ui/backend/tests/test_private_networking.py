@@ -1,5 +1,5 @@
 """Phase T4 (docs/TERRAFORM_PLAN.md §7c): Private Networking mode. Terraform module plumbing, region-aware
-themes, deploy arguments (internal ingress, both run.app URLs, the token-sharing env var), the private-IP
+themes, deploy arguments (internal ingress, both run.app URLs, the google-auth pin), the private-IP
 classifier, check-clean / reset --all / down across regions, the privnet theme and its Demo-mode scenarios.
 No GCP and no Terraform apply: fakes and file checks only."""
 
@@ -298,8 +298,8 @@ def test_deploy_args(tmp_path):
     assert not any(x.startswith("--ingress") for x in h) and "--region=us-east1" in h   # unchanged
 
 
-def test_engine_env_token_sharing_all_themes():
-    """ISSUES #16: every engine gets the token-sharing switch, Internet and Private Networking alike."""
+def test_engine_google_auth_pin_all_themes():
+    """ISSUES #16: the google-auth pin avoids the 401 behind a gateway, so no engine opts out of token binding."""
     ds = d._load_module("agdemo_deploy_spec", d.RUNTIMES / "orchestrator" / "deploy_spec.py")
 
     class MS:   # stand-in for the theme's model spec module: only the shape _engine_env reads
@@ -309,8 +309,9 @@ def test_engine_env_token_sharing_all_themes():
     for theme_id in ("helpdesk", "privnet"):
         t = load_theme(theme_id)
         env = d._engine_env(theme_config(cfg(), t), t, {}, MS, ds, None)
-        assert env["GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES"] == "false"
+        assert "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES" not in env
         assert env["ORCHESTRATOR_SPEC"] == "b64"
+    assert "google-auth==2.60.0" in ds.REQUIREMENTS
 
 
 def test_register_both_urls(monkeypatch):

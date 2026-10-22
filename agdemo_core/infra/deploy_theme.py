@@ -205,7 +205,6 @@ def find_engine(r: Rest, cfg: DemoConfig, display: str) -> dict | None:
 def _engine_env(cfg: DemoConfig, theme: Theme, urls: dict[str, str], ms, ds, orchestrator_id: str | None):
     spec = ms.orchestrator_spec(theme, urls, cfg.models.default, orchestrator_id)
     auth_mode = "none" if cfg.cloud_run.public_targets else "id_token"
-    # deploy_spec.env_vars includes the token-sharing switch for every engine (ISSUES #16).
     return ds.env_vars(ms.encode_spec(spec), spec["model"], auth_mode)
 
 

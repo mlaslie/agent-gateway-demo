@@ -30,7 +30,7 @@ An Agent Runtime agent calls an **internal-only Cloud Run MCP server** through t
    - Google's doc says to delete and recreate the gateway; that isn't necessary.
 3. **Templates are frozen while in use.** Only `description` can change; to change anything else, create a new template and swap it (about 11 s). A template in use can't be deleted.
 4. **The attachment must be in the gateway's region.** A different region fails at template create with an unhelpful "internal error".
-5. **Agents behind the gateway may get 401 on every Google API call.** Fix: deploy them with `GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false`. We didn't find the cause. It also happens without a template (ISSUES #16), so `deploy-theme` sets it for every engine.
+5. **Agents behind the gateway may get 401 on every Google API call.** Cause: a known google-auth bug, being fixed, and it happens without a template too (ISSUES #16). Fix: pin `google-auth==2.60.0` in the agent's requirements (the demo does). Or deploy with `GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false`, which turns off token binding.
 6. **Only one egress gateway per project and region can serve agents.** A second bind fails with "Another Agent Gateway is already active …".
 7. **Never give an agent its own PSC interface as well.**
    - Creating an agent with both is rejected.
