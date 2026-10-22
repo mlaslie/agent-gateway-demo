@@ -105,7 +105,7 @@ APIS = ${JSON.stringify(APIS, null, 4).replace(/\n\]/, "\n]")}
 client = service_usage_v1.ServiceUsageClient()
 for i in range(0, len(APIS), 20):            # at most 20 per call
     op = client.batch_enable_services(request={"parent": "projects/PROJECT_ID", "service_ids": APIS[i:i + 20]})
-    op.result(timeout=900)`, "The demo enables APIs through REST and Terraform; this client call wasn't run.", true),
+    op.result(timeout=900)`),
   },
 };
 
@@ -124,7 +124,7 @@ curl -sS -X POST ${AUTH} \\
   "https://artifactregistry.googleapis.com/v1/projects/PROJECT_ID/locations/REGION/repositories?repositoryId=demo" \\
   -d '{"format": "DOCKER"}'
 # Project roles for the service account: getIamPolicy -> add bindings -> setIamPolicy
-# (the gcloud tab's add-iam-policy-binding does that read-modify-write for you).`, null, true),
+# (the gcloud tab's add-iam-policy-binding does that read-modify-write for you).`),
     gcloud: T(`gcloud iam service-accounts create targets-sa --project=PROJECT_ID --display-name="Cloud Run destinations"
 for ROLE in roles/aiplatform.user roles/logging.logWriter; do
   gcloud projects add-iam-policy-binding PROJECT_ID --condition=None \\
@@ -155,6 +155,9 @@ resource "google_storage_bucket" "staging" {
   name                        = "PROJECT_ID-staging"
   location                    = "REGION"
   uniform_bucket_level_access = true
+  # Agent Runtime redeploys from the package staged here on every update (bind, unbind, env change):
+  # keep it while the agent exists, or those PATCHes fail. Once the agents are gone,
+  # force_destroy = true lets terraform destroy delete the bucket with its contents.
 }
 
 resource "google_artifact_registry_repository" "repo" {
@@ -175,7 +178,7 @@ iam.create_service_account(request={
 bucket = storage.Client(project="PROJECT_ID").bucket("PROJECT_ID-staging")
 bucket.iam_configuration.uniform_bucket_level_access_enabled = True
 bucket.create(location="REGION")
-# Project roles and the Artifact Registry repo: most teams use gcloud or Terraform for these.`, "There's no single client for this step. Not run in this demo.", true),
+# Project roles and the Artifact Registry repo: most teams use gcloud or Terraform for these.`, "There's no single client for this step: IAM and Storage here, plus gcloud or Terraform for the repo and roles."),
   },
 };
 
@@ -229,7 +232,7 @@ gw = network_services_v1.AgentGateway(
 )
 op = client.create_agent_gateway(parent="projects/PROJECT_ID/locations/REGION",
                                  agent_gateway_id="EGRESS_GW", agent_gateway=gw)
-print(op.result(timeout=1800).name)`, "The client class exists (checked); the demo itself sends the REST body.", true),
+print(op.result(timeout=1800).name)`),
   },
 };
 
@@ -283,7 +286,7 @@ ext = network_services_v1.AuthzExtension.from_json(json.dumps({
     "metadata": {"iapPolicyVersion": "V1"},
 }))
 dep.create_authz_extension(parent=parent, authz_extension_id="EGRESS_GW-iap-authz",
-                           authz_extension=ext).result(timeout=900)`, null, true),
+                           authz_extension=ext).result(timeout=900)`),
   },
 };
 
@@ -345,7 +348,7 @@ policy = P(
         resources=["projects/PROJECT_ID/locations/REGION/authzExtensions/EGRESS_GW-iap-authz"])),
 )
 ns.create_authz_policy(parent="projects/PROJECT_ID/locations/REGION", authz_policy=policy,
-                       authz_policy_id="EGRESS_GW-iap-policy").result(timeout=900)`, null, true),
+                       authz_policy_id="EGRESS_GW-iap-policy").result(timeout=900)`),
   },
 };
 
@@ -434,7 +437,7 @@ done`, "The grant command is the verified part; the <code>services list</code> l
     py: T(PYIAP + `
 ALL_AGENTS = "principalSet://agents.global.org-ORG_ID.system.id.goog/attribute.platformContainer/aiplatform/projects/PROJECT_NUMBER"
 for entry_id in ["ENTRY_ID_1", "ENTRY_ID_2"]:   # one per platform entry
-    grant(f"projects/PROJECT_NUMBER/locations/REGION/iap_web/agentRegistry/endpoints/{entry_id}", ALL_AGENTS)`, null, true),
+    grant(f"projects/PROJECT_NUMBER/locations/REGION/iap_web/agentRegistry/endpoints/{entry_id}", ALL_AGENTS)`),
   },
 };
 
@@ -471,7 +474,7 @@ client = network_services_v1.NetworkServicesClient()
 gw = network_services_v1.AgentGateway(
     google_managed=network_services_v1.AgentGateway.GoogleManaged(governed_access_path="CLIENT_TO_AGENT"))
 client.create_agent_gateway(parent="projects/PROJECT_ID/locations/REGION",
-                            agent_gateway_id="INGRESS_GW", agent_gateway=gw).result(timeout=900)`, null, true),
+                            agent_gateway_id="INGRESS_GW", agent_gateway=gw).result(timeout=900)`),
   },
 };
 
@@ -486,10 +489,14 @@ S.deploy = {
 curl -sS -X POST ${AUTH} \\
   "https://run.googleapis.com/v2/projects/PROJECT_ID/locations/REGION/services?serviceId=tickets-mcp" \\
   -d '{"template": {"serviceAccount": "targets-sa@PROJECT_ID.iam.gserviceaccount.com",
-                    "containers": [{"image": "REGION-docker.pkg.dev/PROJECT_ID/demo/mcp-server:latest"}]}}'`, null, true),
+                    "containers": [{"image": "REGION-docker.pkg.dev/PROJECT_ID/demo/mcp-server:latest"}]}}'
+# Open invocation, like gcloud's --allow-unauthenticated (the demo's default: fake data, the gateway enforces).
+# The API alone creates a service that requires authentication.
+curl -sS -X POST ${AUTH} "https://run.googleapis.com/v2/projects/PROJECT_ID/locations/REGION/services/tickets-mcp:setIamPolicy" \\
+  -d '{"policy": {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]}]}}'`),
     gcloud: T(`# An ADK agent exposed over A2A (to_a2a()) and a FastMCP server, each from source
 # --allow-unauthenticated is the demo's default (fake data; the gateway enforces). With
-# --no-allow-unauthenticated, grant the agent roles/run.invoker on each service (see "project roles").
+# --no-allow-unauthenticated the agent needs roles/run.invoker (see "project roles") and must send an ID token.
 gcloud run deploy kb-agent --source=./a2a_agent --region=REGION --project=PROJECT_ID \\
   --service-account=targets-sa@PROJECT_ID.iam.gserviceaccount.com --allow-unauthenticated --quiet
 gcloud run deploy tickets-mcp --source=./mcp_server --region=REGION --project=PROJECT_ID \\
@@ -509,7 +516,16 @@ gcloud run deploy tickets-mcp --source=./mcp_server --region=REGION --project=PR
       image = "REGION-docker.pkg.dev/PROJECT_ID/demo/mcp-server:latest"
     }
   }
-}`, "Supported by Terraform, but the demo keeps Cloud Run in the CLI: images are built from code and the URLs feed the registry.", true),
+}
+
+# Open invocation, like gcloud's --allow-unauthenticated (the demo's default; the gateway enforces)
+resource "google_cloud_run_v2_service_iam_member" "tickets_mcp_public" {
+  project  = google_cloud_run_v2_service.tickets_mcp.project
+  location = google_cloud_run_v2_service.tickets_mcp.location
+  name     = google_cloud_run_v2_service.tickets_mcp.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}`, "Works with Terraform; the demo itself keeps Cloud Run in the CLI, because images are built from code and the URLs feed the registry."),
     py: T(`from google.cloud import run_v2  # pip install google-cloud-run
 
 client = run_v2.ServicesClient()
@@ -517,7 +533,11 @@ svc = run_v2.Service(template=run_v2.RevisionTemplate(
     service_account="targets-sa@PROJECT_ID.iam.gserviceaccount.com",
     containers=[run_v2.Container(image="REGION-docker.pkg.dev/PROJECT_ID/demo/mcp-server:latest")]))
 op = client.create_service(parent="projects/PROJECT_ID/locations/REGION", service=svc, service_id="tickets-mcp")
-print(op.result().urls)`, null, true),
+created = op.result()
+print(created.urls)
+# Open invocation, like gcloud's --allow-unauthenticated (the API alone requires authentication)
+run_v2.ServicesClient().set_iam_policy(request={"resource": created.name,
+    "policy": {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]}]}})`),
   },
 };
 
@@ -611,7 +631,7 @@ resource "google_agent_registry_service" "kb_agent" {
     content = file("kb-agent-card.json") # fetched from /.well-known/agent-card.json
   }
 }
-# registry_resource (computed) feeds the IAP grant resources.`, "The demo creates theme entries with the CLI (they depend on deployed code). The resource and its fields come from the provider schema; the demo's Terraform uses it only for platform endpoints.", true),
+# registry_resource (computed) feeds the IAP grant resources.`, "Works with Terraform; the demo itself registers theme entries with the CLI, because they depend on deployed code."),
     py: T(PYREST + `
 base = "https://agentregistry.googleapis.com/v1/projects/PROJECT_ID/locations/REGION/services"
 import requests
@@ -648,10 +668,18 @@ remote = client.agent_engines.create(
         "display_name": "${pn ? "payroll-agent" : "helpdesk-agent"}",
         "identity_type": "AGENT_IDENTITY",  # fixed at create time: can't be added later
         "staging_bucket": "gs://PROJECT_ID-staging",
-        "requirements": ["google-cloud-aiplatform[agent_engines,adk]", "google-adk"],
+        # Pin what you built with: the agent is pickled, so the server needs the same versions.
+        # Add your agent's own dependencies too: mcp for McpToolset, [a2a] for RemoteA2aAgent.
+        "requirements": [
+            "google-cloud-aiplatform[agent_engines,adk]==2.4.0",
+            "google-adk[a2a]==2.11.0",
+            "mcp==1.30.0",
+            "cloudpickle==3.1.2",
+            "pydantic==2.14.1",
+        ],
         "extra_packages": ["my_agent"],
         "env_vars": {
-            # Needed behind a gateway, with or without a connectivity template (else 401 on Google APIs)
+            # Needed once the agent is behind a gateway, or its own Google API calls get 401
             "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES": "false",
         },${pn ? `
         # Never also set psc_interface_config: a PSC interface plus a gateway breaks Google API access,
@@ -668,7 +696,7 @@ const agentTabs = (pn) => ({
 # REST is for reading it back: the agent's own principal is spec.effectiveIdentity.
 curl -sS ${AUTH} \\
   "https://REGION-aiplatform.googleapis.com/v1/projects/PROJECT_ID/locations/REGION/reasoningEngines/ENGINE_ID" \\
-  | jq '{identityType: .spec.identityType, principal: ("principal://" + .spec.effectiveIdentity), env: .spec.deploymentSpec.env}'`, "Create with the Python SDK; REST shown for reading the identity."),
+  | jq '{identityType: .spec.identityType, principal: ("principal://" + .spec.effectiveIdentity)${pn ? ", env: .spec.deploymentSpec.env" : ""}}'`, "Create with the Python SDK; REST shown for reading the identity."),
   gcloud: NO(`No gcloud command manages Agent Runtime agents. Use the Python SDK. <span class="bb-unv">unverified</span> The Agent Platform CLI (<code>agents-cli deploy</code>) can also deploy, and has <code>--agent-gateway-egress</code> to bind as part of a deploy.`,
     `# Read it back with a gcloud token:
 curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" \\
@@ -687,7 +715,7 @@ curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" \\
     deployment_spec {
       env {
         name  = "GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES"
-        value = "false"
+        value = "false" # needed once the agent is behind a gateway (else 401 on Google APIs)
       }
       # agent_gateway_config { agent_to_anywhere_config { agent_gateway = "projects/PROJECT_ID/locations/REGION/agentGateways/EGRESS_GW" } }
     }
@@ -697,14 +725,14 @@ curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" \\
     # Mandatory if anything else (the demo UI, a PATCH) binds or unbinds it:
     ignore_changes = [spec[0].deployment_spec[0].agent_gateway_config]
   }
-}`, "The demo keeps agents out of Terraform: any spec change redeploys the whole engine. A custom container (BYOC) also needs the gateway's root CA baked in, per the docs.", true),
+}`, "Not run in the live test: this form needs your own container image, built to Agent Runtime's container contract and with the gateway's root CA baked in. The tested way is the Python tab, which the demo uses; the Terraform test created the agent with it and then managed roles, binding and grants in Terraform. The provider also has <code>source_code_spec</code> (deploy from source). The demo keeps agents out of Terraform because any spec change redeploys the whole engine.", true),
   py: T(agentPy(pn), "This is how the demo creates its agents (vertexai 2.4.0). Newer docs show the same config in the separate <code>agentplatform</code> SDK (<code>google-cloud-agentplatform</code>) as <code>client.runtimes.create</code>."),
 });
 S.agent = {
   title: "Create the agent with Agent Identity", sub: "ADK agent on Agent Runtime; identity fixed at create",
   who: ["cli", "deploy-theme"], time: "2.5–7 min",
-  what: "Deploys your ADK agent to <b>Agent Runtime</b> with <code>identity_type=AGENT_IDENTITY</code>. The agent gets its own principal (its \"badge\"): <code>principal://agents.global.org-ORG_ID.system.id.goog/…/reasoningEngines/ENGINE_ID</code>. It's registered in Agent Registry automatically. It also sets one environment variable: <code>GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false</code>.",
-  why: "<span class=\"bb-gotcha\">Without the variable, a new agent bound to a gateway got <b>401 on its own Gemini call</b>, even without a connectivity template; the cause wasn't isolated.</span> Every per-agent grant needs that principal, so the agent comes after the foundation and before any agent policy. <b>Agent Identity can't be added later</b>: an agent created without it must be recreated. The demo creates it unbound (the wide-open starting point) and binds next.",
+  what: "Deploys your ADK agent to <b>Agent Runtime</b> with <code>identity_type=AGENT_IDENTITY</code>. The agent gets its own principal (its \"badge\"): <code>principal://agents.global.org-ORG_ID.system.id.goog/…/reasoningEngines/ENGINE_ID</code>. It's registered in Agent Registry automatically.",
+  why: "Every per-agent grant needs that principal, so the agent comes after the foundation and before any agent policy. <b>Agent Identity can't be added later</b>: an agent created without it must be recreated. The demo creates it unbound (the wide-open starting point) and binds next. <span class=\"bb-gotcha\">Set <code>GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false</code> at create: a new agent without it got <b>401 on its own Google API calls</b> as soon as it was bound (tested October 2026).</span>",
   tabs: agentTabs(false),
 };
 
@@ -728,20 +756,22 @@ curl -sS -X POST ${AUTH} "\${URL}:getIamPolicy" -d '{"options":{"requestedPolicy
   else .bindings += [{role: $r, members: [$m]}] end))}' \\
 | curl -sS -X POST ${AUTH} "\${URL}:setIamPolicy" -d @-
 
-# Cloud Run destinations that require authentication (--no-allow-unauthenticated): run.invoker on the service
-RUN="https://run.googleapis.com/v2/projects/PROJECT_ID/locations/REGION/services/tickets-mcp"
-curl -sS ${AUTH} "\${RUN}:getIamPolicy" \\
-| jq --arg m "$AGENT" '{policy: (.bindings = ((.bindings // []) + [{role: "roles/run.invoker", members: [$m]}]))}' \\
-| curl -sS -X POST ${AUTH} "\${RUN}:setIamPolicy" -d @-`, "gcloud's <code>add-iam-policy-binding</code> does this read-modify-write for you.", true),
+# Only for a Cloud Run destination deployed with --no-allow-unauthenticated (the agent must then also send
+# a Google ID token): run.invoker on that service.
+# RUN="https://run.googleapis.com/v2/projects/PROJECT_ID/locations/REGION/services/SERVICE"
+# curl -sS ${AUTH} "\${RUN}:getIamPolicy" \\
+# | jq --arg m "$AGENT" '{policy: (.bindings = ((.bindings // []) + [{role: "roles/run.invoker", members: [$m]}]))}' \\
+# | curl -sS -X POST ${AUTH} "\${RUN}:setIamPolicy" -d @-`, "gcloud's <code>add-iam-policy-binding</code> does this read-modify-write for you."),
     gcloud: T(`${AGENT}
 for ROLE in roles/aiplatform.user roles/agentregistry.viewer roles/logging.logWriter roles/monitoring.metricWriter \\
             roles/cloudtrace.agent roles/browser roles/serviceusage.serviceUsageConsumer; do
   gcloud projects add-iam-policy-binding PROJECT_ID --member="$AGENT" --role="$ROLE" --condition=None
 done
 
-# Cloud Run destinations that require authentication (--no-allow-unauthenticated):
-gcloud run services add-iam-policy-binding tickets-mcp --region=REGION --project=PROJECT_ID \\
-  --member="$AGENT" --role=roles/run.invoker`),
+# Only for a Cloud Run destination deployed with --no-allow-unauthenticated (the agent must then also send
+# a Google ID token):
+# gcloud run services add-iam-policy-binding SERVICE --region=REGION --project=PROJECT_ID \\
+#   --member="$AGENT" --role=roles/run.invoker`),
     tf: T(`locals {
   agent = "principal://agents.global.org-ORG_ID.system.id.goog/resources/aiplatform/projects/PROJECT_NUMBER/locations/REGION/reasoningEngines/ENGINE_ID"
 }
@@ -755,7 +785,7 @@ resource "google_project_iam_member" "agent" {
   project = "PROJECT_ID"
   role    = each.value
   member  = local.agent
-}`, null, true),
+}`),
     py: T(`from google.cloud import resourcemanager_v3  # pip install google-cloud-resource-manager
 from google.iam.v1 import iam_policy_pb2, policy_pb2
 
@@ -768,7 +798,7 @@ policy = crm.get_iam_policy(request={"resource": "projects/PROJECT_ID", "options
 for role in ROLES:
     policy.bindings.append(policy_pb2.Binding(role=role, members=[AGENT]))
 policy.version = 3  # keeps any conditional bindings intact
-crm.set_iam_policy(request=iam_policy_pb2.SetIamPolicyRequest(resource="projects/PROJECT_ID", policy=policy))`, null, true),
+crm.set_iam_policy(request=iam_policy_pb2.SetIamPolicyRequest(resource="projects/PROJECT_ID", policy=policy))`),
   },
 };
 
@@ -814,14 +844,28 @@ resource "terraform_data" "bind" {
   }
 
   provisioner "local-exec" {
-    command     = "curl -sS --fail-with-body -X PATCH \\"$URL\\" -H \\"Authorization: Bearer $(gcloud auth print-access-token)\\" -H 'Content-Type: application/json' -d \\"$BODY\\""
-    environment = { URL = self.input.url, BODY = self.input.body }
+    command     = <<-EOT
+      set -e
+      OP=$(curl -sS --fail-with-body -X PATCH "$URL" -H "Authorization: Bearer $(gcloud auth print-access-token)" \\
+        -H "Content-Type: application/json" -d "$BODY" | jq -er .name)
+      # Wait for it: a second PATCH while the engine is still UPDATING fails (400 FAILED_PRECONDITION)
+      until curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" "$API/$OP" | jq -e .done > /dev/null; do sleep 15; done
+      curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" "$API/$OP" | jq -e '.error == null' > /dev/null
+    EOT
+    environment = { URL = self.input.url, BODY = self.input.body, API = "https://REGION-aiplatform.googleapis.com/v1" }
   }
 
   provisioner "local-exec" {
     when        = destroy
-    command     = "curl -sS --fail-with-body -X PATCH \\"$URL\\" -H \\"Authorization: Bearer $(gcloud auth print-access-token)\\" -H 'Content-Type: application/json' -d \\"$BODY\\""
-    environment = { URL = self.input.url, BODY = self.input.undo }
+    command     = <<-EOT
+      set -e
+      OP=$(curl -sS --fail-with-body -X PATCH "$URL" -H "Authorization: Bearer $(gcloud auth print-access-token)" \\
+        -H "Content-Type: application/json" -d "$BODY" | jq -er .name)
+      # Wait for it: a second PATCH while the engine is still UPDATING fails (400 FAILED_PRECONDITION)
+      until curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" "$API/$OP" | jq -e .done > /dev/null; do sleep 15; done
+      curl -sS -H "Authorization: Bearer $(gcloud auth print-access-token)" "$API/$OP" | jq -e '.error == null' > /dev/null
+    EOT
+    environment = { URL = self.input.url, BODY = self.input.undo, API = "https://REGION-aiplatform.googleapis.com/v1" }
   }
 }`, "This is the pattern the demo's Terraform export emits."),
     py: T(PYREST + `
@@ -864,7 +908,7 @@ gcloud iap web add-iam-policy-binding --project=PROJECT_ID --resource-type=agent
 }`),
     py: T(PYIAP + `
 AGENT = "principal://agents.global.org-ORG_ID.system.id.goog/resources/aiplatform/projects/PROJECT_NUMBER/locations/REGION/reasoningEngines/ENGINE_ID"
-grant("projects/PROJECT_NUMBER/locations/REGION/iap_web/agentRegistry/agents/ENTRY_ID", AGENT)`, null, true),
+grant("projects/PROJECT_NUMBER/locations/REGION/iap_web/agentRegistry/agents/ENTRY_ID", AGENT)`),
   },
 };
 
@@ -907,7 +951,7 @@ RES = "projects/PROJECT_NUMBER/locations/REGION/iap_web/agentRegistry/mcpServers
 # Pick ONE: an unconditional grant (a) makes any conditional grant moot.
 # grant(RES, AGENT)                                                   # a) all tools
 grant(RES, AGENT, "${svc}-readonly", "${NAMES_EXPR(tools)}")         # b) these tools
-# grant(RES, AGENT, "${svc}-readonly-hints", "${READONLY_EXPR}")     # c) read-only hint`, null, true),
+# grant(RES, AGENT, "${svc}-readonly-hints", "${READONLY_EXPR}")     # c) read-only hint`),
 });
 S.allowmcp = {
   title: "Allow MCP tools", sub: "All tools, named tools, or read-only hint",
@@ -955,7 +999,7 @@ gcloud model-armor templates create shield --project=PROJECT_ID --location=REGIO
   --template-metadata-custom-prompt-safety-error-message="blocked by Model Armor" \\
   --template-metadata-custom-llm-response-safety-error-code=403 \\
   --template-metadata-custom-llm-response-safety-error-message="blocked by Model Armor" \\
-  --template-metadata-log-operations --template-metadata-log-sanitize-operations`, "Flags checked with <code>--help</code>; the demo itself sends the REST body.", true),
+  --template-metadata-log-operations --template-metadata-log-sanitize-operations`),
     tf: T(`resource "google_model_armor_template" "shield" {
   project     = "PROJECT_ID"
   location    = "REGION"
@@ -989,7 +1033,7 @@ ma.create_template(parent="projects/PROJECT_ID/locations/REGION", template_id="s
         "pi_and_jailbreak_filter_settings": {"filter_enforcement": "ENABLED", "confidence_level": "MEDIUM_AND_ABOVE"},
         "sdp_settings": {"basic_config": {"filter_enforcement": "ENABLED"}},
     },
-})`, null, true),
+})`),
   },
 };
 
@@ -1013,7 +1057,10 @@ for M in "serviceAccount:$GW_SA" \\
     gcloud projects add-iam-policy-binding PROJECT_ID --member="$M" --role="$ROLE" --condition=None
   done
 done`),
-    tf: T(`locals {
+    tf: T(`# Careful: destroying a google_project_iam_member removes that binding, even if it existed before.
+# These service agents are shared by every gateway in the project: if another gateway already relies on
+# a binding, import it or leave it out (terraform state rm) before you destroy.
+locals {
   ma_members = {
     gateway = "serviceAccount:\${google_network_services_agent_gateway.egress.agent_gateway_card[0].service_extensions_service_account}"
     dep     = "serviceAccount:service-PROJECT_NUMBER@gcp-sa-dep.iam.gserviceaccount.com"
@@ -1042,7 +1089,7 @@ policy = crm.get_iam_policy(request={"resource": "projects/PROJECT_ID", "options
 for role in ["roles/modelarmor.calloutUser", "roles/modelarmor.user", "roles/serviceusage.serviceUsageConsumer"]:
     policy.bindings.append(policy_pb2.Binding(role=role, members=members))
 policy.version = 3  # keeps any conditional bindings intact
-crm.set_iam_policy(request=iam_policy_pb2.SetIamPolicyRequest(resource="projects/PROJECT_ID", policy=policy))`, null, true),
+crm.set_iam_policy(request=iam_policy_pb2.SetIamPolicyRequest(resource="projects/PROJECT_ID", policy=policy))`),
   },
 };
 
@@ -1096,7 +1143,7 @@ ext = network_services_v1.AuthzExtension.from_json(json.dumps({
     "metadata": {"model_armor_settings": json.dumps([{"request_template_id": tmpl, "response_template_id": tmpl}])},
 }))
 network_services_v1.DepServiceClient().create_authz_extension(
-    parent=parent, authz_extension_id="ma-authz", authz_extension=ext).result(timeout=900)`, null, true),
+    parent=parent, authz_extension_id="ma-authz", authz_extension=ext).result(timeout=900)`),
   },
 };
 
@@ -1145,7 +1192,8 @@ done
       resources = [google_network_services_authz_extension.model_armor.id]
     }
   }
-  depends_on = [google_project_iam_member.model_armor]
+  # One operation at a time per gateway: wait for the default-deny policy on the same gateway
+  depends_on = [google_project_iam_member.model_armor, google_network_security_authz_policy.egress_iap]
 }`),
     py: T(`from google.cloud import network_security_v1
 
@@ -1157,7 +1205,7 @@ for gw in ["EGRESS_GW", "INGRESS_GW"]:
             target=P.Target(resources=[f"projects/PROJECT_ID/locations/REGION/agentGateways/{gw}"]),
             policy_profile=P.PolicyProfile.CONTENT_AUTHZ, action=P.AuthzAction.CUSTOM,
             custom_provider=P.CustomProvider(authz_extension=P.CustomProvider.AuthzExtension(
-                resources=["projects/PROJECT_ID/locations/REGION/authzExtensions/ma-authz"])))).result(timeout=900)`, null, true),
+                resources=["projects/PROJECT_ID/locations/REGION/authzExtensions/ma-authz"])))).result(timeout=900)`),
   },
 };
 
@@ -1192,7 +1240,7 @@ client = logging.Client(project="PROJECT_ID")
 for e in client.list_entries(filter_='${LOGF}', order_by=logging.DESCENDING, max_results=20):
     p = e.payload or {}
     print(e.timestamp, e.http_request and e.http_request.get("status"),
-          p.get("authzPolicyInfo", {}).get("result"), p.get("enforcedGatewaySecurityPolicy", {}).get("hostname"))`, null, true),
+          p.get("authzPolicyInfo", {}).get("result"), p.get("enforcedGatewaySecurityPolicy", {}).get("hostname"))`),
   },
 };
 
@@ -1237,11 +1285,13 @@ S.vpc = {
   why: "The attachment in the next step is built on this subnet, so it comes first.",
   tabs: {
     curl: T(`${TOKEN}
-curl -sS -X POST ${AUTH} "https://compute.googleapis.com/compute/v1/projects/PROJECT_ID/global/networks" \\
-  -d '{"name": "VPC", "autoCreateSubnetworks": false}'
+OP=$(curl -sS -X POST ${AUTH} "https://compute.googleapis.com/compute/v1/projects/PROJECT_ID/global/networks" \\
+  -d '{"name": "VPC", "autoCreateSubnetworks": false}' | jq -r .name)
+# The subnet needs the network to exist: wait for that operation first (else 400 "resource is not ready")
+curl -sS -X POST ${AUTH} "https://compute.googleapis.com/compute/v1/projects/PROJECT_ID/global/operations/$OP/wait" > /dev/null
 curl -sS -X POST ${AUTH} "https://compute.googleapis.com/compute/v1/projects/PROJECT_ID/regions/REGION/subnetworks" \\
   -d '{"name": "SUBNET", "network": "projects/PROJECT_ID/global/networks/VPC",
-       "ipCidrRange": "10.70.0.0/28", "privateIpGoogleAccess": true}'`, null, true),
+       "ipCidrRange": "10.70.0.0/28", "privateIpGoogleAccess": true}'`),
     gcloud: T(`gcloud compute networks create VPC --subnet-mode=custom --project=PROJECT_ID
 gcloud compute networks subnets create SUBNET --network=VPC --region=REGION --project=PROJECT_ID \\
   --range=10.70.0.0/28 --enable-private-ip-google-access`),
@@ -1265,7 +1315,7 @@ compute_v1.NetworksClient().insert(project="PROJECT_ID", network_resource=comput
     name="VPC", auto_create_subnetworks=False)).result()
 compute_v1.SubnetworksClient().insert(project="PROJECT_ID", region="REGION", subnetwork_resource=compute_v1.Subnetwork(
     name="SUBNET", network="projects/PROJECT_ID/global/networks/VPC",
-    ip_cidr_range="10.70.0.0/28", private_ip_google_access=True)).result()`, null, true),
+    ip_cidr_range="10.70.0.0/28", private_ip_google_access=True)).result()`),
   },
 };
 
@@ -1278,7 +1328,7 @@ S.att = {
     curl: T(`${TOKEN}
 curl -sS -X POST ${AUTH} "https://compute.googleapis.com/compute/v1/projects/PROJECT_ID/regions/REGION/networkAttachments" \\
   -d '{"name": "ATT", "connectionPreference": "ACCEPT_AUTOMATIC",
-       "subnetworks": ["projects/PROJECT_ID/regions/REGION/subnetworks/SUBNET"]}'`, null, true),
+       "subnetworks": ["projects/PROJECT_ID/regions/REGION/subnetworks/SUBNET"]}'`),
     gcloud: T(`gcloud compute network-attachments create ATT --region=REGION --project=PROJECT_ID \\
   --subnets=SUBNET --connection-preference=ACCEPT_AUTOMATIC`),
     tf: T(`resource "google_compute_network_attachment" "att" {
@@ -1293,7 +1343,7 @@ curl -sS -X POST ${AUTH} "https://compute.googleapis.com/compute/v1/projects/PRO
 compute_v1.NetworkAttachmentsClient().insert(project="PROJECT_ID", region="REGION",
     network_attachment_resource=compute_v1.NetworkAttachment(
         name="ATT", connection_preference="ACCEPT_AUTOMATIC",
-        subnetworks=["projects/PROJECT_ID/regions/REGION/subnetworks/SUBNET"])).result()`, null, true),
+        subnetworks=["projects/PROJECT_ID/regions/REGION/subnetworks/SUBNET"])).result()`),
   },
 };
 
@@ -1304,13 +1354,15 @@ S.psc = {
   why: "The DNS records in the next step point at this IP, so it comes first. <span class=\"bb-gotcha\">The forwarding-rule name allows lowercase letters and digits only: <b>no hyphens, at most 20 characters</b> (e.g. <code>pscapis</code>).</span> It's the main standing cost (about USD 8/month).",
   tabs: {
     curl: T(`${TOKEN}
-curl -sS -X POST ${AUTH} "https://compute.googleapis.com/compute/v1/projects/PROJECT_ID/global/addresses" \\
+OP=$(curl -sS -X POST ${AUTH} "https://compute.googleapis.com/compute/v1/projects/PROJECT_ID/global/addresses" \\
   -d '{"name": "psc-ip", "purpose": "PRIVATE_SERVICE_CONNECT", "addressType": "INTERNAL",
-       "address": "PSC_IP", "network": "projects/PROJECT_ID/global/networks/VPC"}'
+       "address": "PSC_IP", "network": "projects/PROJECT_ID/global/networks/VPC"}' | jq -r .name)
+# The forwarding rule needs the address to exist: wait for that operation first
+curl -sS -X POST ${AUTH} "https://compute.googleapis.com/compute/v1/projects/PROJECT_ID/global/operations/$OP/wait" > /dev/null
 curl -sS -X POST ${AUTH} "https://compute.googleapis.com/compute/v1/projects/PROJECT_ID/global/forwardingRules" \\
   -d '{"name": "pscapis", "target": "all-apis",
        "network": "projects/PROJECT_ID/global/networks/VPC",
-       "IPAddress": "projects/PROJECT_ID/global/addresses/psc-ip"}'`, null, true),
+       "IPAddress": "projects/PROJECT_ID/global/addresses/psc-ip"}'`),
     gcloud: T(`# PSC_IP: an unused private IP outside the subnet, e.g. 10.70.250.10
 gcloud compute addresses create psc-ip --global --project=PROJECT_ID \\
   --purpose=PRIVATE_SERVICE_CONNECT --addresses=PSC_IP --network=VPC
@@ -1341,7 +1393,7 @@ compute_v1.GlobalAddressesClient().insert(project="PROJECT_ID", address_resource
 compute_v1.GlobalForwardingRulesClient().insert(project="PROJECT_ID", forwarding_rule_resource=compute_v1.ForwardingRule(
     name="pscapis", target="all-apis", load_balancing_scheme="",
     network="projects/PROJECT_ID/global/networks/VPC",
-    I_p_address="projects/PROJECT_ID/global/addresses/psc-ip")).result()`, "The compute client names the address field <code>I_p_address</code>.", true),
+    I_p_address="projects/PROJECT_ID/global/addresses/psc-ip")).result()`, "The compute client names the address field <code>I_p_address</code>."),
   },
 };
 
@@ -1357,7 +1409,7 @@ curl -sS -X POST ${AUTH} "https://dns.googleapis.com/dns/v1/projects/PROJECT_ID/
        "privateVisibilityConfig": {"networks": [{"networkUrl": "https://www.googleapis.com/compute/v1/projects/PROJECT_ID/global/networks/VPC"}]}}'
 curl -sS -X POST ${AUTH} "https://dns.googleapis.com/dns/v1/projects/PROJECT_ID/managedZones/run-app/changes" \\
   -d '{"additions": [{"name": "run.app.", "type": "A", "ttl": 300, "rrdatas": ["PSC_IP"]},
-                     {"name": "*.run.app.", "type": "A", "ttl": 300, "rrdatas": ["PSC_IP"]}]}'`, null, true),
+                     {"name": "*.run.app.", "type": "A", "ttl": 300, "rrdatas": ["PSC_IP"]}]}'`),
     gcloud: T(`gcloud dns managed-zones create run-app --project=PROJECT_ID --dns-name=run.app. \\
   --visibility=private --networks=VPC --description="run.app -> PSC endpoint"
 gcloud dns record-sets create run.app.   --zone=run-app --project=PROJECT_ID --type=A --ttl=300 --rrdatas=PSC_IP
@@ -1394,7 +1446,7 @@ s.post(base, json={
 }).raise_for_status()
 s.post(f"{base}/run-app/changes", json={"additions": [
     {"name": name, "type": "A", "ttl": 300, "rrdatas": ["PSC_IP"]} for name in ("run.app.", "*.run.app.")
-]}).raise_for_status()`, null, true),
+]}).raise_for_status()`),
   },
 };
 
@@ -1411,11 +1463,14 @@ SA="serviceAccount:service-PROJECT_NUMBER@gcp-sa-agentgateway.iam.gserviceaccoun
 curl -sS -X POST ${AUTH} "https://cloudresourcemanager.googleapis.com/v3/projects/PROJECT_ID:getIamPolicy" -d '{"options":{"requestedPolicyVersion":3}}' \\
 | jq --arg m "$SA" '{policy: (.bindings += [{role: "roles/compute.networkAdmin", members: [$m]},
                                            {role: "roles/dns.peer", members: [$m]}])}' \\
-| curl -sS -X POST ${AUTH} "https://cloudresourcemanager.googleapis.com/v3/projects/PROJECT_ID:setIamPolicy" -d @-`, null, true),
+| curl -sS -X POST ${AUTH} "https://cloudresourcemanager.googleapis.com/v3/projects/PROJECT_ID:setIamPolicy" -d @-`),
     gcloud: T(`SA=serviceAccount:service-PROJECT_NUMBER@gcp-sa-agentgateway.iam.gserviceaccount.com
 gcloud projects add-iam-policy-binding PROJECT_ID --member=$SA --role=roles/compute.networkAdmin --condition=None
 gcloud projects add-iam-policy-binding PROJECT_ID --member=$SA --role=roles/dns.peer --condition=None`),
-    tf: T(`resource "google_project_iam_member" "agentgateway" {
+    tf: T(`# Careful: destroying a google_project_iam_member removes that binding, even if it existed before.
+# These service agents are shared by every gateway in the project: if another gateway already relies on
+# a binding, import it or leave it out (terraform state rm) before you destroy.
+resource "google_project_iam_member" "agentgateway" {
   for_each = toset(["roles/compute.networkAdmin", "roles/dns.peer"])
   project  = "PROJECT_ID"
   role     = each.value
@@ -1430,18 +1485,10 @@ policy = crm.get_iam_policy(request={"resource": "projects/PROJECT_ID", "options
 for role in ("roles/compute.networkAdmin", "roles/dns.peer"):
     policy.bindings.append(policy_pb2.Binding(role=role, members=[SA]))
 policy.version = 3  # keeps any conditional bindings intact
-crm.set_iam_policy(request=iam_policy_pb2.SetIamPolicyRequest(resource="projects/PROJECT_ID", policy=policy))`, null, true),
+crm.set_iam_policy(request=iam_policy_pb2.SetIamPolicyRequest(resource="projects/PROJECT_ID", policy=policy))`),
   },
 };
 
-const TMPL_YAML = `accessPath: AGENT_TO_ANYWHERE
-deploymentModel: CENTRALIZED
-egressNetworkConfig:
-  networkAttachment: projects/PROJECT_ID/regions/REGION/networkAttachments/ATT   # project ID
-  dnsPeeringConfig:
-    domains: ["run.app."]
-    targetNetwork: projects/PROJECT_ID/global/networks/VPC                       # project ID
-  vpcEgress: PRIVATE_RANGES_ONLY`;
 S.tmpl = {
   title: "Connectivity template", sub: "The gateway's private-network settings",
   who: ["tf", "Terraform (private_egress)"], time: "< 1 s",
@@ -1460,11 +1507,18 @@ curl -sS -X POST ${AUTH} \\
       "vpcEgress": "PRIVATE_RANGES_ONLY"
     }
   }'`),
-    gcloud: T(`cat > tmpl.yaml <<'EOF'
-${TMPL_YAML}
-EOF
-gcloud network-services agent-connectivity-templates import TMPL --source=tmpl.yaml \\
-  --location=REGION --project=PROJECT_ID`, "<code>agent-connectivity-templates</code> isn't in gcloud 576 (GA, beta or alpha); it may need a newer SDK. The curl and Terraform tabs are the tested forms. No console UI exists for templates.", true),
+    gcloud: NO("No gcloud command creates templates yet (<code>agent-connectivity-templates</code> isn't in gcloud 576, GA, beta or alpha). Use the REST call with a gcloud access token. No console UI exists for templates either.", `${TOKEN}
+curl -sS -X POST ${AUTH} \\
+  "https://networkservices.googleapis.com/v1/projects/PROJECT_ID/locations/REGION/agentConnectivityTemplates?agentConnectivityTemplateId=TMPL" \\
+  -d '{
+    "accessPath": "AGENT_TO_ANYWHERE",
+    "deploymentModel": "CENTRALIZED",
+    "egressNetworkConfig": {
+      "networkAttachment": "projects/PROJECT_ID/regions/REGION/networkAttachments/ATT",
+      "dnsPeeringConfig": {"domains": ["run.app."], "targetNetwork": "projects/PROJECT_ID/global/networks/VPC"},
+      "vpcEgress": "PRIVATE_RANGES_ONLY"
+    }
+  }'`),
     tf: T(`resource "google_network_services_agent_connectivity_template" "tmpl" {
   project                        = "PROJECT_ID"
   location                       = "REGION"
@@ -1519,17 +1573,19 @@ curl -sS -X POST ${AUTH} \\
 #                           "targetNetwork": "projects/PROJECT_ID/global/networks/VPC"}}, "labels": {...}}
 #  2) PATCH ...?updateMask=agentConnectivityTemplate,networkConfig,labels
 #     {"agentConnectivityTemplate": "projects/PROJECT_NUMBER/locations/REGION/agentConnectivityTemplates/TMPL", "labels": {...}}`),
-    gcloud: T(`cat > pn-egress.yaml <<'EOF'
-name: EGRESS_GW
-protocols: [MCP]   # required by gcloud's import schema
-googleManaged:
-  governedAccessPath: AGENT_TO_ANYWHERE
-registries:
-  - //agentregistry.googleapis.com/projects/PROJECT_ID/locations/REGION
-agentConnectivityTemplate: projects/PROJECT_NUMBER/locations/REGION/agentConnectivityTemplates/TMPL
-EOF
-gcloud network-services agent-gateways import EGRESS_GW --source=pn-egress.yaml \\
-  --location=REGION --project=PROJECT_ID`, "gcloud 576's gateway import schema (GA, beta and alpha) has no <code>agentConnectivityTemplate</code> field, so this may be rejected until a newer SDK. The curl tab is the tested form.", true),
+    gcloud: NO("gcloud can't create a gateway with a template yet: the import schema in gcloud 576 (GA, beta and alpha) rejects <code>agentConnectivityTemplate</code>. Use the REST call with a gcloud access token.", `${TOKEN}
+curl -sS -X POST ${AUTH} \\
+  "https://networkservices.googleapis.com/v1/projects/PROJECT_ID/locations/REGION/agentGateways?agentGatewayId=EGRESS_GW" \\
+  -d '${egwBody(true)}'
+# The template reference must use the project NUMBER: the ID form is rejected with 400.
+
+# Existing gateway instead? Two PATCHes, not one (always keep labels in the mask):
+#  1) PATCH ...agentGateways/EGRESS_GW?updateMask=networkConfig,labels
+#     {"networkConfig": {"egress": {"networkAttachment": "projects/PROJECT_ID/regions/REGION/networkAttachments/ATT"},
+#      "dnsPeeringConfig": {"domains": ["run.app."], "targetProject": "PROJECT_ID",
+#                           "targetNetwork": "projects/PROJECT_ID/global/networks/VPC"}}, "labels": {...}}
+#  2) PATCH ...?updateMask=agentConnectivityTemplate,networkConfig,labels
+#     {"agentConnectivityTemplate": "projects/PROJECT_NUMBER/locations/REGION/agentConnectivityTemplates/TMPL", "labels": {...}}`),
     tf: T(`resource "google_network_services_agent_gateway" "egress" {
   project                     = "PROJECT_ID"
   location                    = "REGION"
@@ -1568,10 +1624,17 @@ curl -sS -X POST ${AUTH} \\
   "https://run.googleapis.com/v2/projects/PROJECT_ID/locations/REGION/services?serviceId=payroll-mcp" \\
   -d '{"ingress": "INGRESS_TRAFFIC_INTERNAL_ONLY",
        "template": {"serviceAccount": "targets-sa@PROJECT_ID.iam.gserviceaccount.com",
-                    "containers": [{"image": "REGION-docker.pkg.dev/PROJECT_ID/demo/mcp-server:latest"}]}}'`, null, true),
+                    "containers": [{"image": "REGION-docker.pkg.dev/PROJECT_ID/demo/mcp-server:latest"}]}}'
+# Open invocation, like gcloud's --allow-unauthenticated (the demo's default: fake data, the gateway enforces).
+# The API alone creates a service that requires authentication.
+curl -sS -X POST ${AUTH} "https://run.googleapis.com/v2/projects/PROJECT_ID/locations/REGION/services/payroll-mcp:setIamPolicy" \\
+  -d '{"policy": {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]}]}}'`),
     gcloud: T(`gcloud run deploy payroll-mcp --source=./mcp_server --region=REGION --project=PROJECT_ID \\
   --service-account=targets-sa@PROJECT_ID.iam.gserviceaccount.com \\
-  --ingress=internal --no-allow-unauthenticated
+  --ingress=internal --allow-unauthenticated --quiet
+# Internal ingress is the lock: from the internet it's 404. Invocation stays open like the demo's other
+# targets (the gateway enforces). With --no-allow-unauthenticated the agent would also need run.invoker
+# and to send a Google ID token on every call.
 # Two URL forms, both registered next:
 #   https://payroll-mcp-PROJECT_NUMBER.REGION.run.app
 #   https://payroll-mcp-HASH-xx.a.run.app`),
@@ -1588,14 +1651,27 @@ curl -sS -X POST ${AUTH} \\
       image = "REGION-docker.pkg.dev/PROJECT_ID/demo/mcp-server:latest"
     }
   }
-}`, "The demo deploys Cloud Run with the CLI.", true),
+}
+
+# Open invocation, like gcloud's --allow-unauthenticated (the demo's default; the gateway enforces)
+resource "google_cloud_run_v2_service_iam_member" "payroll_mcp_public" {
+  project  = google_cloud_run_v2_service.payroll_mcp.project
+  location = google_cloud_run_v2_service.payroll_mcp.location
+  name     = google_cloud_run_v2_service.payroll_mcp.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}`, "Works with Terraform; the demo itself deploys Cloud Run with the CLI."),
     py: T(`from google.cloud import run_v2
 
 svc = run_v2.Service(ingress=run_v2.IngressTraffic.INGRESS_TRAFFIC_INTERNAL_ONLY,
     template=run_v2.RevisionTemplate(service_account="targets-sa@PROJECT_ID.iam.gserviceaccount.com",
         containers=[run_v2.Container(image="REGION-docker.pkg.dev/PROJECT_ID/demo/mcp-server:latest")]))
-print(run_v2.ServicesClient().create_service(parent="projects/PROJECT_ID/locations/REGION",
-      service=svc, service_id="payroll-mcp").result().urls)`, null, true),
+created = run_v2.ServicesClient().create_service(parent="projects/PROJECT_ID/locations/REGION",
+      service=svc, service_id="payroll-mcp").result()
+print(created.urls)
+# Open invocation, like gcloud's --allow-unauthenticated (the API alone requires authentication)
+run_v2.ServicesClient().set_iam_policy(request={"resource": created.name,
+    "policy": {"bindings": [{"role": "roles/run.invoker", "members": ["allUsers"]}]}})`),
   },
 };
 
@@ -1646,7 +1722,7 @@ gcloud agent-registry services create payroll-mcp --project=PROJECT_ID --locatio
     url              = "https://payroll-mcp-HASH-xx.a.run.app/mcp"
     protocol_binding = "JSONRPC"
   }
-}`, "The demo registers theme entries with the CLI.", true),
+}`, "Works with Terraform; the demo itself registers theme entries with the CLI."),
     py: T(PYREST + `
 tools = [
     {"name": "get_payslip", "inputSchema": {"type": "object"}, "annotations": {"readOnlyHint": True}},
@@ -1665,8 +1741,8 @@ s.post("https://agentregistry.googleapis.com/v1/projects/PROJECT_ID/locations/RE
 S.pnagent = {
   title: "Create the agent (identity + env var)", sub: "Agent Identity, token-sharing switch, no PSC interface",
   who: ["cli", "deploy-theme"], time: "2.5–7 min",
-  what: "The same agent creation as in Internet mode, including the environment variable <code>GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false</code>.",
-  why: "<span class=\"bb-gotcha\">Without the variable, an agent behind a gateway with a template got <b>401 on every Google API call</b>; the cause wasn't isolated, and the docs now include it in their examples. Never also give the agent its own PSC interface: create rejects both, and adding a gateway to such an agent breaks it.</span>",
+  what: "The same agent creation as in Internet mode, including <code>GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=false</code>, and no PSC interface.",
+  why: "<span class=\"bb-gotcha\">Without the variable, an agent behind a gateway got <b>401 on every Google API call</b> (first seen with a template gateway, then with new agents on any gateway); the docs now include it in their examples. Never also give the agent its own PSC interface: create rejects both, and adding a gateway to such an agent breaks it.</span>",
   tabs: agentTabs(true),
 };
 
@@ -1710,7 +1786,7 @@ curl -sS -X POST ${AUTH} "https://logging.googleapis.com/v2/entries:list" \\
 client = logging.Client(project="PROJECT_ID")
 flt = '${LOGF} AND jsonPayload.enforcedGatewaySecurityPolicy.hostname:"payroll-mcp"'
 for e in client.list_entries(filter_=flt, order_by=logging.DESCENDING, max_results=10):
-    print(e.timestamp, (e.http_request or {}).get("status"), (e.http_request or {}).get("serverIp"))`, null, true),
+    print(e.timestamp, (e.http_request or {}).get("status"), (e.http_request or {}).get("serverIp"))`),
   },
 };
 
