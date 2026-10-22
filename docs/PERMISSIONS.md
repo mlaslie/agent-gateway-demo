@@ -1,6 +1,6 @@
 # Permissions: the minimum IAM roles
 
-> **Status (2026-10-22): the deployer's 15 base roles (§2.2) were tested live and are enough** for the full lifecycle of an Internet-mode environment: `up`, a Live scenario through the deployed UI, and `down`. The results are in §0. The trims in §4 and §5, and the GE and Private Networking roles, are still untested.
+> **Status (2026-10-22): the deployer's 15 base roles (§2.2) were tested live and are enough** for the full lifecycle of an Internet-mode environment: `up`, a Live scenario through the deployed UI, and `down`. **Private Networking needs 2 more (`compute.networkAdmin`, `dns.admin`), also tested live.** The results are in §0. The trims in §4 and §5 and the GE role are still untested.
 >
 > Originally (2026-10-21) this page was worked out from the code and from read-only checks. Every role below comes from reading what the demo calls: `infra/terraform/**`, `agdemo_core/**`, `ui/backend/**` and `runtimes/**`. Permission names were checked against the live role catalogue (`gcloud iam roles describe`, the IAM `roles.list` API) and with `testIamPermissions`. Nothing was created or granted. Each suggestion is marked **verified** (the permission names were checked) or **needs live test** (only a run with these roles will show whether it's enough). The test plan is in §6.
 
@@ -19,7 +19,21 @@ The full lifecycle was run as a service account (`agdtest-deployer`) that held *
 
 Project IAM was snapshotted before the test and compared afterwards: the only difference was the test account's own 15 bindings, which were then removed.
 
-Not covered by this test: `publish-ge` (GE role), Private Networking (its 2 roles), the custom-role and `expressUser` trims (§4, §5), the condition on Project IAM Admin (§5.3), and whether `roles/logging.viewer` (row 15) is still needed now that builds don't stream logs.
+**Private Networking run (same day).** The same account with the 15 roles **plus `roles/compute.networkAdmin` and `roles/dns.admin`** (17 in all), and nothing else. Config: base region us-east1, `private_networking.region: europe-west4` (no gateway in the project there), theme `privnet`, `shared_project_grants: false`.
+
+| Step | Result |
+|---|---|
+| `up`: Terraform foundation (162 resources: the base 97, plus the VPC, subnet, network attachment, PSC global address and `all-apis` forwarding rule, private `run.app.` zone and 2 records, the agent connectivity template, the VPC-enabled gateway with its IAP extension and policy, 25 regional registry entries and grants, a regional staging bucket) | Passed, no missing permission. No `servicedirectory` role was needed, and the connectivity template was created with these roles alone |
+| `deploy-theme privnet`: Payroll MCP (`--ingress=internal`), Benefits MCP, both run.app URL forms registered, the orchestrator engine | Passed |
+| `ui deploy` and `verify` (11 checks, including the VPC-enabled gateway and its template) | Passed |
+| Live Private Networking scenario in the deployed UI: bypass (Payroll 404, Benefits 200), bind to the VPC-enabled gateway, grant Payroll's read-only tools, `get_payslip` through the gateway (200; the gateway log's upstream `serverIp` was the PSC endpoint `10.70.250.10:443`), Reset (revoke and unbind) | Passed |
+| `down` (both regions, `terraform destroy` of 162 resources) | Passed |
+
+Project IAM was again identical to its pre-test snapshot after the 17 bindings were removed.
+
+Not covered: with `shared_project_grants: false`, Terraform didn't grant the Agent Gateway service agent (`gcp-sa-agentgateway`) its `compute.networkAdmin` and `dns.peer` roles; they were already in the project from the live demo. Granting them is `resourcemanager.projectIamAdmin`, which the deployer has, so this is expected to work but wasn't exercised.
+
+Not covered by either run: `publish-ge` (GE role), the custom-role and `expressUser` trims (§4, §5), the condition on Project IAM Admin (§5.3), and whether `roles/logging.viewer` (row 15) is still needed now that builds don't stream logs.
 
 ## 1. In plain language
 
@@ -82,10 +96,10 @@ The **base set is 15 predefined roles**. The optional features add 1 role for GE
 | Feature | Role | Why | Status |
 |---|---|---|---|
 | Gemini Enterprise (`publish-ge`; `down` and `check-clean` with `gemini_enterprise.app_id` set) | `roles/discoveryengine.agentAdmin` | `discoveryengine.agents.create/update/get/list/delete` on the GE app (15 permissions). If `agents-cli` also reads the app (`discoveryengine.engines.get`), use `roles/discoveryengine.editor` instead | needs live test |
-| Private Networking | `roles/compute.networkAdmin` | VPC, subnet, network attachment, PSC address and forwarding rule (`compute.*.create/delete/use`). It's large (about 970 permissions), but no smaller predefined role covers network attachments and PSC forwarding rules together | verified |
-| Private Networking | `roles/dns.admin` | The private `run.app.` zone and its records; includes `dns.networks.targetWithPeeringZone` for the template's DNS peering | verified |
-| Private Networking | (maybe) `roles/servicedirectory.editor` | Google's PSC-for-APIs guide lists it for creating the endpoint. The demo doesn't turn on the Service Directory API, so it's probably not needed | needs live test |
-| Private Networking | (no new role) the agent connectivity template | IAM has no permission family for `agentConnectivityTemplates` yet: none appears in `list-testable-permissions`. The create may check the `networkservices.agentGateways.*` permissions or nothing at all | needs live test |
+| Private Networking | `roles/compute.networkAdmin` | VPC, subnet, network attachment, PSC address and forwarding rule (`compute.*.create/delete/use`). It's large (about 970 permissions), but no smaller predefined role covers network attachments and PSC forwarding rules together | tested live (§0) |
+| Private Networking | `roles/dns.admin` | The private `run.app.` zone and its records; includes `dns.networks.targetWithPeeringZone` for the template's DNS peering | tested live (§0) |
+| Private Networking | ~~`roles/servicedirectory.editor`~~ **not needed** | Google's PSC-for-APIs guide lists it for creating the endpoint. The demo doesn't turn on the Service Directory API, and the live test created the endpoint without it | tested live (§0) |
+| Private Networking | (no new role) the agent connectivity template | IAM has no permission family for `agentConnectivityTemplates` yet: none appears in `list-testable-permissions`. The live test created it with the 17 roles, so `networkservices.editor` (or nothing) covers it | tested live (§0) |
 
 With a separate `gateway_project_id`, the gateway, extension, policy, registry, IAP and Private Networking rows apply in the **gateway project** too.
 
@@ -115,7 +129,7 @@ None of the other roles above can grant IAM on the project. The bucket and Cloud
 
 Suggestion: add these to `PERMS`, with the PN and GE ones only when those features are on. Once §6 has run, preflight can name the roles from §2.2 in its fix text.
 
-`docs/SETUP.md` ("Your permissions") lists admin rights for Network Services, Network Security, Service Extensions, IAP, Agent Registry, Vertex AI / Agent Runtime, Cloud Run, Model Armor, Artifact Registry, Cloud Build, Service Accounts, Project IAM and Service Usage. It's missing **Cloud Storage** (`storage.admin`: the state, recordings and staging buckets), **Service Account User** (`actAs` for the Cloud Run deploys), **Logging Viewer** (build logs), and the optional **Compute Network Admin + DNS Admin** (Private Networking) and **Discovery Engine** (GE). "Service Extensions" is already part of `networkservices.editor`. When §6 confirms the list, that paragraph can link here.
+`docs/SETUP.md` ("Your permissions") used to list admin rights by product and missed Cloud Storage, Service Account User, Logging Viewer and the Private Networking roles. Since the live tests (§0) it links to §2.2 and names the two Private Networking roles.
 
 ## 3. Runtime service accounts
 
@@ -374,7 +388,7 @@ Each `up` takes about 15–20 minutes and each `down` about 10 (T5). On a 403, w
 | A | The 15 roles | base (above) | `./agdemo preflight`, `./agdemo up`, `./agdemo check-clean`, then in the UI (Live): toggle each helpdesk policy, Model Armor on/off, open gateway logs and registry, run and record a test, Reset. Then `./agdemo reset --all`, `./agdemo down --yes --prefix agdtest` |
 | B | A, with the deployer trims: `aiplatform.user` → `aiplatform.expressUser`; the conditional Project IAM Admin (§5.3); `iam.serviceAccountUser` per SA | base | `up` / `down` again |
 | C | A | in the worktree only, edit `infra/terraform/modules/base/iam.tf`: `ui_roles` = §4's 6 grants (custom roles as `projects/<PROJECT_ID>/roles/...`), `targets_roles = ["roles/aiplatform.expressUser"]`; skip the staging-bucket grant in `ui.py` | `up` with the UI, then the same UI checklist as A (this tests `agdtest-ui` and `agdtest-targets`: the A2A agents `kb-agent` and `hr-records-agent` call Gemini). `down` |
-| D (optional) | A + `compute.networkAdmin`, `dns.admin` | `private_networking.enabled: true`, `private_networking.region:` a region with **no** egress gateway in the project (not the live demo's base or PN region, and not one with another team's gateway), `themes.enabled: [helpdesk, privnet]` | `up`, the privnet checks, `down`. Watch for the connectivity-template and PSC forwarding-rule creates (`servicedirectory`?) |
+| D (optional; run 2026-10-22, §0) | A + `compute.networkAdmin`, `dns.admin` | `private_networking.enabled: true`, `private_networking.region:` a region with **no** egress gateway in the project (not the live demo's base or PN region, and not one with another team's gateway), `themes.enabled: [helpdesk, privnet]` | `up`, the privnet checks, `down`. Also set `region:` in `themes/privnet/theme.yaml` to the same region, or `deploy-theme` stops with a region mismatch |
 | E (optional) | A + `discoveryengine.agentAdmin` | `gemini_enterprise.app_id` set | `./agdemo publish-ge helpdesk`, `check-clean` (GE agents listed), `down` (GE unregister). This registers an `agdtest` agent in a **shared** GE app until `down` |
 
 To test the UI SA from your machine instead of Cloud Run, use a third config dir that impersonates `agdtest-ui@...`. Give yourself Token Creator on it after `up`; `down` deletes the SA. Then run `./agdemo ui local --mode live`.

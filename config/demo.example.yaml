@@ -51,7 +51,7 @@ terraform:                            # Terraform foundation (preview, ./agdemo 
 
 private_networking:                   # Private Networking mode (docs/TERRAFORM_PLAN.md §7c): VPC-enabled gateway, 2nd region
   enabled: false                      # true = ./agdemo up also builds the VPC side and <prefix>-pn-egress
-  region: us-west1                    # must differ from environment.region (one egress gateway per project+region)
+  region: us-west1                    # must differ from environment.region (one egress gateway per project+region); set the same region in themes/privnet/theme.yaml
   subnet_range: 10.70.0.0/28          # network attachment subnet (Private Google Access on)
   psc_ip: 10.70.250.10                # PSC endpoint for Google APIs; *.run.app resolves to it inside the VPC
   dns_domains: ["run.app."]           # names the gateway resolves through the VPC (DNS peering)

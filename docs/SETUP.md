@@ -26,7 +26,7 @@ Architecture details: `docs/ARCHITECTURE.md`.
 - **A supported region.** Agent Gateway, Agent Runtime, Agent Registry and Cloud Run must all be available there, because the gateway and the agent must be in the same region. `./agdemo preflight` checks this.
 - **No conflicting gateway bindings.** All Agent Runtime agents in a project and region must share the same egress and ingress gateway. If that region already has agents bound to other gateways, either pick another region or set `gateways.create: false` and reuse the existing gateways.
 - **Tools:** `gcloud` (recent, with beta components), **Terraform 1.7+** (`./agdemo up` builds the shared foundation with it), Python 3.11+, `uv`, `jq`. Node 20+ only for local UI development.
-- **Your permissions.** Project Owner is simplest. Otherwise you need admin rights for Network Services, Network Security, Service Extensions, IAP, Agent Registry, Vertex AI / Agent Runtime, Cloud Run, Model Armor, Artifact Registry, Cloud Build, Service Accounts, Project IAM and Service Usage. Preflight lists anything missing.
+- **Your permissions.** Project Owner is simplest. Otherwise use the 15 predefined roles in [PERMISSIONS.md](PERMISSIONS.md) §2.2, plus `roles/compute.networkAdmin` and `roles/dns.admin` for Private Networking. Both sets were tested live end to end (`up`, a Live scenario, `down`). Preflight lists anything missing.
 - **Agent Runtime restrictions:**
   - Agents bound to a gateway can't use revisions or traffic splitting.
   - Engines created before 2026-04-29 can't be bound.
@@ -58,7 +58,7 @@ Optional, for **Private Networking mode** (a VPC-enabled gateway, README "Privat
 | Key | What to set |
 |---|---|
 | `private_networking.enabled` | `true` to build the VPC side too |
-| `private_networking.region` | A second supported region, **different** from `environment.region`: a project can have only one egress gateway per region serving agents, so the VPC-enabled gateway needs its own region |
+| `private_networking.region` | A second supported region, **different** from `environment.region`: a project can have only one egress gateway per region serving agents, so the VPC-enabled gateway needs its own region. If you change it, set the same `region:` in `themes/privnet/theme.yaml` (and any other Private Networking theme), or `deploy-theme` stops with a region mismatch |
 
 Authenticate (two logins, both with your Google account):
 
