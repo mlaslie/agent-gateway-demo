@@ -670,7 +670,7 @@ No GCP writes were made: unit tests on fakes, plan-only Terraform runs with a lo
 **Needs a live run (T5):**
 - Apply in us-west1, timings, and the two-region `down` with the guard.
 - Q7 in a fresh project.
-- Binding by PATCH: an engine bound by PATCH (the demo's live toggle) to a template gateway. P0 only verified create-time binding, and F44 wasn't isolated.
+- Binding by PATCH: an engine bound by PATCH (the demo's live toggle) to a template gateway. P0 only verified create-time binding, and F44 wasn't isolated (since traced to a google-auth bug, ISSUES #16; binding by PATCH verified live 2026-10-17 and 2026-10-22).
 - Cross-region resources: Cloud Run in us-west1 pulling images from the base region's repo; the regional staging bucket with the vertexai SDK.
 - Steps 1–5 live: the 404 from the backend and from the unbound engine, 403, the grant → 200 delay, and the real `serverIp` in the log.
 - Both URL forms accepted by the registry and IAP.

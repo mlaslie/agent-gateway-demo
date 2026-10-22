@@ -88,7 +88,7 @@ The **base set is 15 predefined roles**. The optional features add 1 role for GE
 | 12 | `roles/agentregistry.editor` | `agentregistry.services.create/update/delete/get/list`; reads of the agent, MCP server and endpoint entries the registry creates | `up`, `deploy-theme`, `down`, `check-clean` | verified |
 | 13 | `roles/iap.admin` | IAP IAM policies on registry entries (Terraform's `google_iap_agent_registry_endpoint_iam_member`; `reset --all` pruning, also on the registry root; teardown). The UI's Cloud Run IAP: `--iap` and the `httpsResourceAccessor` grants | `up`, `ui deploy`, `reset --all`, `down`, `check-clean` | verified (a custom alternative is in §5) |
 | 14 | `roles/modelarmor.admin` | `modelarmor.templates.create/update/delete/list/get` (Terraform, `check-clean`, `down`). 16 permissions, smaller than `modelarmor.editor` | `up`, `down`, `check-clean` | verified |
-| 15 | `roles/logging.viewer` | `logging.logEntries.list`. `gcloud builds submit` follows the UI build's log in Cloud Logging (`CLOUD_LOGGING_ONLY`) | `ui deploy` | held during the live test; builds no longer stream logs (§0), so it may now be removable: untested |
+| 15 | `roles/logging.viewer` | `logging.logEntries.list`. It was for following the UI build's log in Cloud Logging (`CLOUD_LOGGING_ONLY`); builds are now submitted `--async` and polled, so nothing in the deployer's commands may need it any more | `ui deploy` (formerly) | held during the live test; builds no longer stream logs (§0), so it may now be removable: untested |
 | (16) | ~~`roles/viewer`~~ **not needed** | The live test hit it: a blocking `gcloud builds submit` streams the log, which needs project Viewer for the default logs bucket (and `--suppress-logs` didn't avoid the check). Builds are now submitted with `--async` and polled (`gcloud.submit_build`), which needs only `cloudbuild.builds.editor` | — | tested live (§0) |
 
 **Optional features**
@@ -169,7 +169,7 @@ So a registry entry sits at the `webServices` level, like a Cloud Run service, a
 
 **Risk that remains with either role:** a project-level `iap.webServices.setIamPolicy` also lets `<prefix>-ui` change who can open the UI itself (its Cloud Run IAP resource is also a `webService`). To close that, add an IAM condition on the custom-role binding that limits it to `resource.name` under `.../iap_web/agentRegistry`. Whether IAP evaluates `resource.name` that way needs a live test.
 
-**Gateway use:** none of the UI's roles has `networkservices.agentGateways.use`, and `networkservices.viewer` doesn't include it. If binding from the deployed UI works today, the engine PATCH and the authz-policy target don't check it on the caller. That needs live test too.
+**Gateway use:** none of the UI's roles has `networkservices.agentGateways.use`, and `networkservices.viewer` doesn't include it. Binding from the deployed UI worked in both live tests (§0, Internet and Private Networking), so the engine PATCH and the authz-policy target don't check it on the caller.
 
 **Split projects:** with a separate `gateway_project_id`, the IAP, registry, authz policy, extension, gateway and logging roles are needed in the **gateway project**. Terraform grants them only in `project_id` today, which is a gap for split setups.
 
