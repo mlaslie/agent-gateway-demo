@@ -36,8 +36,7 @@ def build(cfg: DemoConfig) -> None:
         "options": {"logging": "CLOUD_LOGGING_ONLY"},
     }))
     c.log(f"  building {image(cfg)} with Cloud Build")
-    gcloud.run(["builds", "submit", str(REPO_ROOT), f"--config={cb}", f"--project={cfg.project}",
-                f"--region={cfg.region}", "--quiet"], timeout=2400)
+    gcloud.submit_build([str(REPO_ROOT), f"--config={cb}"], project=cfg.project, region=cfg.region, timeout=2400)
 
 
 def deploy(cfg: DemoConfig, skip_build: bool = False) -> str:

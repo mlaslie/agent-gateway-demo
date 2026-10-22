@@ -67,3 +67,28 @@ def value(args: list[str]) -> str:
         return (run(args, check=True) or "").strip()
     except GcloudError:
         return ""
+
+
+def submit_build(args: list[str], *, project: str, region: str, timeout: float) -> None:
+    """`gcloud builds submit` with --async, then poll the build until it finishes.
+
+    A blocking submit streams logs from the default logs bucket, which needs project Viewer; polling the
+    build only needs the Cloud Build role (docs/PERMISSIONS.md)."""
+    import time
+
+    build = json.loads(run(["builds", "submit", *args, f"--project={project}", f"--region={region}", "--quiet",
+                            "--async", "--format=json"], timeout=600) or "{}")
+    bid = build.get("id")
+    if not bid:
+        raise GcloudError(f"gcloud builds submit returned no build id: {build!r}"[:300])
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        status = value(["builds", "describe", bid, f"--project={project}", f"--region={region}",
+                        "--format=value(status)"])
+        if status == "SUCCESS":
+            return
+        if status in ("FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED", "EXPIRED"):
+            raise GcloudError(f"Cloud Build {bid} ended {status}: see "
+                              f"https://console.cloud.google.com/cloud-build/builds;region={region}/{bid}?project={project}")
+        time.sleep(10)
+    raise GcloudError(f"Cloud Build {bid} still running after {int(timeout)}s")

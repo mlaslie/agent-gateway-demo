@@ -51,8 +51,8 @@ def build_images(cfg: DemoConfig, kinds: set[str]) -> None:
     def one(kind: str) -> None:
         src = RUNTIMES / kind
         c.log(f"  building {IMAGES[kind]} with Cloud Build ({src.relative_to(REPO_ROOT)})")
-        gcloud.run(["builds", "submit", str(src), f"--tag={image_uri(cfg, kind)}", f"--project={cfg.project}",
-                    f"--region={cfg.home_region}", "--quiet"], timeout=1800)
+        gcloud.submit_build([str(src), f"--tag={image_uri(cfg, kind)}"], project=cfg.project,
+                            region=cfg.home_region, timeout=1800)
         c.log(f"  [green]built[/] {image_uri(cfg, kind)}")
     with ThreadPoolExecutor(len(kinds)) as ex:
         list(ex.map(one, sorted(kinds)))
