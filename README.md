@@ -45,6 +45,11 @@ Use cases are pluggable **themes** (YAML only). Two ship with the repo: *IT / HR
 
 ## Architecture
 
+![Architecture: a user calls the ingress gateway (CLIENT_TO_AGENT), which forwards to the orchestrator agent on Agent Runtime (ADK + Agent Identity). The orchestrator discovers destinations in Agent Registry and calls A2A agents and MCP servers on Cloud Run through the egress gateway (AGENT_TO_ANYWHERE), which allows the granted ones and denies the sensitive A2A agent. Model Armor (optional) is attached to both gateways.](docs/images/architecture.webp)
+
+<details>
+<summary>The same diagram as text (Mermaid)</summary>
+
 ```mermaid
 flowchart LR
   U[User]
@@ -76,6 +81,8 @@ flowchart LR
   REG -. "identities, endpoints, IAM" .- EG
   ORC -. discovers .-> REG
 ```
+
+</details>
 
 The three flows:
 1. **Runtime → Gateway → A2A agent on Cloud Run.** The orchestrator calls remote ADK agents (`to_a2a()`) over A2A. The egress gateway allows a call only if the orchestrator's Agent Identity holds `roles/iap.egressor` on that agent's registry entry.
