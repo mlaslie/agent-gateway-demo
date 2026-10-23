@@ -118,6 +118,7 @@ def tfvars(cfg: DemoConfig, organization_id: str = "", existing_platform: dict[s
         "model_armor_filters": list(cfg.model_armor.filters),
         "model_armor_block_marker": ma.BLOCK_MESSAGE_MARKER,
         "shared_project_grants": cfg.terraform.shared_project_grants,
+        "auth_strategy": cfg.iam.auth_strategy,
         "presenters": sorted({m for m in cfg.ui.admin_access if m.startswith(("user:", "group:", "serviceAccount:"))}),
         "platform_endpoints": endpoints,
         "platform_endpoints_existing": {u: rr for u, rr in (existing_platform or {}).items() if u in endpoints},
@@ -256,7 +257,7 @@ def migrating(d: Path | None = None) -> bool:
 
 
 def plan(out: Path | None = None, allow_replace: bool = False, json_out: Path | None = None,
-         allow_template_swap: bool = False):
+         allow_template_swap: bool = False, allow_role_changes: bool = False):
     """terraform plan -out, then the plan-safety check (migration mode while imports.tf exists).
     Returns (plan file, Verdict). json_out: also save `terraform show -json`."""
     from . import tf_safety
@@ -267,7 +268,7 @@ def plan(out: Path | None = None, allow_replace: bool = False, json_out: Path | 
     if json_out:
         Path(json_out).write_text(js)
     return out, tf_safety.check(json.loads(js), allow_replace=allow_replace, migration=migrating(d),
-                                allow_template_swap=allow_template_swap)
+                                allow_template_swap=allow_template_swap, allow_role_changes=allow_role_changes)
 
 
 def state_addresses() -> set[str]:

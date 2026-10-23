@@ -4,6 +4,37 @@
 >
 > Originally (2026-10-21) this page was worked out from the code and from read-only checks. Every role below comes from reading what the demo calls: `infra/terraform/**`, `agdemo_core/**`, `ui/backend/**` and `runtimes/**`. Permission names were checked against the live role catalogue (`gcloud iam roles describe`, the IAM `roles.list` API) and with `testIamPermissions`. Nothing was created or granted. Each suggestion is marked **verified** (the permission names were checked) or **needs live test** (only a run with these roles will show whether it's enough). The test plan is in §6.
 
+## Auth strategy: standard or minimum
+
+The demo works with either of two role sets, both tested live end to end (§0). **`standard` is the default** and uses Google's predefined roles; nothing changes unless you choose `minimum`.
+
+| | `standard` (default) | `minimum` (least privilege) |
+|---|---|---|
+| Deployer (you, or whoever runs `./agdemo up`) | 15 predefined roles (§2.2) | 14 roles: `aiplatform.expressUser` instead of `aiplatform.user`, a custom IAP role instead of `iap.admin`, no `logging.viewer`, and Project IAM Admin limited by two conditions to the roles the demo grants (§5.3) |
+| `<prefix>-ui` (the UI on Cloud Run) | 9 predefined roles | 6: `aiplatform.expressUser`, `agentregistry.viewer`, `logging.viewer`, `serviceusage.serviceUsageConsumer` and two project custom roles Terraform creates (`<prefix>RegistryEgressAdmin`, `<prefix>GatewayPolicyEditor`). No staging-bucket grant |
+| `<prefix>-targets` (Cloud Run demo agents) | `aiplatform.user`, `logging.logWriter` | `aiplatform.expressUser` |
+| Private Networking | +`compute.networkAdmin`, `dns.admin` for the deployer | the same |
+
+**Choose it** in `config/demo.yaml`:
+```yaml
+iam:
+  auth_strategy: minimum        # standard (default) | minimum
+```
+or for one run: `./agdemo up --auth-strategy minimum` (also on `tf vars/init/plan/apply` and `ui deploy`). The flag overrides the file for that run only, so put the choice in the file to keep later runs consistent.
+
+**The deployer's roles** are granted by a project owner, once, before `up`. The CLI prints the exact commands for your strategy:
+```bash
+./agdemo deployer-roles --member user:you@example.com                            # standard
+./agdemo deployer-roles --member user:you@example.com --auth-strategy minimum    # minimum
+```
+It adds the Private Networking roles when `private_networking.enabled` is true (`--private-networking` / `--no-private-networking` to override). `--apply` runs the commands instead of printing them; it needs an owner (or Project IAM Admin and Role Administrator). For `minimum` it also creates the custom role `<prefix>DeployerIap` and writes the two condition files to `config/generated/`. A `minimum` deployer can only grant the `minimum` service-account roles, so use it with `iam.auth_strategy: minimum`. A `standard` deployer works with either.
+
+**Switching an existing environment** changes which roles Terraform grants, so the plan removes the old service-account grants (and, from `minimum` back to `standard`, the custom roles). The plan-safety check refuses deletes, so allow these once:
+```bash
+./agdemo up --auth-strategy minimum --allow-role-changes      # or tf apply --allow-role-changes
+```
+`--allow-role-changes` lets the plan remove only project role grants and project custom roles; every other delete is still refused. Grant the deployer its new roles first when moving to `minimum` (the `minimum` deployer can't remove the old `standard` grants; do the switch as a `standard` deployer or an owner, then trim the deployer). `down` deletes the custom roles, and Google keeps a deleted custom role's id reserved for about 37 days; the next `up` re-creates them anyway (the Google provider undeletes a role with the same id and applies its permissions; checked live).
+
 ## 0. Live test result (2026-10-22)
 
 The full lifecycle was run as a service account (`agdtest-deployer`) that held **only the 15 roles of §2.2**. It ran in a throwaway environment: prefix `agdtest`, us-east1, the helpdesk theme, Private Networking off, `shared_project_grants: false`, with the UI on Cloud Run. The account was impersonated for both gcloud and Application Default Credentials (Terraform and the Python SDK).
@@ -34,7 +65,7 @@ Project IAM was again identical to its pre-test snapshot after the 17 bindings w
 Not covered: with `shared_project_grants: false`, Terraform didn't grant the Agent Gateway service agent (`gcp-sa-agentgateway`) its `compute.networkAdmin` and `dns.peer` roles; they were already in the project from the live demo. Granting them is `resourcemanager.projectIamAdmin`, which the deployer has, so this is expected to work but wasn't exercised.
 
 **Trims run (2026-10-23).** The same throwaway Internet environment (us-east1, helpdesk, `shared_project_grants: false`), with every §4 trim applied:
-- deployer: 14 bindings instead of 15. `aiplatform.expressUser` instead of `aiplatform.user`; a custom IAP role (`iap.webTypes/webServices/webServiceVersions.get/setIamPolicy`, §5.2 `agdemoDeployerIap` without the settings permissions) instead of `iap.admin`; no `logging.viewer`; `resourcemanager.projectIamAdmin` **with two conditions** (§5.3); the other 10 roles unchanged;
+- deployer: 14 roles instead of 15 (15 bindings: Project IAM Admin is bound twice). `aiplatform.expressUser` instead of `aiplatform.user`; a custom IAP role (`iap.webTypes/webServices/webServiceVersions.get/setIamPolicy`, §5.2 `agdemoDeployerIap` without the settings permissions) instead of `iap.admin`; no `logging.viewer`; `resourcemanager.projectIamAdmin` **with two conditions** (§5.3); the other 10 roles unchanged;
 - `<prefix>-ui`: the 6 grants of §4 (`aiplatform.expressUser`, `agentregistry.viewer`, `logging.viewer`, `serviceusage.serviceUsageConsumer`, custom `RegistryEgressAdmin` and `GatewayPolicyEditor` as listed in §5.2), and no staging-bucket grant;
 - `<prefix>-targets`: `aiplatform.expressUser` only.
 

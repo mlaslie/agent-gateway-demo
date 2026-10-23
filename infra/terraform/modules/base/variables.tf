@@ -31,6 +31,7 @@ variable "model_armor_block_marker" { type = string }
 variable "model_armor_static_agents" { type = list(string) }
 variable "presenters" { type = list(string) }
 variable "shared_project_grants" { type = bool }
+variable "auth_strategy" { type = string }
 
 variable "platform_endpoints" {
   type = map(object({

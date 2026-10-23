@@ -267,3 +267,56 @@ def test_terraform_fmt():
     except FileNotFoundError:
         pytest.skip("terraform not installed")
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# ---------------------------------------------------------------------- iam.auth_strategy
+def test_auth_strategy_default_standard_and_tfvars():
+    assert make_cfg().iam.auth_strategy == "standard"
+    assert tfm.tfvars(make_cfg(), organization_id="1")["auth_strategy"] == "standard"
+    cfg = DemoConfig.model_validate({"environment": {"project_id": "p", "region": "us-east1",
+                                                     "resource_prefix": "agdtest"},
+                                     "iam": {"auth_strategy": "minimum"}})
+    assert tfm.tfvars(cfg, organization_id="1")["auth_strategy"] == "minimum"
+    with pytest.raises(Exception):
+        DemoConfig.model_validate({"environment": {"project_id": "p", "region": "us-east1",
+                                                   "resource_prefix": "x"}, "iam": {"auth_strategy": "owner"}})
+
+
+def test_safety_allow_role_changes_only_iam():
+    plan = {"resource_changes": [
+        rc('module.base.google_project_iam_member.sa["ui roles/iap.admin"]', ["delete"]),
+        rc('module.base.google_project_iam_custom_role.demo["registry_egress"]', ["delete"],
+           "google_project_iam_custom_role"),
+        rc('module.base.google_network_services_agent_gateway.gw["egress"]', ["delete"],
+           "google_network_services_agent_gateway")]}
+    assert len(tf_safety.check(plan).blockers) == 3
+    v = tf_safety.check(plan, allow_role_changes=True)
+    assert v.blockers == [('module.base.google_network_services_agent_gateway.gw["egress"]', ["delete"])]
+
+
+def test_iam_tf_has_both_role_sets():
+    t = (TF_DIR / "modules" / "base" / "iam.tf").read_text()
+    for role in ("roles/aiplatform.expressUser", "RegistryEgressAdmin", "GatewayPolicyEditor",
+                 "roles/iap.admin", "roles/networksecurity.editor", "roles/logging.logWriter"):
+        assert role in t
+    assert 'var.auth_strategy == "minimum"' in t
+
+
+def test_deployer_roles(tmp_path):
+    from agdemo_core.infra import deployer_roles as dr
+    cfg = make_cfg(resource_prefix="ag-test")
+    std = dr.grants(cfg, "standard", False, False)
+    assert len(std) == 15 and all(g.condition_file is None for g in std)
+    assert {"roles/aiplatform.user", "roles/iap.admin", "roles/logging.viewer"} <= {g.role for g in std}
+    assert len(dr.grants(cfg, "standard", True, True)) == 18
+    mn = dr.grants(cfg, "minimum", False, False, out_dir=tmp_path)
+    roles = [g.role for g in mn]
+    assert len(mn) == 15 and len(set(roles)) == 14 and roles.count("roles/resourcemanager.projectIamAdmin") == 2
+    assert "roles/aiplatform.expressUser" in roles and "roles/iap.admin" not in roles
+    assert "roles/logging.viewer" not in roles and "projects/demo-proj/roles/ag_testDeployerIap" in roles
+    for g in mn[:2]:
+        expr = __import__("yaml").safe_load(g.condition_file.read_text())["expression"]
+        assert expr.count("'roles/") + expr.count("'projects/") <= 10       # IAM's hasOnly() limit
+    assert "ag_testRegistryEgressAdmin" in (tmp_path / "deployer-condition-b.yaml").read_text()
+    cmds = dr.commands(cfg, "user:a@example.com", "minimum", True, False, out_dir=tmp_path)
+    assert cmds[0][1:4] == ["iam", "roles", "create"] and len(cmds) == 1 + 15 + 2

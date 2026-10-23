@@ -19,12 +19,26 @@ tf_app = typer.Typer(help="Terraform foundation steps (docs/TERRAFORM_PLAN.md); 
 app.add_typer(tf_app, name="tf")
 
 
-def _cfg():
+def _cfg(auth_strategy: str | None = None):
     try:
-        return load_config()
+        cfg = load_config()
     except FileNotFoundError as e:
         c.console.print(f"[red]{e}[/]")
         raise typer.Exit(2)
+    if auth_strategy is None or auth_strategy == cfg.iam.auth_strategy:
+        return cfg
+    if auth_strategy not in ("standard", "minimum"):
+        c.console.print("[red]--auth-strategy must be standard or minimum[/]")
+        raise typer.Exit(2)
+    c.console.print(f"[yellow]--auth-strategy {auth_strategy} overrides iam.auth_strategy "
+                    f"({cfg.iam.auth_strategy}) for this run. Set it in config/demo.yaml so later runs keep it.[/]")
+    return cfg.model_copy(update={"iam": cfg.iam.model_copy(update={"auth_strategy": auth_strategy})})
+
+
+AUTH_HELP = ("Roles for the demo's service accounts: standard (Google predefined roles; the default) or minimum "
+             "(least privilege). Overrides iam.auth_strategy in config/demo.yaml (docs/PERMISSIONS.md)")
+ROLE_CHANGES_HELP = ("Allow removing project role grants and custom roles (needed once when switching "
+                     "--auth-strategy on an existing environment); every other delete is still refused")
 
 
 def _me() -> str | None:
@@ -201,14 +215,16 @@ def up(yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask before app
                                                   "(repeatable; default themes.enabled)"),
        no_ui: bool = typer.Option(False, "--no-ui", help="Skip ui deploy"),
        ge: bool = typer.Option(False, "--ge", help="Also publish each theme's orchestrator to Gemini Enterprise"),
-       local_state: Optional[str] = typer.Option(None, "--local-state", help="Local scratch Terraform state")):
+       local_state: Optional[str] = typer.Option(None, "--local-state", help="Local scratch Terraform state"),
+       auth_strategy: Optional[str] = typer.Option(None, "--auth-strategy", help=AUTH_HELP),
+       allow_role_changes: bool = typer.Option(False, "--allow-role-changes", help=ROLE_CHANGES_HELP)):
     """Build an environment: tf init, plan + plan-safety, apply, output-sync, deploy-theme for each theme,
     ui deploy, verify (docs/TERRAFORM_PLAN.md §4.1). Idempotent. Refuses the bootstrap-created live demo."""
     from . import tf_foundation as tfm
     from .infra import lifecycle as lc
-    cfg = _cfg()
+    cfg = _cfg(auth_strategy)
     ops = lc.LiveUpOps(cfg, local_state=local_state, allow_replace=allow_replace, skip_build=skip_build,
-                       allow_template_swap=allow_template_swap)
+                       allow_template_swap=allow_template_swap, allow_role_changes=allow_role_changes)
     try:
         rc = lc.up(cfg, ops, yes=yes, skip_preflight=skip_preflight, themes=theme or None, ui=not no_ui, ge=ge,
                    ask=lambda q: typer.confirm(q))
@@ -236,6 +252,45 @@ def down(yes: bool = typer.Option(False, "--yes", "-y", help="Don't ask (needs -
     except tfm.TfError as e:
         _tf_err(e)
     raise typer.Exit(rc)
+
+
+@app.command("deployer-roles")
+def deployer_roles(member: str = typer.Option(..., "--member",
+                                              help="Who deploys: user:you@example.com, group:... or serviceAccount:..."),
+                   auth_strategy: Optional[str] = typer.Option(None, "--auth-strategy", help=AUTH_HELP),
+                   private_networking: Optional[bool] = typer.Option(None, "--private-networking/--no-private-networking",
+                                                                     help="Add the 2 Private Networking roles "
+                                                                          "(default: private_networking.enabled)"),
+                   gemini_enterprise: Optional[bool] = typer.Option(None, "--gemini-enterprise/--no-gemini-enterprise",
+                                                                    help="Add the Gemini Enterprise role "
+                                                                         "(default: gemini_enterprise.app_id set)"),
+                   apply: bool = typer.Option(False, "--apply", help="Run the commands (as a project owner) "
+                                                                    "instead of printing them")):
+    """The deployer's project roles for the auth strategy (docs/PERMISSIONS.md). Prints the gcloud commands a
+    project owner runs once; --apply runs them. minimum also creates a custom IAP role and limits Project IAM
+    Admin with two conditions (written to config/generated/)."""
+    import shlex
+
+    from .gcp import gcloud
+    from .infra import deployer_roles as dr
+    cfg = _cfg(auth_strategy)
+    strategy = cfg.iam.auth_strategy
+    pn = cfg.private_networking.enabled if private_networking is None else private_networking
+    ge = bool(cfg.gemini_enterprise.app_id) if gemini_enterprise is None else gemini_enterprise
+    cmds = dr.commands(cfg, member, strategy, pn, ge)
+    if strategy == "minimum" and load_config().iam.auth_strategy != "minimum":
+        c.console.print("[yellow]minimum deployer roles can only grant the minimum service-account roles: also set "
+                        "iam.auth_strategy: minimum in config/demo.yaml (or pass --auth-strategy minimum to up).[/]")
+    if not apply:
+        c.console.print(f"# Deployer roles ({strategy}{', Private Networking' if pn else ''}"
+                        f"{', Gemini Enterprise' if ge else ''}) for {member} on {cfg.project}. Run as a project owner:")
+        for cmd in cmds:
+            print(shlex.join(cmd))
+        return
+    for cmd in cmds:
+        c.console.print(f"  {' '.join(cmd[1:5])} ...")
+        gcloud.run(cmd[1:], check=not (cmd[1:3] == ["iam", "roles"]))   # the custom role may exist already
+    c.console.print(f"[green]granted {len(cmds) - (1 if strategy == 'minimum' else 0)} bindings to {member}[/]")
 
 
 @app.command("export-terraform")
@@ -306,10 +361,11 @@ def teardown(theme: Optional[str] = typer.Argument(None),
 
 
 @ui_app.command("deploy")
-def ui_deploy(skip_build: bool = typer.Option(False)):
+def ui_deploy(skip_build: bool = typer.Option(False),
+              auth_strategy: Optional[str] = typer.Option(None, "--auth-strategy", help=AUTH_HELP)):
     """Build ui/ with Cloud Build and deploy it to Cloud Run behind IAP."""
     from .infra import ui as u
-    u.deploy(_cfg(), skip_build=skip_build)
+    u.deploy(_cfg(auth_strategy), skip_build=skip_build)
 
 
 @ui_app.command("local")
@@ -352,18 +408,19 @@ def _tf_err(e: Exception):
 
 
 @tf_app.command("vars")
-def tf_vars():
+def tf_vars(auth_strategy: Optional[str] = typer.Option(None, "--auth-strategy", help=AUTH_HELP)):
     """Write infra/terraform/generated.auto.tfvars.json from config/demo.yaml (read-only GCP lookups)."""
-    cfg = _cfg()
+    cfg = _cfg(auth_strategy)
     _tf_vars(cfg, c.client(cfg))
 
 
 @tf_app.command("init")
 def tf_init(local_state: Optional[str] = typer.Option(None, "--local-state",
-                                                      help="Use a local state file (scratch plans); no bucket")):
+                                                      help="Use a local state file (scratch plans); no bucket"),
+            auth_strategy: Optional[str] = typer.Option(None, "--auth-strategy", help=AUTH_HELP)):
     """Write tfvars, ensure the GCS state bucket (versioning on) and run terraform init for this environment."""
     from . import tf_foundation as tfm
-    cfg = _cfg()
+    cfg = _cfg(auth_strategy)
     r = c.client(cfg)
     try:
         org, existing = _tf_vars(cfg, r, log=False)
@@ -381,20 +438,23 @@ def tf_plan(out: Optional[str] = typer.Option(None, "--out", help="Plan file (de
             allow_replace: bool = typer.Option(False, "--allow-replace"),
             allow_template_swap: bool = typer.Option(False, "--allow-template-swap",
                                                      help="Allow the connectivity template's create-before-destroy "
-                                                          "swap (a Private Networking content change)")):
+                                                          "swap (a Private Networking content change)"),
+            auth_strategy: Optional[str] = typer.Option(None, "--auth-strategy", help=AUTH_HELP),
+            allow_role_changes: bool = typer.Option(False, "--allow-role-changes", help=ROLE_CHANGES_HELP)):
     """Refresh tfvars, terraform plan, then the plan-safety check (read-only). While imports.tf exists the
     check runs in migration mode (only additive IAM/API creates allowed)."""
     from pathlib import Path
 
     from . import tf_foundation as tfm
-    cfg = _cfg()
+    cfg = _cfg(auth_strategy)
     try:
         _tf_vars(cfg, c.client(cfg))
         if _tf_live_guard(cfg):
             c.console.print("[yellow]The egress gateway already exists but isn't in this state: this environment "
                             "was created by bootstrap. Run ./agdemo tf import first; apply is refused until then.[/]")
         _, v = tfm.plan(Path(out) if out else None, allow_replace=allow_replace,
-                        json_out=Path(json_out) if json_out else None, allow_template_swap=allow_template_swap)
+                        json_out=Path(json_out) if json_out else None, allow_template_swap=allow_template_swap,
+                        allow_role_changes=allow_role_changes)
     except tfm.TfError as e:
         _tf_err(e)
     c.console.print(f"plan: {v.summary()}" + (" (migration mode: imports.tf present)" if tfm.migrating() else ""))
@@ -409,18 +469,21 @@ def tf_apply(allow_replace: bool = typer.Option(False, "--allow-replace", help="
              allow_template_swap: bool = typer.Option(False, "--allow-template-swap",
                                                       help="Allow the connectivity template swap"),
              state: Optional[str] = typer.Option(None, "--state", help="state.json to merge outputs into"),
-             yes: bool = typer.Option(False, "--yes", "-y")):
+             yes: bool = typer.Option(False, "--yes", "-y"),
+             auth_strategy: Optional[str] = typer.Option(None, "--auth-strategy", help=AUTH_HELP),
+             allow_role_changes: bool = typer.Option(False, "--allow-role-changes", help=ROLE_CHANGES_HELP)):
     """Plan, check (no delete/replace), apply, then merge outputs into state.json. Creates the recordings
     bucket first (outside Terraform, so `down` keeps it)."""
     from . import tf_foundation as tfm
-    cfg = _cfg()
+    cfg = _cfg(auth_strategy)
     r = c.client(cfg)
     try:
         _tf_vars(cfg, r)
         if _tf_live_guard(cfg):
             _tf_err(tfm.TfError(f"{cfg.egress_gateway_resource} exists but isn't in this Terraform state. "
                                 "Run ./agdemo tf import first (phase T2); refusing to apply."))
-        planfile, v = tfm.plan(allow_replace=allow_replace, allow_template_swap=allow_template_swap)
+        planfile, v = tfm.plan(allow_replace=allow_replace, allow_template_swap=allow_template_swap,
+                               allow_role_changes=allow_role_changes)
         c.console.print(f"plan: {v.summary()}")
         if not v.ok:
             for addr, actions in v.blockers:

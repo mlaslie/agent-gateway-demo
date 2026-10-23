@@ -130,7 +130,7 @@ For readers who know Google Cloud but not Agent Gateway. The depth is in [docs/A
 Allow about 30–45 minutes, mostly waiting on Google Cloud. The full guide, with permissions and options, is **[docs/SETUP.md](docs/SETUP.md)**.
 
 **1. Prerequisites**
-- A Google Cloud project with billing, where you are Owner (or hold the admin roles `preflight` checks for).
+- A Google Cloud project with billing, where you are Owner, or hold the deployer roles: `./agdemo deployer-roles --member user:you@example.com` prints them (standard or least privilege, [PERMISSIONS.md](docs/PERMISSIONS.md)).
 - **A Google Cloud organization is best, but not required.** Agent Identity principals use the organization's trust domain (`principal://agents.global.org-<ORG_ID>.system.id.goog/…`). In a project with no organization the demo uses the project's trust domain instead (`agents.global.proj-<PROJECT_NUMBER>.system.id.goog`), as Google's Agent Identity docs describe. The org-less path follows the docs but hasn't been tested live ([BACKLOG.md](docs/BACKLOG.md) #19).
 - A region where Agent Gateway, Agent Runtime, Agent Registry and Cloud Run are all available (us-east4 is tested). All Agent Runtime agents in a project and region must share the same gateways, so pick a region where no agents are bound to other gateways.
 - `gcloud` (with beta components), **Terraform 1.7+**, [`uv`](https://docs.astral.sh/uv/) and Python 3.11+. Images are built with Cloud Build, so Docker isn't required. Node is only needed for UI development; `agents-cli` only for the optional Gemini Enterprise step.
@@ -155,6 +155,7 @@ In `config/demo.yaml` set at least:
 | `ui.iap_access` | Who can open the UI, e.g. `group:demo-viewers@example.com` |
 | `ui.admin_access` | Presenters who can change policies (they also get `roles/aiplatform.user`) |
 | `gemini_enterprise.*` | Optional: your Gemini Enterprise app, for GE Demo mode |
+| `iam.auth_strategy` | Optional: `standard` (default, Google's predefined roles) or `minimum` (least privilege; [PERMISSIONS.md](docs/PERMISSIONS.md)). Or `./agdemo up --auth-strategy minimum`. A project owner grants the deployer's roles with the commands `./agdemo deployer-roles --member user:you@example.com` prints |
 | `private_networking.enabled` / `.region` | Optional: Private Networking mode. The region must differ from `environment.region` (one egress gateway per project and region) |
 
 **3. Check the environment**
@@ -264,7 +265,7 @@ Names below use the default prefix `agdemo` (`environment.resource_prefix`); `<p
 | **Agent Registry** | 25 platform endpoint services | `agdemo-plat-<host>` (e.g. `agdemo-plat-us-east4-aiplatform`, `agdemo-plat-logging-mtls`) | The Google APIs an Agent Runtime agent needs under default deny (Gemini, sessions, logging, trace, monitoring, IAM credentials, registry), each with `roles/iap.egressor` for all agents in the project |
 | **Cloud Run** | UI service | `agdemo-ui` | The demo UI behind IAP (one always-on instance) |
 | **IAM** | Service accounts | `agdemo-ui`, `agdemo-targets` | UI backend (applies policies, reads logs); identity of the Cloud Run demo agents and MCP servers |
-| | Project roles | see [ARCHITECTURE.md](docs/ARCHITECTURE.md) §12 | UI SA: Agent Platform user, IAP admin, network security editor, service extensions admin, Model Armor viewer, logging viewer… Targets SA: `aiplatform.user`, `logging.logWriter`. `ui.admin_access` presenters: `aiplatform.user`. Gateway service agents: Model Armor callout roles |
+| | Project roles | see [ARCHITECTURE.md](docs/ARCHITECTURE.md) §12 | With `iam.auth_strategy: standard` (default), UI SA: Agent Platform user, IAP admin, network security editor, service extensions admin, Model Armor viewer, logging viewer…; targets SA: `aiplatform.user`, `logging.logWriter`. With `minimum`: 6 grants for the UI SA (two of them project custom roles) and `aiplatform.expressUser` for the targets SA ([PERMISSIONS.md](docs/PERMISSIONS.md)). `ui.admin_access` presenters: `aiplatform.user`. Gateway service agents: Model Armor callout roles |
 | **Artifact Registry** | Docker repo | `agdemo` | Images `mcp-server`, `a2a-agent`, `ui` (built with Cloud Build) |
 | **Cloud Storage** | Bucket | `<project>-agdemo-staging` | Agent Runtime staging, plus `recordings/` for recorded test runs |
 

@@ -70,6 +70,13 @@ class TerraformCfg(BaseModel):
     shared_project_grants: bool = True
 
 
+class IamCfg(BaseModel):
+    """Roles Terraform gives the demo's own service accounts (docs/PERMISSIONS.md, "Auth strategy").
+    standard: Google's predefined roles (the default). minimum: the least-privilege set tested live, with two
+    project custom roles. The deployer's own roles are granted by an owner: ./agdemo deployer-roles."""
+    auth_strategy: Literal["standard", "minimum"] = "standard"
+
+
 class PrivateNetworking(BaseModel):
     """Private Networking mode (docs/TERRAFORM_PLAN.md §7c, phase T4): a VPC-enabled egress gateway in a second
     region, created by Terraform (`up`) with the connectivity template from the start. Themes declare
@@ -97,6 +104,7 @@ class DemoConfig(BaseModel):
     themes: ThemesCfg = ThemesCfg()
     gemini_enterprise: GeminiEnterprise = GeminiEnterprise()
     terraform: TerraformCfg = TerraformCfg()
+    iam: IamCfg = IamCfg()
     private_networking: PrivateNetworking = PrivateNetworking()
     default_mode: Mode = "live_with_fallback"
 

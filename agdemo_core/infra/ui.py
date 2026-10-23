@@ -62,9 +62,12 @@ def deploy(cfg: DemoConfig, skip_build: bool = False) -> str:
                 # One always-on instance with CPU always allocated: policy changes finish in background
                 # threads after the request returns, and pending state lives in that instance's memory.
                 "--min-instances=1", "--max-instances=1", "--no-cpu-throttling", "--memory=1Gi", "--timeout=900", "--quiet"], timeout=900)
-    gcloud.run(["storage", "buckets", "add-iam-policy-binding", f"gs://{c.staging_bucket(cfg)}",
-                f"--member=serviceAccount:{ui_sa}", "--role=roles/storage.objectUser",
-                f"--project={cfg.project}", "--quiet"])
+    # The staging bucket only holds recordings when there's no recordings bucket (the old fallback);
+    # iam.auth_strategy minimum skips the grant then (docs/PERMISSIONS.md §3.1).
+    if not (rec and cfg.iam.auth_strategy == "minimum"):
+        gcloud.run(["storage", "buckets", "add-iam-policy-binding", f"gs://{c.staging_bucket(cfg)}",
+                    f"--member=serviceAccount:{ui_sa}", "--role=roles/storage.objectUser",
+                    f"--project={cfg.project}", "--quiet"])
     # IAP service agent must be able to invoke the service
     num = project_number(cfg.project)
     gcloud.run(["run", "services", "add-iam-policy-binding", svc, f"--region={cfg.region}",

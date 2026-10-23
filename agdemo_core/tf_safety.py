@@ -4,11 +4,13 @@ Reads `terraform show -json <planfile>` and refuses any plan that deletes or rep
 actions ["delete"], ["delete", "create"] or ["create", "delete"]. Exceptions:
   allow_replace=True        every replace is allowed (deletes still refused)
   allow_template_swap=True  create_before_destroy swaps of the connectivity template (T4) are allowed
+  allow_role_changes=True   deletes of project role grants and project custom roles are allowed (switching
+                            iam.auth_strategy on an existing environment); every other delete is still refused
   migration=True            adopting a live environment (T2, plan §5.1): additionally refuses every create
                             except the additive types (MIGRATION_CREATE_OK). A create of anything else means
                             an import is missing, and apply would try to recreate a live resource.
 
-Usage: python -m agdemo_core.tf_safety plan.json [--allow-replace] [--allow-template-swap] [--migration]
+Usage: python -m agdemo_core.tf_safety plan.json [--allow-replace] [--allow-template-swap] [--allow-role-changes] [--migration]
 Exit 0 = safe, 1 = blocked, 2 = unreadable input.
 """
 from __future__ import annotations
@@ -23,6 +25,8 @@ TEMPLATE_TYPE = "google_network_services_agent_connectivity_template"
 REPLACE = (["delete", "create"], ["create", "delete"])
 # Creating these over an existing live grant/API is a no-op (additive), so a migration plan may create them.
 # terraform_data is Terraform-only (the T3 destroy guard, infra/terraform/guards.tf): no GCP resource.
+# What switching iam.auth_strategy removes: the old service-account grants and (minimum -> standard) the custom roles.
+ROLE_CHANGE_TYPES = ("google_project_iam_member", "google_project_iam_custom_role")
 MIGRATION_CREATE_OK = ("google_project_service", "google_project_iam_member", "google_storage_bucket_iam_member",
                        "google_iap_agent_registry_endpoint_iam_member", "terraform_data")
 
@@ -45,7 +49,7 @@ class Verdict:
 
 
 def check(plan: dict[str, Any], allow_replace: bool = False, allow_template_swap: bool = False,
-          migration: bool = False) -> Verdict:
+          migration: bool = False, allow_role_changes: bool = False) -> Verdict:
     v = Verdict(ok=True, counts={k: 0 for k in ("create", "update", "replace", "delete", "read", "no-op", "import")})
     for rc in plan.get("resource_changes") or []:
         if rc.get("mode") == "data":
@@ -65,7 +69,8 @@ def check(plan: dict[str, Any], allow_replace: bool = False, allow_template_swap
                 v.blockers.append((addr, actions))
         elif "delete" in actions:
             v.counts["delete"] += 1
-            v.blockers.append((addr, actions))
+            if not (allow_role_changes and rc.get("type") in ROLE_CHANGE_TYPES):
+                v.blockers.append((addr, actions))
         elif actions:
             if migration and actions == ["create"] and rc.get("type") not in MIGRATION_CREATE_OK:
                 v.blockers.append((addr, actions))
@@ -89,7 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         v = check_file(files[0], allow_replace="--allow-replace" in flags,
-                       allow_template_swap="--allow-template-swap" in flags, migration="--migration" in flags)
+                       allow_template_swap="--allow-template-swap" in flags, migration="--migration" in flags,
+                       allow_role_changes="--allow-role-changes" in flags)
     except (OSError, ValueError) as e:
         print(f"cannot read plan JSON: {e}")
         return 2

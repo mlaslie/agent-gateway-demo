@@ -42,6 +42,7 @@ module "base" {
   model_armor_static_agents = var.model_armor_static_agents
   presenters                = var.presenters
   shared_project_grants     = var.shared_project_grants
+  auth_strategy             = var.auth_strategy
 
   platform_endpoints          = var.platform_endpoints
   platform_endpoints_existing = var.platform_endpoints_existing

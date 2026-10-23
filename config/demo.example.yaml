@@ -49,6 +49,9 @@ default_mode: live_with_fallback      # live | demo | live_with_fallback
 terraform:                            # Terraform foundation (preview, ./agdemo tf ...; docs/TERRAFORM_PLAN.md)
   shared_project_grants: true         # false for a second environment in a project that already has one
 
+iam:                                  # docs/PERMISSIONS.md, "Auth strategy"
+  auth_strategy: standard             # standard = Google predefined roles; minimum = least privilege (custom roles)
+
 private_networking:                   # Private Networking mode (docs/TERRAFORM_PLAN.md §7c): VPC-enabled gateway, 2nd region
   enabled: false                      # true = ./agdemo up also builds the VPC side and <prefix>-pn-egress
   region: us-west1                    # must differ from environment.region (one egress gateway per project+region); set the same region in themes/privnet/theme.yaml

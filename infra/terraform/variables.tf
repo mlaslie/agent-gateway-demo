@@ -92,6 +92,17 @@ variable "shared_project_grants" {
   default     = true
 }
 
+variable "auth_strategy" {
+  description = "Roles for the demo's service accounts: standard (Google predefined roles) or minimum (least privilege, two project custom roles). docs/PERMISSIONS.md, Auth strategy."
+  type        = string
+  default     = "standard"
+
+  validation {
+    condition     = contains(["standard", "minimum"], var.auth_strategy)
+    error_message = "auth_strategy must be standard or minimum."
+  }
+}
+
 variable "presenters" {
   description = "ui.admin_access members (user:/group:/serviceAccount:) that get roles/aiplatform.user."
   type        = list(string)

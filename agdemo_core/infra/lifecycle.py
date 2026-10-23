@@ -350,10 +350,10 @@ class _Base:
 
 class LiveUpOps(_Base):
     def __init__(self, cfg, r=None, local_state=None, allow_replace=False, skip_build=False, log=c.log,
-                 allow_template_swap=False):
+                 allow_template_swap=False, allow_role_changes=False):
         super().__init__(cfg, r, local_state, log)
         self.allow_replace, self.skip_build = allow_replace, skip_build
-        self.allow_template_swap = allow_template_swap
+        self.allow_template_swap, self.allow_role_changes = allow_template_swap, allow_role_changes
 
     def preflight(self) -> list[str]:
         from . import preflight as pf
@@ -372,7 +372,8 @@ class LiveUpOps(_Base):
 
     def tf_plan(self):
         from .. import tf_foundation as tfm
-        return tfm.plan(allow_replace=self.allow_replace, allow_template_swap=self.allow_template_swap)
+        return tfm.plan(allow_replace=self.allow_replace, allow_template_swap=self.allow_template_swap,
+                        allow_role_changes=self.allow_role_changes)
 
     def tf_apply(self, planfile) -> None:
         from .. import tf_foundation as tfm

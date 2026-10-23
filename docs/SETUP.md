@@ -27,7 +27,7 @@ Architecture details: `docs/ARCHITECTURE.md`.
 - **A supported region.** Agent Gateway, Agent Runtime, Agent Registry and Cloud Run must all be available there, because the gateway and the agent must be in the same region. `./agdemo preflight` checks this.
 - **No conflicting gateway bindings.** All Agent Runtime agents in a project and region must share the same egress and ingress gateway. If that region already has agents bound to other gateways, either pick another region or set `gateways.create: false` and reuse the existing gateways.
 - **Tools:** `gcloud` (recent, with beta components), **Terraform 1.7+** (`./agdemo up` builds the shared foundation with it), Python 3.11+, `uv`, `jq`. Node 20+ only for local UI development.
-- **Your permissions.** Project Owner is simplest. Otherwise use the 15 predefined roles in [PERMISSIONS.md](PERMISSIONS.md) §2.2, plus `roles/compute.networkAdmin` and `roles/dns.admin` for Private Networking. Both sets were tested live end to end (`up`, a Live scenario, `down`). Preflight lists anything missing.
+- **Your permissions.** Project Owner is simplest. Otherwise a project owner grants you the deployer roles once: `./agdemo deployer-roles --member user:you@example.com` prints the commands (`--apply` runs them). That's the 15 predefined roles of [PERMISSIONS.md](PERMISSIONS.md) §2.2 (plus `roles/compute.networkAdmin` and `roles/dns.admin` for Private Networking), or 14 trimmed ones with `--auth-strategy minimum` (see `iam.auth_strategy` below). Both sets were tested live end to end (`up`, a Live scenario, `down`). Preflight lists anything missing.
 - **Agent Runtime restrictions:**
   - Agents bound to a gateway can't use revisions or traffic splitting.
   - Engines created before 2026-04-29 can't be bound.
@@ -53,6 +53,12 @@ Edit `config/demo.yaml`. At minimum, set:
 | `ui.iap_access` / `ui.admin_access` | Who can view the UI / who can change Live policy (`./agdemo up` also grants `ui.admin_access` members `roles/aiplatform.user`, see §7) |
 
 Optional: `gateway_project_id` (egress gateway in another project), `gateways.create: false` (reuse existing gateways), `themes.enabled` / `themes.default`, `default_mode`, `models.default`, `model_armor.filters`, `cloud_run.public_targets` (whether the mock Cloud Run targets allow unauthenticated invocation; enforcement happens at the gateway either way).
+
+Optional, **least privilege** ([PERMISSIONS.md](PERMISSIONS.md), "Auth strategy"):
+
+| Key | What to set |
+|---|---|
+| `iam.auth_strategy` | `standard` (default: Google's predefined roles) or `minimum` (the tested least-privilege roles for the deployer and the demo's service accounts, with project custom roles). `./agdemo up --auth-strategy minimum` does the same for one run; switching an existing environment needs `--allow-role-changes` once |
 
 Optional, for **Private Networking mode** (a VPC-enabled gateway, README "Private Networking mode"):
 
