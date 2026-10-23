@@ -311,7 +311,8 @@ def test_deployer_roles(tmp_path):
     assert len(dr.grants(cfg, "standard", True, True)) == 18
     mn = dr.grants(cfg, "minimum", False, False, out_dir=tmp_path)
     roles = [g.role for g in mn]
-    assert len(mn) == 15 and len(set(roles)) == 14 and roles.count("roles/resourcemanager.projectIamAdmin") == 2
+    assert len(mn) == 16 and len(set(roles)) == 15 and roles.count("roles/resourcemanager.projectIamAdmin") == 2
+    assert "roles/iam.roleAdmin" in roles
     assert "roles/aiplatform.expressUser" in roles and "roles/iap.admin" not in roles
     assert "roles/logging.viewer" not in roles and "projects/demo-proj/roles/ag_testDeployerIap" in roles
     for g in mn[:2]:
@@ -319,4 +320,4 @@ def test_deployer_roles(tmp_path):
         assert expr.count("'roles/") + expr.count("'projects/") <= 10       # IAM's hasOnly() limit
     assert "ag_testRegistryEgressAdmin" in (tmp_path / "deployer-condition-b.yaml").read_text()
     cmds = dr.commands(cfg, "user:a@example.com", "minimum", True, False, out_dir=tmp_path)
-    assert cmds[0][1:4] == ["iam", "roles", "create"] and len(cmds) == 1 + 15 + 2
+    assert cmds[0][1:4] == ["iam", "roles", "create"] and len(cmds) == 1 + 16 + 2

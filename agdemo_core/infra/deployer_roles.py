@@ -4,8 +4,8 @@ The deployer is whoever runs ./agdemo up / deploy-theme / down. A project owner 
 `./agdemo deployer-roles --member user:you@example.com` prints the commands, `--apply` runs them.
 
 standard: 15 predefined roles, Project IAM Admin unconditional.
-minimum:  14 roles in 15 bindings. aiplatform.expressUser instead of aiplatform.user, a project custom role instead of
-          iap.admin, no logging.viewer, and Project IAM Admin twice, each limited by a condition to the roles
+minimum:  15 roles in 16 bindings. aiplatform.expressUser instead of aiplatform.user, a project custom role instead of
+          iap.admin, no logging.viewer, iam.roleAdmin (Terraform creates the UI's two custom roles), and Project IAM Admin twice, each limited by a condition to the roles
           the demo grants (IAM allows at most 10 roles per hasOnly() list). Pair it with iam.auth_strategy
           minimum: list B only covers the minimum service-account roles.
 """
@@ -26,6 +26,10 @@ STANDARD = ["roles/resourcemanager.projectIamAdmin", *COMMON, "roles/aiplatform.
             "roles/logging.viewer"]
 PRIVATE_NETWORKING = ["roles/compute.networkAdmin", "roles/dns.admin"]
 GEMINI_ENTERPRISE = ["roles/discoveryengine.agentAdmin"]          # not tested live
+# iam.auth_strategy minimum: Terraform creates, updates, undeletes and deletes the UI's two project custom roles
+# (iam.roles.*). Found by the live test: without it the apply fails on iam.roles.get. A standard deployer used with
+# iam.auth_strategy minimum needs it too.
+ROLE_ADMIN = "roles/iam.roleAdmin"
 
 DEPLOYER_IAP_PERMISSIONS = ["iap.webTypes.getIamPolicy", "iap.webTypes.setIamPolicy",
                             "iap.webServices.getIamPolicy", "iap.webServices.setIamPolicy",
@@ -94,7 +98,7 @@ def grants(cfg: DemoConfig, strategy: str, private_networking: bool, gemini_ente
         f.write_text(yaml.safe_dump(cond, sort_keys=False, width=1000))
         conds.append(Grant("roles/resourcemanager.projectIamAdmin", f))
     return [*conds, *(Grant(r) for r in COMMON), Grant("roles/aiplatform.expressUser"),
-            Grant(deployer_iap_role(cfg)), *(Grant(r) for r in extra)]
+            Grant(deployer_iap_role(cfg)), Grant(ROLE_ADMIN), *(Grant(r) for r in extra)]
 
 
 def ensure_deployer_iap_role(cfg: DemoConfig) -> str:
