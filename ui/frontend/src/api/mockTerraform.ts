@@ -23,6 +23,36 @@ const pad = (rows: [string, string][], ind: string) => {
   return rows.map(([k, v]) => `${ind}${k.padEnd(w)} = ${v}`).join("\n");
 };
 
+// Same shell as agdemo_core/terraform._patch_and_wait: PATCH the engine, then poll the long-running operation
+// until done (the engine rejects another update while it is UPDATING), printing the response on any failure.
+const TOK = '-H "Authorization: Bearer $(gcloud auth print-access-token)"';
+const patchAndWait = (data: string) =>
+  [
+    "set -e",
+    "fail() { printf '%s\\n' \"$R\" >&2; exit 1; }",
+    `R=$(curl -sS --fail-with-body -X PATCH "$URL" \\`,
+    `  ${TOK} \\`,
+    '  -H "Content-Type: application/json" \\',
+    `  -d ${data}) || fail`,
+    "OP=$(printf '%s' \"$R\" | jq -er .name) || fail",
+    "until printf '%s' \"$R\" | jq -e .done > /dev/null; do",
+    "  sleep 15",
+    `  R=$(curl -sS --fail-with-body ${TOK} "$API/$OP") || fail`,
+    "done",
+    "printf '%s' \"$R\" | jq -e '.error == null' > /dev/null || fail",
+  ].map((l) => `      ${l}\n`).join("");
+
+// terraform_data binding for one engine: attach the body's directions, detach everything on destroy.
+const binding = (name: string, engine: string, body: string) =>
+  `resource "terraform_data" "${name}" {\n  input = {\n` +
+  `    url = "https://\${var.region}-aiplatform.googleapis.com/v1/\${${engine}}?updateMask=spec.deploymentSpec.agentGatewayConfig"\n` +
+  `    api = "https://\${var.region}-aiplatform.googleapis.com/v1"\n  }\n  triggers_replace = [${engine}, ${body}]\n\n` +
+  `  provisioner "local-exec" {\n    command = <<-EOT\n${patchAndWait('"$BODY"')}    EOT\n` +
+  `    environment = {\n      URL  = self.input.url\n      API  = self.input.api\n      BODY = ${body}\n    }\n  }\n\n` +
+  `  provisioner "local-exec" {\n    when    = destroy\n    command = <<-EOT\n` +
+  `${patchAndWait(`'{"spec":{"deploymentSpec":{"agentGatewayConfig":{}}}}'`)}    EOT\n` +
+  `    environment = {\n      URL = self.input.url\n      API = self.input.api\n    }\n  }\n}\n`;
+
 export function stateLine(theme: Theme, applied: Set<string>, ma: boolean): string {
   const ids = theme.policies.filter((p) => applied.has(p.id)).map((p) => p.id);
   return `${ids.length ? ids.join(", ") : "no policies (wide open)"} · Model Armor ${ma ? "on" : "off"}`;
@@ -128,10 +158,10 @@ export function mockTerraform(theme: Theme, applied: Set<string>, ma: boolean, s
     out.push(
       "# ---- Gateway binding (gateway_attach) ----\n",
       dirs.map(([, p]) => `# ${p.id}: ${p.text}`).join("\n"),
-      "#\n# No Terraform resource binds an existing Agent Runtime engine to an Agent Gateway, so this runs the same\n# PATCH the demo makes (an LRO that redeploys the engine). Destroying it detaches every direction.\n#\n# Teams that manage the engine in Terraform set google_vertex_ai_reasoning_engine.spec.deployment_spec\n# .agent_gateway_config instead (google >= 8.1.0; needs an import of the existing engine):\n#\n#   spec {\n#     deployment_spec {\n#       agent_gateway_config {",
+      "#\n# No Terraform resource binds an existing Agent Runtime engine to an Agent Gateway, so this runs the same\n# PATCH the demo makes (an LRO that redeploys the engine) and waits for it (needs jq). Destroying it detaches every direction.\n#\n# Teams that manage the engine in Terraform set google_vertex_ai_reasoning_engine.spec.deployment_spec\n# .agent_gateway_config instead (google >= 8.1.0; needs an import of the existing engine):\n#\n#   spec {\n#     deployment_spec {\n#       agent_gateway_config {",
       dirs.map(([path]) => `#         ${path === "egress" ? "agent_to_anywhere_config" : "client_to_agent_config"} {\n#           agent_gateway = local.${path}_gateway\n#         }`).join("\n"),
       "#       }\n#     }\n#   }",
-      'resource "terraform_data" "gateway_binding" {\n  input = {\n    url = "https://${var.region}-aiplatform.googleapis.com/v1/${local.engine}?updateMask=spec.deploymentSpec.agentGatewayConfig"\n  }\n  triggers_replace = [local.engine, local.gateway_binding_body]\n\n  provisioner "local-exec" {\n    command = <<-EOT\n      curl -sS --fail-with-body -X PATCH "$URL" \\\n        -H "Authorization: Bearer $(gcloud auth print-access-token)" \\\n        -H "Content-Type: application/json" \\\n        -d "$BODY"\n    EOT\n    environment = {\n      URL  = self.input.url\n      BODY = local.gateway_binding_body\n    }\n  }\n\n  provisioner "local-exec" {\n    when    = destroy\n    command = <<-EOT\n      curl -sS --fail-with-body -X PATCH "$URL" \\\n        -H "Authorization: Bearer $(gcloud auth print-access-token)" \\\n        -H "Content-Type: application/json" \\\n        -d \'{"spec":{"deploymentSpec":{"agentGatewayConfig":{}}}}\'\n    EOT\n    environment = {\n      URL = self.input.url\n    }\n  }\n}\n',
+      binding("gateway_binding", "local.engine", "local.gateway_binding_body"),
     );
   }
   for (const p of srcGws) {
@@ -139,10 +169,8 @@ export function mockTerraform(theme: Theme, applied: Set<string>, ma: boolean, s
     const n = ident(id);
     out.push(
       `# ${p.id}: ${p.text}\n# ${c.sources![id].name} has its own engine: bind it to the same shared egress gateway.\n` +
-        `resource "terraform_data" "gateway_binding_${n}" {\n  input = {\n    url  = "https://\${var.region}-aiplatform.googleapis.com/v1/\${local.${n}_engine}?updateMask=spec.deploymentSpec.agentGatewayConfig"\n` +
-        `    body = jsonencode({ spec = { deploymentSpec = { agentGatewayConfig = { agentToAnywhereConfig = { agentGateway = local.egress_gateway } } } } })\n  }\n` +
-        `  triggers_replace = [local.${n}_engine]\n\n  provisioner "local-exec" {\n    command = "curl -sS --fail-with-body -X PATCH \\"$URL\\" -H \\"Authorization: Bearer $(gcloud auth print-access-token)\\" -H \\"Content-Type: application/json\\" -d \\"$BODY\\""\n` +
-        `    environment = {\n      URL  = self.input.url\n      BODY = self.input.body\n    }\n  }\n}\n`,
+        `locals {\n  gateway_binding_body_${n} = jsonencode({ spec = { deploymentSpec = { agentGatewayConfig = { agentToAnywhereConfig = { agentGateway = local.egress_gateway } } } } })\n}\n\n` +
+        binding(`gateway_binding_${n}`, `local.${n}_engine`, `local.gateway_binding_body_${n}`),
     );
   }
   if (egress.length) {

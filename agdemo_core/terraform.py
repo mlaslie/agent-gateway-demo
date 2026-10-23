@@ -527,6 +527,24 @@ def _body_local(src: str | None) -> str:
     return "gateway_binding_body" if src is None else f"gateway_binding_body_{ident(src)}"
 
 
+def _patch_and_wait(data: str) -> str:
+    """Shell for one binding PATCH: send it, then poll its long-running operation until done, failing on an
+    operation error. Without the wait a replace's attach runs while the detach is still redeploying the
+    engine and gets 400 FAILED_PRECONDITION (not in ACTIVE state, current state UPDATING).
+    R holds the last response (the PATCH returns the operation itself); an HTTP error or a done operation
+    with an error prints it and fails, so a bad poll never loops forever. printf, not echo: dash's echo
+    expands the backslash escapes in JSON strings."""
+    tok = '-H "Authorization: Bearer $(gcloud auth print-access-token)"'
+    return ("set -e\n"
+            """fail() { printf '%s\\n' "$R" >&2; exit 1; }\n"""
+            f'R=$(curl -sS --fail-with-body -X PATCH "$URL" \\\n  {tok} \\\n'
+            f'  -H "Content-Type: application/json" \\\n  -d {data}) || fail\n'
+            """OP=$(printf '%s' "$R" | jq -er .name) || fail\n"""
+            """until printf '%s' "$R" | jq -e .done > /dev/null; do\n"""
+            f'  sleep 15\n  R=$(curl -sS --fail-with-body {tok} "$API/$OP") || fail\ndone\n'
+            """printf '%s' "$R" | jq -e '.error == null' > /dev/null || fail""")
+
+
 def _gateway_binding(x: Ctx, gws: dict[str, Policy], src: str | None = None) -> str:
     """terraform_data PATCH binding for one engine: the primary's (`gateway_binding`) or an additional
     orchestrator's (`gateway_binding_<id>`), CONTRACTS §12."""
@@ -544,10 +562,11 @@ def _gateway_binding(x: Ctx, gws: dict[str, Policy], src: str | None = None) -> 
     head = Block(f'resource "terraform_data" "{name}"')
     hdr = [*lines, "",
            "No Terraform resource binds an existing Agent Runtime engine to an Agent Gateway, so this runs the same",
-           "PATCH the demo makes (a long-running operation that redeploys the engine; curl returns once it is",
-           "accepted, the engine is ready a few minutes later). Changing the set of gateways replaces this resource:",
-           "the destroy step detaches every direction, then the create step attaches the desired ones.",
-           "Needs curl and an authenticated gcloud on the machine that runs Terraform.",
+           "PATCH the demo makes. The PATCH is a long-running operation that redeploys the engine (minutes), so",
+           "each step polls the operation until it is done: the engine rejects another update while it is UPDATING.",
+           "Changing the set of gateways replaces this resource: the destroy step detaches every direction and waits,",
+           "then the create step attaches the desired ones.",
+           "Needs curl, jq and an authenticated gcloud on the machine that runs Terraform.",
            "",
            "Teams that manage the engine itself in Terraform set the binding on the engine instead",
            "(google >= 8.1.0; requires importing the existing engine with a matching spec, not verified by agdemo):",
@@ -563,27 +582,19 @@ def _gateway_binding(x: Ctx, gws: dict[str, Policy], src: str | None = None) -> 
     hdr += ["        }", "      }", "    }", "  }"]
     pre = "".join(f"# {h}\n" if h else "#\n" for h in hdr)
     head.a("input", "{\nurl = \"https://${var.region}-aiplatform.googleapis.com/v1/${" + eng + "}?updateMask="
-           + ENGINE_MASK + "\"\n}")
+           + ENGINE_MASK + "\"\napi = \"https://${var.region}-aiplatform.googleapis.com/v1\"\n}")
     head.a("triggers_replace", f"[{eng}, {body}]")
     head.nl()
     attach = head.b('provisioner "local-exec"')
-    attach.c("Attach: PATCH agentGatewayConfig with the directions above.")
-    attach.a("command", heredoc(
-        'curl -sS --fail-with-body -X PATCH "$URL" \\\n'
-        '  -H "Authorization: Bearer $(gcloud auth print-access-token)" \\\n'
-        '  -H "Content-Type: application/json" \\\n'
-        '  -d "$BODY"', 2))
-    attach.a("environment", "{\nURL  = self.input.url\nBODY = " + body + "\n}")
+    attach.c("Attach: PATCH agentGatewayConfig with the directions above, then wait for the operation.")
+    attach.a("command", heredoc(_patch_and_wait('"$BODY"'), 2))
+    attach.a("environment", "{\nURL  = self.input.url\nAPI  = self.input.api\nBODY = " + body + "\n}")
     head.nl()
     detach = head.b('provisioner "local-exec"')
-    detach.c("Detach on destroy: an empty agentGatewayConfig unbinds both directions.")
+    detach.c("Detach on destroy: an empty agentGatewayConfig unbinds both directions; waits like attach.")
     detach.a("when", "destroy")
-    detach.a("command", heredoc(
-        'curl -sS --fail-with-body -X PATCH "$URL" \\\n'
-        '  -H "Authorization: Bearer $(gcloud auth print-access-token)" \\\n'
-        '  -H "Content-Type: application/json" \\\n'
-        """  -d '{"spec":{"deploymentSpec":{"agentGatewayConfig":{}}}}'""", 2))
-    detach.a("environment", "{\nURL = self.input.url\n}")
+    detach.a("command", heredoc(_patch_and_wait("""'{"spec":{"deploymentSpec":{"agentGatewayConfig":{}}}}'"""), 2))
+    detach.a("environment", "{\nURL = self.input.url\nAPI = self.input.api\n}")
     return pre + _fix_indent(head.render())
 
 
@@ -957,8 +968,9 @@ both are created by `./agdemo deploy-theme`.
   Agent Registry uses the **project number**. `_iam_member` resources only add a member to a binding, so applying
   over an environment where the demo already granted the same binding is a no-op.
 - **Gateway attach** has no standalone Terraform resource for an engine Terraform doesn't own. A `terraform_data`
-  resource runs the same `PATCH ...?updateMask={ENGINE_MASK}` the demo makes (needs `curl` and an authenticated
-  `gcloud`), and detaches on destroy. If you manage the engine with `google_vertex_ai_reasoning_engine`, set
+  resource runs the same `PATCH ...?updateMask={ENGINE_MASK}` the demo makes and waits for its long-running
+  operation (the engine redeploys for minutes), and detaches the same way on destroy. Needs `curl`, `jq` and an
+  authenticated `gcloud`. If you manage the engine with `google_vertex_ai_reasoning_engine`, set
   `spec.deployment_spec.agent_gateway_config` there instead (commented example in `main.tf`; needs an import of the
   existing engine and isn't verified by agdemo).
 - **Model Armor** is a `CONTENT_AUTHZ` `google_network_security_authz_policy` per gateway that points at the Model

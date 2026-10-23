@@ -114,6 +114,14 @@ def test_both_gateways_one_patch(cfg, theme):
     assert "updateMask=spec.deploymentSpec.agentGatewayConfig" in main
     assert "gcloud auth print-access-token" in main and "curl -sS --fail-with-body -X PATCH" in main
     assert "when    = destroy" in main and '{"agentGatewayConfig":{}}' in main
+    # each PATCH waits for its long-running operation, so a replace's attach never hits an UPDATING engine
+    assert main.count("| jq -er .name) || fail") == 2 and main.count("| jq -e .done > /dev/null; do") == 2
+    assert main.count('--fail-with-body -H "Authorization: Bearer $(gcloud auth print-access-token)" "$API/$OP") || fail') == 2
+    assert main.count("jq -e '.error == null' > /dev/null || fail") == 2 and main.count("set -e") == 2
+    assert 'api = "https://${var.region}-aiplatform.googleapis.com/v1"' in main
+    assert "API  = self.input.api" in main and "API = self.input.api" in main
+    assert "Needs curl, jq and an authenticated gcloud" in main
+    assert "waits for its long-running\n  operation" in render(cfg, theme, {"gw-egress"})["README.md"]
     assert "google_vertex_ai_reasoning_engine" in main and "agent_to_anywhere_config" in main
     assert 'agentGateways/${var.prefix}-egress"' in main
 
