@@ -1,6 +1,6 @@
 # Permissions: the minimum IAM roles
 
-> **Status (2026-10-22): the deployer's 15 base roles (§2.2) were tested live and are enough** for the full lifecycle of an Internet-mode environment: `up`, a Live scenario through the deployed UI, and `down`. **Private Networking needs 2 more (`compute.networkAdmin`, `dns.admin`), also tested live.** The results are in §0. The trims in §4 and §5 and the GE role are still untested.
+> **Status (2026-10-23): tested live.** The deployer's 15 base roles (§2.2) are enough for the full lifecycle (`up`, a Live scenario through the deployed UI, `down`); Private Networking adds 2 (`compute.networkAdmin`, `dns.admin`). **The trims in §4 were also tested live and work:** a 14-role deployer (`aiplatform.expressUser`, a custom IAP role, Project IAM Admin limited by two conditions, no `logging.viewer`), a 6-grant UI service account and a 1-role targets service account. Results in §0. Still untested: the GE role, and `iam.serviceAccountUser` per service account.
 >
 > Originally (2026-10-21) this page was worked out from the code and from read-only checks. Every role below comes from reading what the demo calls: `infra/terraform/**`, `agdemo_core/**`, `ui/backend/**` and `runtimes/**`. Permission names were checked against the live role catalogue (`gcloud iam roles describe`, the IAM `roles.list` API) and with `testIamPermissions`. Nothing was created or granted. Each suggestion is marked **verified** (the permission names were checked) or **needs live test** (only a run with these roles will show whether it's enough). The test plan is in §6.
 
@@ -33,7 +33,25 @@ Project IAM was again identical to its pre-test snapshot after the 17 bindings w
 
 Not covered: with `shared_project_grants: false`, Terraform didn't grant the Agent Gateway service agent (`gcp-sa-agentgateway`) its `compute.networkAdmin` and `dns.peer` roles; they were already in the project from the live demo. Granting them is `resourcemanager.projectIamAdmin`, which the deployer has, so this is expected to work but wasn't exercised.
 
-Not covered by either run: `publish-ge` (GE role), the custom-role and `expressUser` trims (§4, §5), the condition on Project IAM Admin (§5.3), and whether `roles/logging.viewer` (row 15) is still needed now that builds don't stream logs.
+**Trims run (2026-10-23).** The same throwaway Internet environment (us-east1, helpdesk, `shared_project_grants: false`), with every §4 trim applied:
+- deployer: 14 bindings instead of 15. `aiplatform.expressUser` instead of `aiplatform.user`; a custom IAP role (`iap.webTypes/webServices/webServiceVersions.get/setIamPolicy`, §5.2 `agdemoDeployerIap` without the settings permissions) instead of `iap.admin`; no `logging.viewer`; `resourcemanager.projectIamAdmin` **with two conditions** (§5.3); the other 10 roles unchanged;
+- `<prefix>-ui`: the 6 grants of §4 (`aiplatform.expressUser`, `agentregistry.viewer`, `logging.viewer`, `serviceusage.serviceUsageConsumer`, custom `RegistryEgressAdmin` and `GatewayPolicyEditor` as listed in §5.2), and no staging-bucket grant;
+- `<prefix>-targets`: `aiplatform.expressUser` only.
+
+| Step | Result |
+|---|---|
+| `up`: Terraform (93 resources; every grant goes through the conditional Project IAM Admin), images, `deploy-theme helpdesk` (2 engines created with `aiplatform.expressUser`, their 7 Agent Identity roles granted), `ui deploy` with `--iap` and the custom IAP role, `verify` (9 checks) | Passed, no missing permission |
+| Live scenario as the trimmed UI SA: bind the egress gateway (`expressUser` covers the engine PATCH), Model Armor checkbox on (both `CONTENT_AUTHZ` policies created with the custom policy-editor role), grant KB Agent (custom egress-admin role), a Gemini question through the gateway (KB Agent called with 200 and answered), gateway logs read, Reset (grant revoked, Model Armor policies deleted, engine detached) | Passed |
+| Targets SA without `logging.logWriter` | Container logs still reached Cloud Logging (Cloud Run collects stdout and stderr itself) |
+| `down` (Agent Identity grants removed through the conditional Project IAM Admin, 93 resources destroyed, `check-clean --strict` CLEAN) | Passed |
+
+Findings:
+- **A `hasOnly()` list can hold at most 10 roles.** The single 17-role condition first proposed in §5.3 is rejected by IAM (`ListLengthCheck`). Two bindings of the same role with two conditions work; §5.3 now has them.
+- **`gcloud ... --condition=expression=...` splits on the commas in a `hasOnly([...])` list.** Use `--condition-from-file`.
+- `run deploy --iap` didn't need the IAP settings permissions, so `agdemoDeployerIap` needs only the 6 IAM-policy permissions.
+- Project IAM was identical to its pre-test snapshot afterwards (including the policy version: no conditions left behind).
+
+Not covered: `publish-ge` (GE role), and `iam.serviceAccountUser` granted per service account instead of on the project.
 
 ## 1. In plain language
 
@@ -74,7 +92,7 @@ The **base set is 15 predefined roles**. The optional features add 1 role for GE
 
 | # | Role | Why | Needed by | Status |
 |---|---|---|---|---|
-| 1 | `roles/resourcemanager.projectIamAdmin` | Project grants: Terraform's `google_project_iam_member` resources (the UI and targets SAs, the Model Armor service agents, the presenters, the PN service agent), `deploy-theme`'s Agent Identity roles, and `down`'s removal of each engine's principal. Also gives `resourcemanager.projects.get/getIamPolicy`, which preflight, Terraform's `data.google_project` and the organization lookup need | `up`, `deploy-theme`, `down`, `reset --all` (read) | verified |
+| 1 | `roles/resourcemanager.projectIamAdmin` | Project grants: Terraform's `google_project_iam_member` resources (the UI and targets SAs, the Model Armor service agents, the presenters, the PN service agent), `deploy-theme`'s Agent Identity roles, and `down`'s removal of each engine's principal. Also gives `resourcemanager.projects.get/getIamPolicy`, which preflight, Terraform's `data.google_project` and the organization lookup need | `up`, `deploy-theme`, `down`, `reset --all` (read) | verified; works with the two conditions of §5.3 (tested live, §0) |
 | 2 | `roles/serviceusage.serviceUsageAdmin` | Turns on the APIs (`google_project_service`, `preflight --fix`). Also has `serviceusage.services.use`, which every call needs because the code sends the project as the quota project | `up`, all | verified |
 | 3 | `roles/iam.serviceAccountAdmin` | Creates and deletes `<prefix>-ui` and `<prefix>-targets` (`google_service_account`); lists service accounts (`check-clean`); deletes old leftover SAs (`down`) | `up`, `down`, `check-clean` | verified |
 | 4 | `roles/iam.serviceAccountUser` | `iam.serviceAccounts.actAs` on `<prefix>-ui` and `<prefix>-targets` for `gcloud run deploy --service-account`, and on the Cloud Build service account if Cloud Build asks for it | `deploy-theme`, `ui deploy` | tested live (§0) |
@@ -82,13 +100,13 @@ The **base set is 15 predefined roles**. The optional features add 1 role for GE
 | 6 | `roles/artifactregistry.admin` | `artifactregistry.repositories.create/delete` (Terraform). `repoAdmin` and `writer` can't create repositories | `up`, `down` | verified |
 | 7 | `roles/cloudbuild.builds.editor` | `gcloud builds submit` for the image builds (`cloudbuild.builds.create/get`) | `deploy-theme`, `ui deploy` | verified |
 | 8 | `roles/run.admin` | Deploys and deletes services; `--allow-unauthenticated` and `add-iam-policy-binding` need `run.services.setIamPolicy`, which `run.developer` doesn't have | `deploy-theme`, `ui deploy`, `down` | verified |
-| 9 | `roles/aiplatform.user` | Creates, updates, PATCHes (unbinds), lists and deletes Agent Runtime engines (`aiplatform.reasoningEngines.*`) | `deploy-theme`, `reset --all`, `down`, `check-clean` | verified (trim in §5) |
+| 9 | `roles/aiplatform.user` | Creates, updates, PATCHes (unbinds), lists and deletes Agent Runtime engines (`aiplatform.reasoningEngines.*`) | `deploy-theme`, `reset --all`, `down`, `check-clean` | verified; `roles/aiplatform.expressUser` is enough (tested live, §0) |
 | 10 | `roles/networkservices.editor` | Agent gateways (`networkservices.agentGateways.*`) and authz extensions (`networkservices.authzExtensions.*`, including `use` and `update`). This one role covers both, so `networkservices.admin` and `serviceExtensionsAdmin` aren't needed (`admin` adds only tag-binding and `setIamPolicy` permissions on other resource types) | `up`, `reset --all`, `down` | verified |
 | 11 | `roles/networksecurity.editor` | Authz policies: create (Terraform), PATCH (`reset --all` repoint), delete (`reset --all`, `down`). `networksecurity.admin` adds only `setIamPolicy` | `up`, `reset --all`, `down` | verified |
 | 12 | `roles/agentregistry.editor` | `agentregistry.services.create/update/delete/get/list`; reads of the agent, MCP server and endpoint entries the registry creates | `up`, `deploy-theme`, `down`, `check-clean` | verified |
-| 13 | `roles/iap.admin` | IAP IAM policies on registry entries (Terraform's `google_iap_agent_registry_endpoint_iam_member`; `reset --all` pruning, also on the registry root; teardown). The UI's Cloud Run IAP: `--iap` and the `httpsResourceAccessor` grants | `up`, `ui deploy`, `reset --all`, `down`, `check-clean` | verified (a custom alternative is in §5) |
+| 13 | `roles/iap.admin` | IAP IAM policies on registry entries (Terraform's `google_iap_agent_registry_endpoint_iam_member`; `reset --all` pruning, also on the registry root; teardown). The UI's Cloud Run IAP: `--iap` and the `httpsResourceAccessor` grants | `up`, `ui deploy`, `reset --all`, `down`, `check-clean` | verified; the custom `agdemoDeployerIap` (6 IAM-policy permissions) is enough (tested live, §0) |
 | 14 | `roles/modelarmor.admin` | `modelarmor.templates.create/update/delete/list/get` (Terraform, `check-clean`, `down`). 16 permissions, smaller than `modelarmor.editor` | `up`, `down`, `check-clean` | verified |
-| 15 | `roles/logging.viewer` | `logging.logEntries.list`. It was for following the UI build's log in Cloud Logging (`CLOUD_LOGGING_ONLY`); builds are now submitted `--async` and polled, so nothing in the deployer's commands may need it any more | `ui deploy` (formerly) | held during the live test; builds no longer stream logs (§0), so it may now be removable: untested |
+| 15 | `roles/logging.viewer` | `logging.logEntries.list`. It was for following the UI build's log in Cloud Logging (`CLOUD_LOGGING_ONLY`); builds are now submitted `--async` and polled, so nothing in the deployer's commands may need it any more | `ui deploy` (formerly) | **not needed** for the deployer (tested live without it, §0) |
 | (16) | ~~`roles/viewer`~~ **not needed** | The live test hit it: a blocking `gcloud builds submit` streams the log, which needs project Viewer for the default logs bucket (and `--suppress-logs` didn't avoid the check). Builds are now submitted with `--async` and polled (`gcloud.submit_build`), which needs only `cloudbuild.builds.editor` | — | tested live (§0) |
 
 **Optional features**
@@ -148,17 +166,17 @@ What it calls (from `ui/backend/agdemo_ui/*`, `agdemo_core/policies/*`, `agdemo_
 
 | Role (today) | Needed? | Proposed replacement | Status |
 |---|---|---|---|
-| `roles/aiplatform.user` (459 permissions) | Yes: `aiplatform.reasoningEngines.get/list/update/query`, `aiplatform.operations.list` | **`roles/aiplatform.expressUser`** (predefined, 38 permissions, beta). It includes `reasoningEngines.create/delete/get/list/query/update`, `operations.list`, `endpoints.predict`, sessions and memories. Alternative: the custom role `agdemoEngineOperator` (§5.2) | verified by permission names; needs live test (the PATCH's long-running operation polling) |
+| `roles/aiplatform.user` (459 permissions) | Yes: `aiplatform.reasoningEngines.get/list/update/query`, `aiplatform.operations.list` | **`roles/aiplatform.expressUser`** (predefined, 38 permissions, beta). It includes `reasoningEngines.create/delete/get/list/query/update`, `operations.list`, `endpoints.predict`, sessions and memories. Alternative: the custom role `agdemoEngineOperator` (§5.2) | tested live: `expressUser` is enough (§0) |
 | `roles/agentregistry.viewer` (24) | Yes: list and get services and the entries the registry creates from them | Keep | verified |
-| `roles/iap.admin` (36) | Yes, but only for `get/setIamPolicy` on registry entries. It also brings IAP settings, tunnels and every other IAP resource type | **Custom role `agdemoRegistryEgressAdmin`**: `iap.webServices.getIamPolicy`, `iap.webServices.setIamPolicy`, `iap.webServiceVersions.getIamPolicy`, `iap.webServiceVersions.setIamPolicy` (note 1) | verified by permission names (all four are GA and allowed in custom roles); needs live test (which of the two the API checks) |
-| `roles/networkservices.viewer` (57) | Yes: `networkservices.agentGateways.get/list` (gateway status) | Keep, or fold into `agdemoGatewayPolicyEditor` (§5.2) | verified |
-| `roles/networksecurity.editor` (165) | Yes, for `networksecurity.authzPolicies.create/delete/get/list` (Model Armor checkbox, policy status) | **Custom role `agdemoGatewayPolicyEditor`** (§5.2) | verified by permission names; needs live test |
-| `roles/networkservices.serviceExtensionsAdmin` (52) | Only for `networkservices.authzExtensions.use` (and `get`) when the `CONTENT_AUTHZ` policy references the Model Armor extension | Fold into `agdemoGatewayPolicyEditor` (`authzExtensions.get/list/use`) | verified by permission names; needs live test |
-| `roles/modelarmor.viewer` (6) | **Probably not.** No UI code path reads Model Armor templates: the checkbox only reads and writes authz policies. `get_template` and `sanitize_prompt` are used only by the CLI | Remove | needs live test |
+| `roles/iap.admin` (36) | Yes, but only for `get/setIamPolicy` on registry entries. It also brings IAP settings, tunnels and every other IAP resource type | **Custom role `agdemoRegistryEgressAdmin`**: `iap.webServices.getIamPolicy`, `iap.webServices.setIamPolicy`, `iap.webServiceVersions.getIamPolicy`, `iap.webServiceVersions.setIamPolicy` (note 1) | tested live: the custom role is enough (§0) |
+| `roles/networkservices.viewer` (57) | Yes: `networkservices.agentGateways.get/list` (gateway status) | Keep, or fold into `agdemoGatewayPolicyEditor` (§5.2) | tested live: folded into `agdemoGatewayPolicyEditor` (§0) |
+| `roles/networksecurity.editor` (165) | Yes, for `networksecurity.authzPolicies.create/delete/get/list` (Model Armor checkbox, policy status) | **Custom role `agdemoGatewayPolicyEditor`** (§5.2) | tested live (§0) |
+| `roles/networkservices.serviceExtensionsAdmin` (52) | Only for `networkservices.authzExtensions.use` (and `get`) when the `CONTENT_AUTHZ` policy references the Model Armor extension | Fold into `agdemoGatewayPolicyEditor` (`authzExtensions.get/list/use`) | tested live: folded (§0) |
+| `roles/modelarmor.viewer` (6) | **Probably not.** No UI code path reads Model Armor templates: the checkbox only reads and writes authz policies. `get_template` and `sanitize_prompt` are used only by the CLI | Remove | tested live: not needed (§0) |
 | `roles/logging.viewer` (34) | Yes: `logging.logEntries.list` for the gateway logs panel (`agdemo_core/gcp/gateway_logs.py`) | Keep | verified |
 | `roles/serviceusage.serviceUsageConsumer` (19) | Yes: `serviceusage.services.use`, because the calls send the project as the quota project | Keep | verified |
 | `roles/storage.objectUser` on the recordings bucket (Terraform) | Yes: load and save recordings. Saving over an existing recording needs `storage.objects.delete`, so `objectCreator` + `objectViewer` isn't enough | Keep | verified |
-| `roles/storage.objectUser` on the staging bucket (`ui deploy`) | Only when state.json has no recordings bucket (the old fallback) | Skip the grant when a recordings bucket exists (small change in `agdemo_core/infra/ui.py`) | verified (from the code) |
+| `roles/storage.objectUser` on the staging bucket (`ui deploy`) | Only when state.json has no recordings bucket (the old fallback) | Skip the grant when a recordings bucket exists (small change in `agdemo_core/infra/ui.py`) | tested live: not needed with a recordings bucket (§0) |
 
 **Note 1: which IAP permission covers a registry entry.** A read-only `testIamPermissions` (owner credentials) gave these results:
 - on `.../iap_web/agentRegistry/endpoints/<id>`: `iap.webServices.*` and `iap.webServiceVersions.*` are accepted; `iap.web.*` and `iap.webTypes.*` are rejected as "not valid for this resource";
@@ -179,8 +197,8 @@ So a registry entry sits at the `webServices` level, like a Cloud Run service, a
 
 | Role (today) | Needed? | Proposed replacement | Status |
 |---|---|---|---|
-| `roles/aiplatform.user` (459) | Only `aiplatform.endpoints.predict`, used by the A2A agents | **`roles/aiplatform.expressUser`** (38; has `endpoints.predict`), or a custom role with `aiplatform.endpoints.predict` only | verified by permission names; needs live test |
-| `roles/logging.logWriter` | **No.** The runtimes don't use the Cloud Logging API. Cloud Run collects stdout and stderr without any role on the service account | Remove | needs live test (check that container logs still appear) |
+| `roles/aiplatform.user` (459) | Only `aiplatform.endpoints.predict`, used by the A2A agents | **`roles/aiplatform.expressUser`** (38; has `endpoints.predict`), or a custom role with `aiplatform.endpoints.predict` only | tested live: `expressUser` is enough (§0) |
+| `roles/logging.logWriter` | **No.** The runtimes don't use the Cloud Logging API. Cloud Run collects stdout and stderr without any role on the service account | Remove | tested live: not needed, container logs still appear (§0) |
 
 ### 3.3 Aside: the engines' Agent Identity (not asked, worth a later test)
 
@@ -195,15 +213,15 @@ So `logging.logWriter`, `monitoring.metricWriter`, `cloudtrace.agent`, `browser`
 
 | Identity | Today | Proposed | Change |
 |---|---|---|---|
-| Deployer | Owner (SETUP.md: "simplest") | 15 predefined roles (+1 GE, +2 PN) | §2.2; the 15 tested live (§0) |
-| Deployer | `roles/aiplatform.user` | `roles/aiplatform.expressUser` | needs live test (the `vertexai` SDK create path) |
-| Deployer | `roles/iam.serviceAccountUser` on the project | The same role on `<prefix>-ui`, `<prefix>-targets` and the Cloud Build service account only (e.g. a Terraform `google_service_account_iam_member` for the deployer) | needs live test |
-| Deployer | `roles/iap.admin` | Custom `agdemoDeployerIap` (§5.2). Keep `iap.admin` if `run deploy --iap` needs IAP settings permissions, which are only at the TESTING level for custom roles | needs live test |
-| Deployer | Project IAM Admin, unconditional | Project IAM Admin with a condition on the roles it may grant (§5.3) | needs live test |
+| Deployer | Owner (SETUP.md: "simplest") | 15 predefined roles (+1 GE, +2 PN), or the trimmed 14 below | §2.2; both tested live (§0) |
+| Deployer | `roles/aiplatform.user` | `roles/aiplatform.expressUser` | tested live, works (§0) |
+| Deployer | `roles/iam.serviceAccountUser` on the project | The same role on `<prefix>-ui`, `<prefix>-targets` and the Cloud Build service account only (e.g. a Terraform `google_service_account_iam_member` for the deployer) | not tested (the trims run kept it on the project) |
+| Deployer | `roles/iap.admin` | Custom `agdemoDeployerIap` (§5.2). Keep `iap.admin` if `run deploy --iap` needs IAP settings permissions, which are only at the TESTING level for custom roles | tested live, works without the settings permissions (§0) |
+| Deployer | Project IAM Admin, unconditional | Project IAM Admin with a condition on the roles it may grant (§5.3) | tested live with two conditions (§5.3, §0) |
 | Deployer | `roles/viewer` (if build logs need it) | Not needed: builds are submitted `--async` and polled | done, tested live (§0) |
-| `<prefix>-ui` | 9 project roles | 6 grants: `aiplatform.expressUser`, `agentregistry.viewer`, `logging.viewer`, `serviceusage.serviceUsageConsumer`, custom `agdemoRegistryEgressAdmin`, custom `agdemoGatewayPolicyEditor` (`networkservices.viewer` folded into the last one) | drops `iap.admin`, `networksecurity.editor`, `serviceExtensionsAdmin`, `networkservices.viewer`, `modelarmor.viewer`; `aiplatform.user` → `expressUser` |
-| `<prefix>-ui` | `objectUser` on staging + recordings | `objectUser` on recordings only | code change in `ui.py` |
-| `<prefix>-targets` | `aiplatform.user`, `logging.logWriter` | `aiplatform.expressUser` | needs live test |
+| `<prefix>-ui` | 9 project roles | 6 grants: `aiplatform.expressUser`, `agentregistry.viewer`, `logging.viewer`, `serviceusage.serviceUsageConsumer`, custom `agdemoRegistryEgressAdmin`, custom `agdemoGatewayPolicyEditor` (`networkservices.viewer` folded into the last one) | tested live, works (§0). Drops `iap.admin`, `networksecurity.editor`, `serviceExtensionsAdmin`, `networkservices.viewer`, `modelarmor.viewer`; `aiplatform.user` → `expressUser` |
+| `<prefix>-ui` | `objectUser` on staging + recordings | `objectUser` on recordings only | tested live (§0); needs the small `ui.py` change |
+| `<prefix>-targets` | `aiplatform.user`, `logging.logWriter` | `aiplatform.expressUser` | tested live, works (§0) |
 
 ## 5. Custom-role proposals
 
@@ -267,20 +285,26 @@ iap.webServices.getSettings
 
 ### 5.3 Limiting Project IAM Admin
 
-Grant `roles/resourcemanager.projectIamAdmin` to the deployer with a condition, so it can only add or remove these roles. They are every role the demo's tooling grants: Terraform, `deploy-theme` and `down`. If §5.2's custom roles go into `iam.tf`, add them to the list.
+Grant `roles/resourcemanager.projectIamAdmin` to the deployer **twice**, each with a condition, so it can only add or remove the roles the demo's tooling grants (Terraform, `deploy-theme`, `down`). IAM allows at most **10** roles in one `hasOnly()` list, so one condition can't hold them all. A change is allowed when either binding allows it, so each command's change must fit inside one list: `down` removes all of an Agent Identity principal's roles in one change (list A), and all of a service account's roles in one change (list B). Tested live (§0) with the trimmed UI roles of §4; with the untrimmed `iam.tf`, list B would need `iap.admin`, `networkservices.viewer`, `networksecurity.editor`, `serviceExtensionsAdmin` and `modelarmor.viewer` too, which doesn't fit in 10.
 
+List A, the Agent Identity roles (`deploy-theme`) and the Model Armor service-agent roles:
 ```
 api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).hasOnly([
-  'roles/aiplatform.user', 'roles/agentregistry.viewer', 'roles/iap.admin',
-  'roles/networkservices.viewer', 'roles/networksecurity.editor',
-  'roles/networkservices.serviceExtensionsAdmin', 'roles/modelarmor.viewer',
-  'roles/logging.viewer', 'roles/serviceusage.serviceUsageConsumer',
-  'roles/logging.logWriter', 'roles/modelarmor.calloutUser', 'roles/modelarmor.user',
+  'roles/aiplatform.user', 'roles/agentregistry.viewer', 'roles/logging.logWriter',
   'roles/monitoring.metricWriter', 'roles/cloudtrace.agent', 'roles/browser',
-  'roles/compute.networkAdmin', 'roles/dns.peer'
+  'roles/serviceusage.serviceUsageConsumer', 'roles/modelarmor.calloutUser', 'roles/modelarmor.user'
 ])
 ```
-This stops the deployer from granting itself Owner. It's a documented IAM feature, but it hasn't been tested here with Terraform's read-modify-write of the whole policy: **needs live test**.
+List B, the `<prefix>-ui` and `<prefix>-targets` roles (trimmed, §4) and the Private Networking service-agent roles:
+```
+api.getAttribute('iam.googleapis.com/modifiedGrantsByRole', []).hasOnly([
+  'roles/aiplatform.expressUser', 'roles/agentregistry.viewer', 'roles/logging.viewer',
+  'roles/serviceusage.serviceUsageConsumer',
+  'projects/<PROJECT_ID>/roles/agdemoRegistryEgressAdmin', 'projects/<PROJECT_ID>/roles/agdemoGatewayPolicyEditor',
+  'roles/compute.networkAdmin', 'roles/dns.peer', 'roles/modelarmor.calloutUser', 'roles/modelarmor.user'
+])
+```
+Put each in a YAML file (`title`, `expression`) and grant with `gcloud projects add-iam-policy-binding <PROJECT_ID> --member=... --role=roles/resourcemanager.projectIamAdmin --condition-from-file=<file>`: `--condition=expression=...` splits on the commas in the list. This stops the deployer from granting itself Owner. Terraform's read-modify-write of the whole policy worked with it (§0).
 
 ## 6. How to test least privilege
 
