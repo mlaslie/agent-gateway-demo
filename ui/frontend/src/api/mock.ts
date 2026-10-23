@@ -1,7 +1,7 @@
 // In-browser mock of the backend (CONTRACTS §7). Enabled with VITE_MOCK=1 or ?mock=1.
 // Simulates §3 rules, Live-mode propagation delays ("pending") and SSE test runs.
 import type { Api } from "./client";
-import { evaluate, isInternal, isPrivateNetworking } from "./simulate";
+import { evaluate, isPrivateNetworking } from "./simulate";
 import { agentName, edgeLabel, policySource, splitSource } from "../util";
 import { mockTerraform } from "./mockTerraform";
 import helpdeskJson from "./mockTheme.helpdesk.json";
@@ -24,7 +24,6 @@ const THEMES: Record<string, Theme> = {
   privnet: withTypical(privnetJson as unknown as Theme),
 };
 const MOCK_PSC_IP = "10.70.250.10";
-const MOCK_PUBLIC_IP = "34.143.77.2";
 const regionOf = (t: Theme) => t.region ?? "us-east4";
 const gatewayOf = (t: Theme) => (isPrivateNetworking(t) ? "agdemo-pn-egress" : "agdemo-egress");
 const NO_MA = { enabled: false, available: false, status: "removed", detail: "Model Armor isn't part of the Private Networking mode", typical_seconds: null, changed_at: null };
@@ -172,38 +171,40 @@ function stateFor(theme: Theme, mode: Mode): ThemeState {
 
 const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => setTimeout(() => r(v), ms));
 
-const principalTail = (t: Theme, p: Theme["policies"][number]) => policySource(p) ?? t.orchestrator.id;
+// Mirrors agdemo_core/policies/egress_allow.py describe(): the theme's region, the registry id and mockCondition().
+const egressBinding = (p: Theme["policies"][number], t: Theme): string[] => {
+  const target = String(p.params.target);
+  const src = policySource(p);
+  const flag = t.components.find((c) => c.id === target)?.kind === "a2a_agent" ? "--agent" : "--mcp-server";
+  const cond = mockCondition(t, p);
+  return [
+    `# ${p.text}`,
+    `# Member: ${agentName(t, src)}'s Agent Identity` + (src ? ` (orchestrator ${src})` : ""),
+    "gcloud iap web add-iam-policy-binding --resource-type=agent-registry \\",
+    `  ${flag}=${regId(t.id + target)} --region=${regionOf(t)} --project=${GW_PROJECT} \\`,
+    `  --member='principal://agents.global.org-000000000000.system.id.goog/resources/aiplatform/projects/${GW_PROJECT_NUM}/locations/${regionOf(t)}/reasoningEngines/${engineNum(t, src)}' \\`,
+    "  --role=roles/iap.egressor" + (cond ? " \\" : ""),
+    ...(cond ? [`  --condition="^|^title=${cond.title}|expression=${cond.expression}"`] : []),
+    "# Remove: gcloud iap web remove-iam-policy-binding with the same flags.",
+  ];
+};
 const EXPLAIN: Record<string, (p: Theme["policies"][number], t: Theme) => string[]> = {
   gateway_attach: (p, t) =>
     p.params.path === "egress"
       ? [
           `# Bind ${agentName(t, policySource(p))}'s Agent Runtime engine to the egress (AGENT_TO_ANYWHERE) gateway`,
-          `PATCH https://us-east4-aiplatform.googleapis.com/v1beta1/projects/demo/locations/us-east4/reasoningEngines/${engineNum(t, policySource(p))}?updateMask=spec.deploymentSpec.agentGatewayConfig`,
-          '{"spec":{"deploymentSpec":{"agentGatewayConfig":{"agentToAnywhereConfig":{"agentGateway":"projects/demo/locations/us-east4/agentGateways/agdemo-egress"}}}}}',
+          `PATCH https://${regionOf(t)}-aiplatform.googleapis.com/v1beta1/projects/${GW_PROJECT}/locations/${regionOf(t)}/reasoningEngines/${engineNum(t, policySource(p))}?updateMask=spec.deploymentSpec.agentGatewayConfig`,
+          `{"spec":{"deploymentSpec":{"agentGatewayConfig":{"agentToAnywhereConfig":{"agentGateway":"projects/${GW_PROJECT}/locations/${regionOf(t)}/agentGateways/${gatewayOf(t)}"}}}}}`,
           "# Default deny: only platform endpoints (Gemini, logging, trace, sessions) are allowlisted",
         ]
       : [
           "# Front the engine with the ingress (CLIENT_TO_AGENT) gateway",
-          "PATCH .../reasoningEngines/123?updateMask=spec.deploymentSpec.agentGatewayConfig",
-          '{"spec":{"deploymentSpec":{"agentGatewayConfig":{"clientToAgentConfig":{"agentGateway":".../agentGateways/agdemo-ingress"}}}}}',
+          `PATCH https://${regionOf(t)}-aiplatform.googleapis.com/v1beta1/.../locations/${regionOf(t)}/reasoningEngines/${engineNum(t, policySource(p))}?updateMask=spec.deploymentSpec.agentGatewayConfig`,
+          `{"spec":{"deploymentSpec":{"agentGatewayConfig":{"clientToAgentConfig":{"agentGateway":".../locations/${regionOf(t)}/agentGateways/agdemo-ingress"}}}}}`,
         ],
-  a2a_allow: (p, t) => [
-    `# Grant ${agentName(t, policySource(p))}'s agent identity egress to ${p.params.target}'s registry endpoint`,
-    `gcloud beta iap web add-iam-policy-binding --resource-type=agent-registry-endpoint \\`,
-    `  --endpoint=agdemo-${t.id}-${p.params.target} --region=us-east4 \\`,
-    `  --member=principal://agents.global.org-123.system.id.goog/.../${principalTail(t, p)} --role=roles/iap.egressor`,
-  ],
-  mcp_server_allow: (p, t) => [
-    `# Egressor on the whole MCP server ${p.params.target} for ${agentName(t, policySource(p))}`,
-    `gcloud beta iap web add-iam-policy-binding --endpoint=agdemo-${t.id}-${p.params.target} \\`,
-    `  --member=principal://.../${principalTail(t, p)} --role=roles/iap.egressor`,
-  ],
-  mcp_tool_allow: (p, t) => [
-    `# Conditional egressor binding on ${p.params.target} for ${agentName(t, policySource(p))}: read-only tools only`,
-    `gcloud beta iap web add-iam-policy-binding --endpoint=agdemo-${t.id}-${p.params.target} \\`,
-    `  --member=principal://.../${principalTail(t, p)} --role=roles/iap.egressor \\`,
-    `  --condition='expression=request.mcp.tool.annotations.readOnlyHint == true,title=read-only-tools'`,
-  ],
+  a2a_allow: egressBinding,
+  mcp_server_allow: egressBinding,
+  mcp_tool_allow: egressBinding,
 };
 
 function fakeResult(theme: Theme, fullEdge: string): string {
@@ -325,8 +326,9 @@ function synthEntry(theme: Theme, edge: string, decision: "allowed" | "denied" |
   const url = tool ? `https://${host}/mcp` : `https://${host}/`;
   const polName = (n: string) => `projects/${GW_PROJECT_NUM}/locations/${region}/authzPolicies/${n}`;
   const iapPol = pn ? "agdemo-pn-egress-iap-policy" : GW_POLICY.denied;
-  // T4: allowed entries carry httpRequest.serverIp (denied ones don't): the PSC endpoint for an internal target.
-  const serverIp = pn && decision === "allowed" ? `${isInternal(theme, comp) ? MOCK_PSC_IP : MOCK_PUBLIC_IP}:443` : null;
+  // T4: allowed entries carry httpRequest.serverIp (denied ones don't). With the VPC-enabled gateway attached every
+  // run.app destination resolves to the PSC endpoint, internal ingress or not (simulate.ts netPath, SimLogBook).
+  const serverIp = pn && decision === "allowed" ? `${MOCK_PSC_IP}:443` : null;
   const privatePath = !!serverIp && serverIp.startsWith("10.");
   const pols = [{ name: polName(iapPol), result: decision === "denied" ? "DENIED" : "ALLOWED" }];
   if (decision === "blocked") pols.push({ name: polName(GW_POLICY.blocked), result: "DENIED" });
