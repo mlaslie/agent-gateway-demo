@@ -520,7 +520,12 @@ TF_ENV = {"project_id": P, "gateway_project_id": P, "region": R, "prefix": X}
 
 def test_up_refusal():
     assert lc.up_refusal(CFG, {}, gateway_live=False, tf_managed=None) is None  # fresh
-    assert "bootstrap" in lc.up_refusal(CFG, {"shared": {}}, gateway_live=True, tf_managed=None)  # the live demo
+    boot = {"shared": {"egress_gateway": "projects/p/locations/r/agentGateways/agdemo-egress"}}
+    assert "bootstrap" in lc.up_refusal(CFG, boot, gateway_live=True, tf_managed=None)    # the live demo, early
+    empty = {"shared": {}, "themes": {}}                                                  # load_state() w/o a file
+    assert lc.up_refusal(CFG, empty, gateway_live=True, tf_managed=None) is None    # decide after tf init
+    assert lc.up_refusal(CFG, empty, gateway_live=True, tf_managed=True) is None    # resume a failed first up
+    assert "bootstrap" in lc.up_refusal(CFG, empty, gateway_live=True, tf_managed=False)
     assert lc.up_refusal(CFG, {"shared": {"tf_environment": TF_ENV}}, True, True) is None  # re-run
     assert "isn't in this Terraform state" in lc.up_refusal(CFG, {"shared": {"tf_environment": TF_ENV}}, True, False)
     other = {**TF_ENV, "region": "us-east4", "prefix": "agdemo"}
@@ -717,7 +722,7 @@ def test_up_stops_on_preflight_plan_safety_and_no():
 
 def test_up_refuses_live_demo_before_anything():
     ops = FakeUpOps(live=True)
-    ops._state = {"shared": {}}
+    ops._state = {"shared": {"egress_gateway": "projects/p/locations/r/agentGateways/agdemo-egress"}}   # bootstrap
     assert lc.up(CFG, ops, yes=True, log=lambda m: None) == 2 and ops.calls == []
     ops = FakeUpOps(live=True, managed=False)  # tf_environment but not in this state
     assert lc.up(CFG, ops, yes=True, log=lambda m: None) == 2

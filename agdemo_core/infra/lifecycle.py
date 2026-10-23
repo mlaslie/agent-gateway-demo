@@ -67,10 +67,15 @@ def up_refusal(cfg: DemoConfig, state: dict, gateway_live: bool, tf_managed: boo
         return (f"config/state.json belongs to Terraform environment {describe(env)}, but config/demo.yaml "
                 f"describes {describe(env_of(cfg))}. Use that environment's config (AGDEMO_CONFIG) or a "
                 "separate checkout; up refuses.")
-    if gateway_live and not env:
-        return (f"{cfg.egress_gateway_resource} exists but state.json has no tf_environment: this environment "
-                "was created by bootstrap (the live demo?). Adopt it first with "
-                "docs/TERRAFORM_MIGRATION_RUNBOOK.md; up refuses.")
+    if gateway_live and not env and tf_managed is not True:
+        if tf_managed is None and not shared:
+            # Empty state.json (bootstrap always records its gateways there): an earlier up in this checkout may
+            # have failed before output-sync. Decide after tf init, when the Terraform state shows whether the
+            # gateway is this environment's.
+            return None
+        return (f"{cfg.egress_gateway_resource} exists but state.json has no tf_environment and this Terraform "
+                "state doesn't have it: this environment was created by bootstrap (the live demo?). Adopt it first "
+                "with docs/TERRAFORM_MIGRATION_RUNBOOK.md; up refuses.")
     if not gateway_live and not env and shared.get("egress_gateway"):
         return (f"config/state.json describes a bootstrap environment ({shared['egress_gateway']}) whose gateway "
                 "isn't live. Move config/state.json aside before up creates a new environment.")
