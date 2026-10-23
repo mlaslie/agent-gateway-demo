@@ -1,6 +1,6 @@
 # Permissions: the minimum IAM roles
 
-> **Status (2026-10-23): tested live.** The deployer's 15 base roles (§2.2) are enough for the full lifecycle (`up`, a Live scenario through the deployed UI, `down`); Private Networking adds 2 (`compute.networkAdmin`, `dns.admin`). **The trims in §4 were also tested live and work:** a 14-role deployer (`aiplatform.expressUser`, a custom IAP role, Project IAM Admin limited by two conditions, no `logging.viewer`), a 6-grant UI service account and a 1-role targets service account. Results in §0. Still untested: the GE role, and `iam.serviceAccountUser` per service account.
+> **Status (2026-10-23): tested live.** The deployer's 15 base roles (§2.2) are enough for the full lifecycle (`up`, a Live scenario through the deployed UI, `down`); Private Networking adds 2 (`compute.networkAdmin`, `dns.admin`). **The trims in §4 were also tested live and work:** a `minimum` deployer (`aiplatform.expressUser`, a custom IAP role, `iam.roleAdmin`, Project IAM Admin limited by two conditions, no `logging.viewer`), a 6-grant UI service account and a 1-role targets service account. `iam.auth_strategy: minimum` was then run end to end with the real code path (`deployer-roles --apply`, Terraform creating the custom roles). Results in §0. Still untested: the GE role, and `iam.serviceAccountUser` per service account.
 >
 > Originally (2026-10-21) this page was worked out from the code and from read-only checks. Every role below comes from reading what the demo calls: `infra/terraform/**`, `agdemo_core/**`, `ui/backend/**` and `runtimes/**`. Permission names were checked against the live role catalogue (`gcloud iam roles describe`, the IAM `roles.list` API) and with `testIamPermissions`. Nothing was created or granted. Each suggestion is marked **verified** (the permission names were checked) or **needs live test** (only a run with these roles will show whether it's enough). The test plan is in §6.
 
@@ -10,7 +10,7 @@ The demo works with either of two role sets, both tested live end to end (§0). 
 
 | | `standard` (default) | `minimum` (least privilege) |
 |---|---|---|
-| Deployer (you, or whoever runs `./agdemo up`) | 15 predefined roles (§2.2) | 14 roles: `aiplatform.expressUser` instead of `aiplatform.user`, a custom IAP role instead of `iap.admin`, no `logging.viewer`, and Project IAM Admin limited by two conditions to the roles the demo grants (§5.3) |
+| Deployer (you, or whoever runs `./agdemo up`) | 15 predefined roles (§2.2) | 15 roles (16 bindings): `aiplatform.expressUser` instead of `aiplatform.user`, a custom IAP role instead of `iap.admin`, no `logging.viewer`, `iam.roleAdmin` (Terraform creates the UI's two custom roles), and Project IAM Admin limited by two conditions to the roles the demo grants (§5.3) |
 | `<prefix>-ui` (the UI on Cloud Run) | 9 predefined roles | 6: `aiplatform.expressUser`, `agentregistry.viewer`, `logging.viewer`, `serviceusage.serviceUsageConsumer` and two project custom roles Terraform creates (`<prefix>RegistryEgressAdmin`, `<prefix>GatewayPolicyEditor`). No staging-bucket grant |
 | `<prefix>-targets` (Cloud Run demo agents) | `aiplatform.user`, `logging.logWriter` | `aiplatform.expressUser` |
 | Private Networking | +`compute.networkAdmin`, `dns.admin` for the deployer | the same |
@@ -27,7 +27,7 @@ or for one run: `./agdemo up --auth-strategy minimum` (also on `tf vars/init/pla
 ./agdemo deployer-roles --member user:you@example.com                            # standard
 ./agdemo deployer-roles --member user:you@example.com --auth-strategy minimum    # minimum
 ```
-It adds the Private Networking roles when `private_networking.enabled` is true (`--private-networking` / `--no-private-networking` to override). `--apply` runs the commands instead of printing them; it needs an owner (or Project IAM Admin and Role Administrator). For `minimum` it also creates the custom role `<prefix>DeployerIap` and writes the two condition files to `config/generated/`. A `minimum` deployer can only grant the `minimum` service-account roles, so use it with `iam.auth_strategy: minimum`. A `standard` deployer works with either.
+It adds the Private Networking roles when `private_networking.enabled` is true (`--private-networking` / `--no-private-networking` to override). `--apply` runs the commands instead of printing them; it needs an owner (or Project IAM Admin and Role Administrator). For `minimum` it also creates the custom role `<prefix>DeployerIap` and writes the two condition files to `config/generated/`. A `minimum` deployer can only grant the `minimum` service-account roles, so use it with `iam.auth_strategy: minimum`. A `standard` deployer works with either, but with `iam.auth_strategy: minimum` it also needs `roles/iam.roleAdmin`, because Terraform creates the UI's two custom roles. `--apply` is safe to re-run; if the deployer's custom IAP role was deleted in the last ~37 days, it undeletes it.
 
 **Switching an existing environment** changes which roles Terraform grants, so the plan removes the old service-account grants (and, from `minimum` back to `standard`, the custom roles). The plan-safety check refuses deletes, so allow these once:
 ```bash
@@ -81,6 +81,17 @@ Findings:
 - **`gcloud ... --condition=expression=...` splits on the commas in a `hasOnly([...])` list.** Use `--condition-from-file`.
 - `run deploy --iap` didn't need the IAP settings permissions, so `agdemoDeployerIap` needs only the 6 IAM-policy permissions.
 - Project IAM was identical to its pre-test snapshot afterwards (including the policy version: no conditions left behind).
+
+**`iam.auth_strategy: minimum` end to end (2026-10-23).** The released code, no edits: `config/demo.yaml` with `iam.auth_strategy: minimum`, the deployer's roles granted by `./agdemo deployer-roles --apply` (it undeleted the custom IAP role from the earlier run), then `up`, a Live check and `down`.
+
+| Step | Result |
+|---|---|
+| `deployer-roles --apply` | 16 bindings granted; the deleted `<prefix>DeployerIap` role undeleted and updated |
+| `up`, first try | **Failed**: Terraform couldn't create the UI's custom roles (`iam.roles.get` denied). **Fix:** `roles/iam.roleAdmin` added to the `minimum` deployer set |
+| `up`, second try | **Refused**: after a failed first apply, `state.json` was still empty while the gateway already existed, and `up` took that for a bootstrap environment. **Fix:** `up` now decides after `tf init` and resumes when the gateway is in this environment's Terraform state |
+| `up`, third try | Passed: both custom roles created by Terraform (undeleting the ids of the earlier run), UI SA with exactly the 6 `minimum` grants, targets SA with `aiplatform.expressUser`, `verify` 9/9 |
+| Live check in the deployed UI | KB Agent grant (Terraform-created `RegistryEgressAdmin`) and the Model Armor checkbox (Terraform-created `GatewayPolicyEditor`) both applied |
+| `down` as the `minimum` deployer | Passed: grants and Model Armor policies removed, both custom roles deleted by Terraform, 95 resources destroyed, `check-clean --strict` CLEAN. Project IAM identical to its pre-test snapshot afterwards |
 
 Not covered: `publish-ge` (GE role), and `iam.serviceAccountUser` granted per service account instead of on the project.
 
