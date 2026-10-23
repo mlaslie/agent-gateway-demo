@@ -21,17 +21,19 @@ user ───streamQuery──▶ [agdemo-ingress]──▶ Agent Runtime engin
 
 | Resource | Name / id | Created by |
 |---|---|---|
-| Egress gateway | `agentGateways/agdemo-egress` (`AGENT_TO_ANYWHERE`, registry `//agentregistry.googleapis.com/projects/P/locations/R`) | bootstrap |
-| Ingress gateway | `agentGateways/agdemo-ingress` (`CLIENT_TO_AGENT`) | bootstrap |
-| IAP authz extension | `authzExtensions/agdemo-egress-iap-authz` (`service: iap.googleapis.com`, `iapPolicyVersion: V1`) | bootstrap (egress only) |
-| IAP authz policy | `authzPolicies/agdemo-egress-iap-policy` (`REQUEST_AUTHZ`, `CUSTOM`). The ingress gateway gets no IAP policy: it enforces Model Armor only (§10). Older versions also created `agdemo-ingress-iap-authz` / `-policy`; `teardown` removes them if present | bootstrap (egress only) |
-| Model Armor template | `templates/agdemo-shield` (PI + jailbreak, SDP basic) | bootstrap |
-| Model Armor authz extension | `authzExtensions/agdemo-ma-authz` (`service: modelarmor.R.rep.googleapis.com`) | bootstrap |
+| Egress gateway | `agentGateways/agdemo-egress` (`AGENT_TO_ANYWHERE`, registry `//agentregistry.googleapis.com/projects/P/locations/R`) | Terraform |
+| Ingress gateway | `agentGateways/agdemo-ingress` (`CLIENT_TO_AGENT`) | Terraform |
+| IAP authz extension | `authzExtensions/agdemo-egress-iap-authz` (`service: iap.googleapis.com`, `iapPolicyVersion: V1`) | Terraform (egress only) |
+| IAP authz policy | `authzPolicies/agdemo-egress-iap-policy` (`REQUEST_AUTHZ`, `CUSTOM`). The ingress gateway gets no IAP policy: it enforces Model Armor only (§10). Older versions also created `agdemo-ingress-iap-authz` / `-policy`; `teardown` removes them if present | Terraform (egress only) |
+| Model Armor template | `templates/agdemo-shield` (PI + jailbreak, SDP basic) | Terraform |
+| Model Armor authz extension | `authzExtensions/agdemo-ma-authz` (`service: modelarmor.R.rep.googleapis.com`) | Terraform |
 | Model Armor authz policies | `authzPolicies/agdemo-{egress,ingress}-ma-policy` (`CONTENT_AUTHZ`) | **the UI checkbox only** |
-| Platform allowlist | 25 registry `services/agdemo-plat-*` (endpoints) + `roles/iap.egressor` for every Runtime agent in the project | bootstrap |
-| Service accounts | `agdemo-ui`, `agdemo-targets` | bootstrap |
-| Artifact Registry / staging | `R-docker.pkg.dev/P/agdemo`, `gs://P-agdemo-staging` | bootstrap |
+| Platform allowlist | 25 registry `services/agdemo-plat-*` (endpoints) + `roles/iap.egressor` for every Runtime agent in the project | Terraform |
+| Service accounts | `agdemo-ui`, `agdemo-targets` | Terraform |
+| Artifact Registry / staging | `R-docker.pkg.dev/P/agdemo`, `gs://P-agdemo-staging` | Terraform |
 | Per theme | Cloud Run `agdemo-<theme>-<component>`, registry `services/agdemo-<theme>-<component>`, engine `agdemo-<theme>-orchestrator` | deploy-theme |
+
+"Terraform" means `./agdemo up` (or `./agdemo tf apply`). The old `./agdemo bootstrap` created the same resources without Terraform and is deprecated.
 
 Everything is written to `config/state.json` (`shared` and `themes.<id>`).
 
@@ -47,7 +49,7 @@ Verified REST endpoints (from `gcloud --log-http`):
 | Agent Runtime | `https://R-aiplatform.googleapis.com/v1/projects/<NUMBER>/locations/R/reasoningEngines/<id>` |
 | Model Armor | `https://modelarmor.R.rep.googleapis.com/v1/projects/P/locations/R/templates` |
 
-## 2. Gateways (bootstrap)
+## 2. Gateways (Terraform; formerly bootstrap)
 
 Created with a REST POST. The `gcloud` equivalent:
 
@@ -236,7 +238,7 @@ Gateway log entries (`networkservices.googleapis.com/gateway_requests`): `httpRe
 
 ## 8. Platform endpoints under default deny (answer g)
 
-`bootstrap` registers these 25 entries and grants `roles/iap.egressor` to the **project principal set** on each.
+The Terraform foundation (`./agdemo up`; formerly `bootstrap`) registers these 25 entries and grants `roles/iap.egressor` to the **project principal set** on each.
 That covers only these entries; the rest of the registry stays default-deny.
 
 ```

@@ -3,8 +3,8 @@
 **Status:** notes for later review (2026-10-16). **Built in the demo as the Private Networking mode (phase T4):** `infra/terraform/modules/private_egress` + `modules/regional`, theme `themes/privnet`, the UI's Network switch. See [TERRAFORM_PLAN.md](TERRAFORM_PLAN.md) §7f (as built) and the README section "Private Networking mode". This recipe stays as the manual reference; the live run is T5.
 
 This is the shortest working path from a live test run in a throwaway region (October 2026). The full record is in the Policy Studio repo:
-- `docs/P0_FINDINGS.md`: every command, result, error code and timing;
-- `docs/PRIVATE_NETWORKING_PLAN.md`: background and decisions.
+- [`docs/P0_FINDINGS.md`](https://github.com/mlaslie/policy-studio/blob/main/docs/P0_FINDINGS.md): every command, result, error code and timing;
+- [`docs/PRIVATE_NETWORKING_PLAN.md`](https://github.com/mlaslie/policy-studio/blob/main/docs/PRIVATE_NETWORKING_PLAN.md): background and decisions.
 
 Placeholders: `PROJECT_ID` / `PROJECT_NUMBER`, `REGION` (one region for everything), `VPC`, `SUBNET`, `ATT`, `PSCIP` (an unused private IP, e.g. `10.70.250.10`), `TMPL`, `GW` (the egress gateway), `SVC` (the Cloud Run service).
 

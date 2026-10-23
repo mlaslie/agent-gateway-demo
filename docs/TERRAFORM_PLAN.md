@@ -8,8 +8,8 @@ Placeholders used below: project `acme-prod`, project number `123456789012`, reg
 
 Related docs:
 - [PRIVATE_EGRESS_TESTBED.md](PRIVATE_EGRESS_TESTBED.md): the gotchas and the manual recipe.
-- Policy Studio `docs/P0_FINDINGS.md`: the live results, errors and timings this plan relies on.
-- Policy Studio `docs/PRIVATE_NETWORKING_PLAN.md`. Its §11 row "connectivity_template: no provider resource known" is out of date: the resource has existed since 8.4.0 (see §1).
+- Policy Studio [`docs/P0_FINDINGS.md`](https://github.com/mlaslie/policy-studio/blob/main/docs/P0_FINDINGS.md): the live results, errors and timings this plan relies on.
+- Policy Studio [`docs/PRIVATE_NETWORKING_PLAN.md`](https://github.com/mlaslie/policy-studio/blob/main/docs/PRIVATE_NETWORKING_PLAN.md). Its §11 row "connectivity_template: no provider resource known" is out of date: the resource has existed since 8.4.0 (see §1).
 - [BACKLOG.md](BACKLOG.md), "#17 research": the earlier tooling matrix for policy operations.
 
 ---

@@ -108,12 +108,30 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Interfaces between th
 | **Service account** | A non-human identity that a deployed service runs as |
 | **Private Networking terms** | Network attachment, PSC endpoint, connectivity template: see [Private Networking mode](#private-networking-mode) |
 
+## How the pieces fit together
+
+For readers who know Google Cloud but not Agent Gateway. The depth is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+**The gateway doesn't decide; it asks.** A gateway has authz policies attached. Each policy points at an authz extension, and the extension names the service that makes the call:
+
+| Check | Policy profile | Extension calls | Decides on |
+|---|---|---|---|
+| Identity | `REQUEST_AUTHZ` (egress only) | IAP | Does the calling agent hold `roles/iap.egressor` on the destination's registry entry? |
+| Content | `CONTENT_AUTHZ` (egress and ingress, the Model Armor checkbox) | Model Armor | Does the prompt or tool call contain prompt injection or sensitive data? |
+
+**Agent Identity is not a service account.** Each Agent Runtime agent gets its own principal, derived from its resource id. It can't be impersonated and has no keys: Google manages short-lived certificates for it, and its tokens are bound to the agent, so a stolen token can't be replayed. Grants go to that principal. Delete and recreate an agent (`deploy-theme --recreate-engine`) and it gets a **new** principal, so its grants must be given again. ([ARCHITECTURE.md §4](docs/ARCHITECTURE.md#4-agent-identity-and-egress-grants-answer-b))
+
+**The egress gateway sees everything the agent sends out,** not just calls to other agents and tools. Once an agent is bound to an `AGENT_TO_ANYWHERE` gateway, its calls to Gemini, sessions, logging and tracing go through it too, often to `.mtls.` hosts. Under default deny those would fail, so the foundation registers 25 platform endpoints and grants every agent in the project access to them. Hostname matching is exact, so plain, `.mtls.`, regional and gRPC `:443` forms are separate entries. ([ARCHITECTURE.md §8](docs/ARCHITECTURE.md#8-platform-endpoints-under-default-deny-answer-g))
+
+**Agent Registry has two layers.** You write `services/<id>` entries (an A2A agent card, an MCP tool spec, or a plain endpoint URL). The registry projects each one into a read-only `agents/…`, `mcpServers/…` or `endpoints/…` resource with a generated id (`agentregistry-0000…`). IAP grants are set on that projection, not on the service you created; the service's `registryResource` field tells you which one it is. Agent Runtime agents are registered automatically as `agents/…`. ([ARCHITECTURE.md §3](docs/ARCHITECTURE.md#3-agent-registry-answers-question-a))
+
 ## Install in your own environment
 
 Allow about 30–45 minutes, mostly waiting on Google Cloud. The full guide, with permissions and options, is **[docs/SETUP.md](docs/SETUP.md)**.
 
 **1. Prerequisites**
 - A Google Cloud project with billing, where you are Owner (or hold the admin roles `preflight` checks for).
+- **The project must be in a Google Cloud organization.** The demo builds Agent Identity principals from the organization id (`principal://agents.global.org-<ORG_ID>.system.id.goog/…`), and Terraform stops with "No organization id" without one. Agent Identity itself also works in projects without an organization (trust domain `agents.global.proj-<PROJECT_NUMBER>.system.id.goog`), but the demo doesn't support that yet ([BACKLOG.md](docs/BACKLOG.md) #19).
 - A region where Agent Gateway, Agent Runtime, Agent Registry and Cloud Run are all available (us-east4 is tested). All Agent Runtime agents in a project and region must share the same gateways, so pick a region where no agents are bound to other gateways.
 - `gcloud` (with beta components), **Terraform 1.7+**, [`uv`](https://docs.astral.sh/uv/) and Python 3.11+. Images are built with Cloud Build, so Docker isn't required. Node is only needed for UI development; `agents-cli` only for the optional Gemini Enterprise step.
 
@@ -372,7 +390,7 @@ The diagram shows the VPC between the gateway and Payroll MCP (attachment, PSC e
 ## Repo layout
 
 ```
-agdemo                 CLI entry point (preflight, bootstrap, deploy-theme, publish-ge, ui, status, reset, teardown)
+agdemo                 CLI entry point (preflight, up, down, tf, deploy-theme, publish-ge, ui, status, reset, teardown; bootstrap is deprecated)
 agdemo_core/           shared Python: config loader, state, theme schema, simulator, policy handlers
 agdemo_core/infra/     step implementations used by the CLI (gateways, registry, IAM, Model Armor, IAP)
 infra/terraform/       Terraform foundation: root + modules/base + guards.tf; driven by ./agdemo up/down and ./agdemo tf

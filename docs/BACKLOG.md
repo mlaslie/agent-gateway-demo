@@ -22,6 +22,7 @@ Ideas for extending the demo. Effort is rough: S = hours, M = a day or two, L = 
 | 16 | **Theme generator:** describe a use case in a sentence and Gemini drafts the theme files for review | Content | M | n/a | Proposed |
 | 17 | **"Show me the code" per policy:** for every policy add/remove (gateway attach/detach, A2A/MCP allows, read-only by name or hint, Model Armor on/off), show the equivalent REST call, Python SDK and gcloud command | Demo UX | S–M | No new GCP behavior: same calls the handlers already make (see research below) | Researched — feasible |
 | 18 | **Policy Studio:** a guided tool to discover gateways / Model Armor / Agent Registry assets, audit them in plain English, build agent → A2A / MCP / API policies (MCP hints or tool names), generate Terraform / gcloud / REST / Python, and apply locally with ADC. **Moved to its own repo: [mlaslie/policy-studio](https://github.com/mlaslie/policy-studio)** | Demo UX / Production | L | Builds on verified operations (#17) | **Spun out** (separate repo and Cloud Run service) |
+| 19 | **Projects without an organization:** build Agent Identity principals from the project-level trust domain (`agents.global.proj-<PROJECT_NUMBER>.system.id.goog`) when the project has no organization, instead of failing with "No organization id" (`infra/terraform/modules/base/registry.tf`, `agdemo_core/gcp/engines.py` `principal()` / `project_principal_set()`) | Setup | S–M | Documented (Agent Identity supports org-less projects); not verified live | Proposed |
 
 ## #17 research: tooling support per policy operation
 
