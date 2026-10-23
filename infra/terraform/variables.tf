@@ -33,7 +33,7 @@ variable "labels" {
 }
 
 variable "organization_id" {
-  description = "Organization id for the Agent Identity principalSet. Empty = data.google_project.org_id."
+  description = "Organization id for the Agent Identity principalSet. Empty = data.google_project.org_id; a project with no organization uses the proj-<PROJECT_NUMBER> trust domain."
   type        = string
   default     = ""
 }

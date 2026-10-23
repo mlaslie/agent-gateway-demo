@@ -3,7 +3,9 @@
 # grants are live toggles (CLI / UI), never here.
 
 locals {
-  project_agents = "principalSet://agents.global.org-${var.organization_id}.system.id.goog/attribute.platformContainer/aiplatform/projects/${var.project_number}"
+  # Agent Identity trust domain: org-<ORG_ID> in an organization, proj-<PROJECT_NUMBER> without one.
+  trust_domain   = var.organization_id != "" ? "agents.global.org-${var.organization_id}.system.id.goog" : "agents.global.proj-${var.project_number}.system.id.goog"
+  project_agents = "principalSet://${local.trust_domain}/attribute.platformContainer/aiplatform/projects/${var.project_number}"
 
   platform_new = { for url, e in var.platform_endpoints : url => e if !contains(keys(var.platform_endpoints_existing), url) }
   platform_registry_ids = merge(
@@ -43,10 +45,4 @@ resource "google_iap_agent_registry_endpoint_iam_member" "platform" {
   role        = "roles/iap.egressor"
   member      = local.project_agents
 
-  lifecycle {
-    precondition {
-      condition     = var.organization_id != ""
-      error_message = "No organization id: set organization_id (the Agent Identity principalSet needs it)."
-    }
-  }
 }

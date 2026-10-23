@@ -131,7 +131,9 @@ export function BuildByHand({ privateNetworking, onBack }: { privateNetworking: 
           Everything the demo's <code>./agdemo up</code> and the UI toggles create, as a timeline you can follow yourself. Hover, focus or click <b>Why here?</b> on a step for a
           plain-English explanation. <b>Show code</b> gives the same step as curl / REST, gcloud, Terraform and the Python SDK. Placeholders are in CAPITALS (<code>PROJECT_ID</code>,{" "}
           <code>PROJECT_NUMBER</code>, <code>REGION</code>, <code>ORG_ID</code> …). Every tab was run end to end in a throwaway environment
-          (October 2026) unless it's marked <span className="bb-unv">unverified</span>.
+          (October 2026) unless it's marked <span className="bb-unv">unverified</span>. The agent principals assume the project is in a Google Cloud organization
+          (<code>agents.global.org-ORG_ID.system.id.goog</code>); in a project with no organization, use{" "}
+          <code>agents.global.proj-PROJECT_NUMBER.system.id.goog</code> instead.
         </p>
 
         <section className="bb-card bb-model" aria-labelledby="bb-model-h">

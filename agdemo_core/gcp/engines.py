@@ -48,23 +48,28 @@ def bound_gateway(eng: dict | None, path: str) -> str | None:
     return (gateway_config(eng).get(KEYS[path]) or {}).get("agentGateway") or None
 
 
+def trust_domain(cfg: DemoConfig) -> str:
+    """Agent Identity trust domain: org-<ORG_ID> in an organization, proj-<PROJECT_NUMBER> without one."""
+    org = organization_id(cfg.project)
+    return (f"agents.global.org-{org}.system.id.goog" if org
+            else f"agents.global.proj-{project_number(cfg.project)}.system.id.goog")
+
+
 def principal(cfg: DemoConfig, eng: dict | None, engine: str) -> str:
     """Agent Identity principal: principal://<effectiveIdentity> (falls back to the documented format)."""
     eff = (eng or {}).get("spec", {}).get("effectiveIdentity")
     if eff:
         return eff if eff.startswith("principal://") else f"principal://{eff}"
-    org = organization_id(cfg.project)
     num = project_number(cfg.project)
     eid = engine.rstrip("/").split("/")[-1]
-    return (f"principal://agents.global.org-{org}.system.id.goog/resources/aiplatform/projects/{num}"
+    return (f"principal://{trust_domain(cfg)}/resources/aiplatform/projects/{num}"
             f"/locations/{region_of(cfg, engine)}/reasoningEngines/{eid}")
 
 
 def project_principal_set(cfg: DemoConfig) -> str:
     """Every Agent Runtime agent (Agent Identity) in the project."""
-    org = organization_id(cfg.project)
     num = project_number(cfg.project)
-    return f"principalSet://agents.global.org-{org}.system.id.goog/attribute.platformContainer/aiplatform/projects/{num}"
+    return f"principalSet://{trust_domain(cfg)}/attribute.platformContainer/aiplatform/projects/{num}"
 
 
 def _op_done(r: Rest, cfg: DemoConfig, op_name: str) -> tuple[bool, str | None]:

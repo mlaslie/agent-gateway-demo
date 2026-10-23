@@ -123,7 +123,7 @@ The engine is created with `identity_type=AGENT_IDENTITY`. Its principal is `pri
 principal://agents.global.org-000000000000.system.id.goog/resources/aiplatform/projects/123456789012/locations/us-east4/reasoningEngines/1234567890123456789
 ```
 
-- The trust domain is `agents.global.org-<ORG_ID>.system.id.goog`. Get `ORG_ID` from `gcloud projects get-ancestors P`. The path uses the project **number**.
+- The trust domain is `agents.global.org-<ORG_ID>.system.id.goog`. Get `ORG_ID` from `gcloud projects get-ancestors P`. In a project with no organization it's `agents.global.proj-<PROJECT_NUMBER>.system.id.goog` (the demo picks it automatically: `engines.trust_domain()`, Terraform's `trust_domain` local). The path uses the project **number**.
 - All agents in the project: `principalSet://agents.global.org-<ORG_ID>.system.id.goog/attribute.platformContainer/aiplatform/projects/<NUMBER>`.
 
 Grant or revoke (the handlers do the same through `…:getIamPolicy` / `…:setIamPolicy` with etag retry):

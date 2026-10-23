@@ -131,7 +131,7 @@ Allow about 30–45 minutes, mostly waiting on Google Cloud. The full guide, wit
 
 **1. Prerequisites**
 - A Google Cloud project with billing, where you are Owner (or hold the admin roles `preflight` checks for).
-- **The project must be in a Google Cloud organization.** The demo builds Agent Identity principals from the organization id (`principal://agents.global.org-<ORG_ID>.system.id.goog/…`), and Terraform stops with "No organization id" without one. Agent Identity itself also works in projects without an organization (trust domain `agents.global.proj-<PROJECT_NUMBER>.system.id.goog`), but the demo doesn't support that yet ([BACKLOG.md](docs/BACKLOG.md) #19).
+- **A Google Cloud organization is best, but not required.** Agent Identity principals use the organization's trust domain (`principal://agents.global.org-<ORG_ID>.system.id.goog/…`). In a project with no organization the demo uses the project's trust domain instead (`agents.global.proj-<PROJECT_NUMBER>.system.id.goog`), as Google's Agent Identity docs describe. The org-less path follows the docs but hasn't been tested live ([BACKLOG.md](docs/BACKLOG.md) #19).
 - A region where Agent Gateway, Agent Runtime, Agent Registry and Cloud Run are all available (us-east4 is tested). All Agent Runtime agents in a project and region must share the same gateways, so pick a region where no agents are bound to other gateways.
 - `gcloud` (with beta components), **Terraform 1.7+**, [`uv`](https://docs.astral.sh/uv/) and Python 3.11+. Images are built with Cloud Build, so Docker isn't required. Node is only needed for UI development; `agents-cli` only for the optional Gemini Enterprise step.
 

@@ -43,3 +43,21 @@ def test_one_direction_preserves_the_other(monkeypatch):
     engines.set_gateways(r, cfg, ENGINE, "ingress", None)
     assert r.patches == [{"agentToAnywhereConfig": {"agentGateway": EG}}]
     assert engines.set_gateways(r, cfg, ENGINE, "ingress", None) == {"changed": False}
+
+
+def test_trust_domain_with_and_without_organization(monkeypatch):
+    """Agent Identity principals: org-<ORG_ID> in an organization, proj-<PROJECT_NUMBER> without one."""
+    from types import SimpleNamespace
+    cfg = SimpleNamespace(project="p")
+    eng = "projects/42/locations/us-east1/reasoningEngines/7"
+    monkeypatch.setattr(engines, "project_number", lambda p: "42")
+    monkeypatch.setattr(engines, "organization_id", lambda p: "123")
+    assert engines.principal(cfg, None, eng) == ("principal://agents.global.org-123.system.id.goog/resources/"
+                                                 "aiplatform/projects/42/locations/us-east1/reasoningEngines/7")
+    assert engines.project_principal_set(cfg).startswith("principalSet://agents.global.org-123.system.id.goog/")
+    monkeypatch.setattr(engines, "organization_id", lambda p: None)
+    assert engines.principal(cfg, None, eng).startswith("principal://agents.global.proj-42.system.id.goog/resources/")
+    assert engines.project_principal_set(cfg) == ("principalSet://agents.global.proj-42.system.id.goog/"
+                                                  "attribute.platformContainer/aiplatform/projects/42")
+    # effectiveIdentity from the API always wins
+    assert engines.principal(cfg, {"spec": {"effectiveIdentity": "agents.global.x/y"}}, eng) == "principal://agents.global.x/y"
