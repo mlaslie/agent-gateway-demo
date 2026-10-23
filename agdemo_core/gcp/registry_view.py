@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..config import DemoConfig
+from ..state import region_shared
 from ..themes import Policy, Theme
 from . import iap, registry
 from .rest import Rest
@@ -254,7 +255,7 @@ def simulate(theme: Theme, applied: set[str], cfg: DemoConfig | None, state: dic
         it["access"] = []
         agents.append(it)
 
-    ids = (state or {}).get("shared", {}).get("platform_registry_ids") or {}
+    ids = region_shared(state or {}, cfg).get("platform_registry_ids") or {}   # the view's region (T4)
     hosts = sorted(ids) or [f"https://{h}" for h in _default_platform_hosts(region)]
     ps = SIM_PROJECT_SET
     eps = []
@@ -298,7 +299,7 @@ def fetch(r: Rest, cfg: DemoConfig, state: dict[str, Any], theme: Theme,
     principal = orch_state.get("principal")
     extra = tstate.get("orchestrators") or {}
     principals = {v["principal"]: k for k, v in extra.items() if (v or {}).get("principal")}
-    shared_ids = state.get("shared", {}).get("platform_registry_ids") or {}
+    shared_ids = region_shared(state, cfg).get("platform_registry_ids") or {}
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         lists = {k: pool.submit(registry.list_projection, r, parent, k) for k in ("agents", "mcpServers", "endpoints")}

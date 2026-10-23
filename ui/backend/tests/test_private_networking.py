@@ -540,3 +540,67 @@ def test_network_view_from_state():
     n = network_view.view(cfg(), st, t, live=True)
     assert n["source"] == "state" and n["pieces"] == {"psc_ip": "10.1.2.3", "gateway": "gw"}
     assert network_view.view(None, None, t)["source"] == "placeholder"
+
+
+# ---------------------------------------------------------------------- regional views of the read-only exports
+def test_cli_export_terraform_uses_theme_region(monkeypatch, tmp_path):
+    """`./agdemo export-terraform privnet` renders the Private Networking region, its gateway and registry
+    (the same view the UI's export uses), not the base region."""
+    from typer.testing import CliRunner
+
+    from agdemo_core import cli, policies
+    from agdemo_core.policies import Ctx
+
+    class Off:
+        def status(self, *a):
+            return {"status": "ok", "applied": False, "enabled": False}
+
+    monkeypatch.setattr(cli, "_cfg", lambda: cfg())
+    monkeypatch.setattr(Ctx, "load", classmethod(lambda k: k(config=cfg(), state={})))
+    monkeypatch.setattr(policies, "get_handler", lambda t: Off())
+    monkeypatch.setattr(policies, "model_armor_handler", lambda: Off())
+    res = CliRunner().invoke(cli.app, ["export-terraform", "privnet", "--include-shared", "--out", str(tmp_path)])
+    assert res.exit_code == 0, res.output
+    text = "\n".join(p.read_text() for p in tmp_path.iterdir())
+    assert "us-west1" in text and "us-east1" not in text
+    assert "agdtest-pn-egress" in text
+
+    monkeypatch.setattr(cli, "_cfg", lambda: cfg(pn=False))     # mode off: a clear error, nothing written
+    res = CliRunner().invoke(cli.app, ["export-terraform", "privnet", "--out", str(tmp_path / "off")])
+    assert res.exit_code == 1 and "Private Networking" in res.output and not (tmp_path / "off").exists()
+
+
+PN_STATE = {"shared": {"platform_registry_ids": {"https://us-east1-aiplatform.googleapis.com": "projects/1/l/endpoints/base"},
+                       "regions": {"us-west1": {"platform_registry_ids": {
+                           "https://us-west1-aiplatform.googleapis.com": "projects/1/l/endpoints/west"}}}},
+            "themes": {}}
+
+
+def test_registry_view_simulate_regional_platform_ids():
+    from agdemo_core.gcp import registry_view as rv
+    t, base = load_theme("privnet"), cfg()
+    out = rv.simulate(t, set(), theme_config(base, t), PN_STATE)
+    assert [e["url"] for e in out["endpoints"]["items"]] == ["https://us-west1-aiplatform.googleapis.com"]
+    assert out["endpoints"]["items"][0]["registry_id"] == "west"
+    h = rv.simulate(load_theme("helpdesk"), set(), base, PN_STATE)   # base region: unchanged
+    assert [e["url"] for e in h["endpoints"]["items"]] == ["https://us-east1-aiplatform.googleapis.com"]
+
+
+def test_registry_view_fetch_regional_platform_ids():
+    """When the endpoint list fails, the view falls back to the platform ids in state: the view's region's."""
+    from agdemo_core.gcp import registry_view as rv
+
+    class Rest:
+        def list_all(self, url, key, params=None):
+            if key == "endpoints":
+                raise RuntimeError("denied")
+            return []
+
+        def post(self, url, json=None, **kw):
+            return {"version": 1, "etag": "x"}
+
+    t = load_theme("privnet")
+    out = rv.fetch(Rest(), theme_config(cfg(), t), PN_STATE, t, lambda: N)
+    assert [e["registry_id"] for e in out["endpoints"]["items"]] == ["west"]
+    out = rv.fetch(Rest(), cfg(), PN_STATE, load_theme("helpdesk"), lambda: N)
+    assert [e["registry_id"] for e in out["endpoints"]["items"]] == ["base"]

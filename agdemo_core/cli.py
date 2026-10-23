@@ -251,10 +251,15 @@ def export_terraform(theme: str,
     from . import terraform as tf
     from .config import CONFIG_DIR
     from .policies import Ctx, get_handler, model_armor_handler
-    from .themes import load_theme
+    from .themes import ThemeRegionError, load_theme, theme_config
 
     cfg = _cfg()
     t = load_theme(theme)
+    try:
+        view = theme_config(cfg, t)        # the theme's region, its gateway and registry (as the UI's export)
+    except ThemeRegionError as e:
+        c.console.print(f"[red]{e}[/]")
+        raise typer.Exit(1)
     ctx = Ctx.load()
     applied = set()
     for p in t.policies:
@@ -266,7 +271,7 @@ def export_terraform(theme: str,
     ma = model_armor_handler().status(ctx)
     if ma.get("status") == "error":
         c.console.print(f"[yellow]Model Armor: could not read status ({ma.get('detail', '')[:160]}); treated as off[/]")
-    files = tf.render(cfg, ctx.state, t, applied, bool(ma.get("enabled")), include_shared)
+    files = tf.render(view, ctx.state, t, applied, bool(ma.get("enabled")), include_shared)
     d = Path(out) if out else CONFIG_DIR / "generated" / "terraform" / theme
     d.mkdir(parents=True, exist_ok=True)
     for name, text in files.items():
