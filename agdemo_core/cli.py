@@ -286,10 +286,17 @@ def deployer_roles(member: str = typer.Option(..., "--member",
                         f"{', Gemini Enterprise' if ge else ''}) for {member} on {cfg.project}. Run as a project owner:")
         for cmd in cmds:
             print(shlex.join(cmd))
+            if cmd[1:4] == ["iam", "roles", "create"]:
+                print(f"# If that role was deleted in the last ~37 days: gcloud iam roles undelete {cmd[4]} "
+                      f"--project={cfg.project}  (--apply does this for you)")
         return
+    if strategy == "minimum":
+        c.console.print(f"  custom role {dr.deployer_iap_role(cfg)}: {dr.ensure_deployer_iap_role(cfg)}")
     for cmd in cmds:
-        c.console.print(f"  {' '.join(cmd[1:5])} ...")
-        gcloud.run(cmd[1:], check=not (cmd[1:3] == ["iam", "roles"]))   # the custom role may exist already
+        if cmd[1:4] == ["iam", "roles", "create"]:
+            continue
+        c.console.print(f"  {cmd[5].split('=', 1)[1]}{' (conditional)' if 'condition-from-file' in cmd[-2] else ''}")
+        gcloud.run(cmd[1:])
     c.console.print(f"[green]granted {len(cmds) - (1 if strategy == 'minimum' else 0)} bindings to {member}[/]")
 
 

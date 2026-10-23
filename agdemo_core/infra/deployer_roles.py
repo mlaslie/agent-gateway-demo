@@ -97,6 +97,28 @@ def grants(cfg: DemoConfig, strategy: str, private_networking: bool, gemini_ente
             Grant(deployer_iap_role(cfg)), *(Grant(r) for r in extra)]
 
 
+def ensure_deployer_iap_role(cfg: DemoConfig) -> str:
+    """Create the deployer's custom IAP role, or bring it back: a deleted custom role keeps its id reserved for
+    about 37 days, so a second `deployer-roles --apply` after a teardown must undelete it. Returns what it did."""
+    from ..gcp import gcloud
+    rid, proj = f"{role_prefix(cfg)}DeployerIap", f"--project={cfg.project}"
+    perms = f"--permissions={','.join(DEPLOYER_IAP_PERMISSIONS)}"
+    try:
+        role = gcloud.run(["iam", "roles", "describe", rid, proj], json_out=True) or {}
+    except gcloud.GcloudError:
+        role = None
+    if role is None:
+        gcloud.run(["iam", "roles", "create", rid, proj, f"--title={cfg.prefix} deployer: IAP grants on registry "
+                    "entries and the UI", perms, "--stage=GA", "--quiet"])
+        return "created"
+    did = "updated"
+    if role.get("deleted"):
+        gcloud.run(["iam", "roles", "undelete", rid, proj, "--quiet"])
+        did = "undeleted"
+    gcloud.run(["iam", "roles", "update", rid, proj, perms, "--stage=GA", "--quiet"])
+    return did
+
+
 def commands(cfg: DemoConfig, member: str, strategy: str, private_networking: bool, gemini_enterprise: bool,
              gcloud: str = "gcloud", out_dir: Path | None = None) -> list[list[str]]:
     """gcloud argument lists, in order: the custom IAP role first (minimum), then one binding per grant."""
