@@ -12,7 +12,8 @@
 # Without them the UI still runs in Demo mode (live_available=false).
 # Optional: AGDEMO_RECORDINGS_DIR (writable dir for Live "Record"; recordings in themes/ are read as fallback),
 #           AGDEMO_LIVE_TIMEOUT (default 45 s), AGDEMO_PACE (demo pacing multiplier, default 1).
-# Cloud Run sets K_SERVICE, which turns on the IAP admin check (X-Goog-Authenticated-User-Email vs ui.admin_access).
+# Cloud Run sets K_SERVICE, which turns on the IAP admin check: the email in IAP's signed header
+# (x-goog-iap-jwt-assertion, verified against AGDEMO_IAP_AUDIENCE) must be in ui.admin_access.
 
 # ---------- 1. frontend ----------
 FROM node:22-slim AS frontend

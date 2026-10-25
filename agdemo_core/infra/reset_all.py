@@ -372,7 +372,7 @@ class LiveOps:
             if not gone:
                 return
             try:
-                iap.set_policy(self.r, url, {"bindings": bindings, "etag": pol.get("etag")})
+                iap.set_policy(self.r, url, {**pol, "bindings": bindings})
                 return
             except GcpError as e:
                 if e.status in (409, 412) and attempt < retries - 1:

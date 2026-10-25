@@ -369,7 +369,7 @@ async def registry_view(theme_id: str, mode: Mode = "demo", refresh: bool = Fals
 
         out = await asyncio.get_running_loop().run_in_executor(
             None, lambda: rv.fetch(rest(cfg.project), _view(cfg, theme), state, theme,
-                                   lambda: project_number(cfg.project)))
+                                   lambda: project_number(cfg.gateway_project)))
     except Exception as e:  # noqa: BLE001
         if mode == "live_with_fallback":
             return simulated(f"{type(e).__name__}: {e}")
@@ -408,8 +408,9 @@ async def terraform_export(theme_id: str, mode: Mode = "demo", include_shared: b
 
 
 @app.post("/api/themes/{theme_id}/sync")
-async def sync(theme_id: str, body: ModeBody) -> dict[str, Any]:
+async def sync(theme_id: str, body: ModeBody, request: Request) -> dict[str, Any]:
     """Re-read policies and Model Armor from GCP, clear pending states GCP shows as done (CONTRACTS §7)."""
+    _require_admin(request, body.mode)
     theme = _theme(theme_id)
     if body.mode == "demo":
         st = engine.demo.state(theme)
@@ -424,8 +425,9 @@ async def sync(theme_id: str, body: ModeBody) -> dict[str, Any]:
 
 
 @app.post("/api/themes/{theme_id}/verify")
-async def verify(theme_id: str, body: ModeBody) -> dict[str, Any]:
+async def verify(theme_id: str, body: ModeBody, request: Request) -> dict[str, Any]:
     """Is the theme back at step 1 (no policies, no gateways, Model Armor off, all connections direct)?"""
+    _require_admin(request, body.mode)
     theme = _theme(theme_id)
     if body.mode == "demo":
         return engine.demo.verify_start_state(theme)

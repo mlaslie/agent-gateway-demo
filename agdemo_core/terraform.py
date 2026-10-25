@@ -298,6 +298,9 @@ def render(cfg: DemoConfig | None, state: dict[str, Any] | None, theme: Theme, a
     """Terraform files for the theme's policy state. `applied` = ids of the policies currently in place."""
     x = Ctx(cfg, state, theme)
     x.include_shared = include_shared
+    # The Model Armor checkbox is global; a theme without Model Armor (the Private Networking region) has no
+    # template, extension or CONTENT_AUTHZ policies to export.
+    model_armor = model_armor and theme.has_model_armor
     applied_set = set(applied)
     pols = [p for p in theme.policies if p.id in applied_set]
     ts = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -709,51 +712,52 @@ def _shared(x: Ctx) -> str:
     b.nl()
     b.b("custom_provider").b("authz_extension").a("resources", "[google_network_services_authz_extension.egress_iap.id]")
     out.append(b.render() + "\n")
-    # Model Armor template + extension
-    from .gcp import model_armor as ma
-    body = ma.template_body(cfg)
-    b = Block('resource "google_model_armor_template" "shield"')
-    b.a("project", "var.project_id").a("location", "var.region")
-    b.t("template_id", x.pfx(cfg.model_armor_template))
-    b.a("labels", "local.labels")
-    b.nl()
-    fc = b.b("filter_config")
-    f = body["filterConfig"]
-    if "piAndJailbreakFilterSettings" in f:
-        s = f["piAndJailbreakFilterSettings"]
-        fc.b("pi_and_jailbreak_filter_settings").s("filter_enforcement", s["filterEnforcement"]) \
-            .s("confidence_level", s["confidenceLevel"])
-    if "sdpSettings" in f:
-        fc.b("sdp_settings").b("basic_config").s("filter_enforcement", f["sdpSettings"]["basicConfig"]["filterEnforcement"])
-    if "maliciousUriFilterSettings" in f:
-        fc.b("malicious_uri_filter_settings").s("filter_enforcement", "ENABLED")
-    if "raiSettings" in f:
-        rs = fc.b("rai_settings")
-        for rf in f["raiSettings"]["raiFilters"]:
-            rs.b("rai_filters").s("filter_type", rf["filterType"]).s("confidence_level", rf["confidenceLevel"])
-    b.nl()
-    tm = b.b("template_metadata")
-    m = body["templateMetadata"]
-    tm.a("log_sanitize_operations", "true").a("log_template_operations", "true")
-    tm.a("custom_prompt_safety_error_code", str(m["customPromptSafetyErrorCode"]))
-    tm.s("custom_prompt_safety_error_message", m["customPromptSafetyErrorMessage"])
-    tm.a("custom_llm_response_safety_error_code", str(m["customLlmResponseSafetyErrorCode"]))
-    tm.s("custom_llm_response_safety_error_message", m["customLlmResponseSafetyErrorMessage"])
-    out.append(f"# Model Armor template (filters: {', '.join(cfg.model_armor.filters)})\n" + b.render() + "\n")
-    b = Block('resource "google_network_services_authz_extension" "model_armor"')
-    b.a("for_each", "toset(distinct([var.project_id, local.gateway_project]))")
-    b.nl()
-    b.a("project", "each.value").a("location", "var.region")
-    b.t("name", x.pfx(gw.ma_extension_name(cfg)))
-    b.t("service", "modelarmor.${var.region}.rep.googleapis.com")
-    b.a("fail_open", "false")
-    b.s("timeout", "5s")
-    b.a("labels", "local.labels")
-    b.a("metadata", "{\nmodel_armor_settings = jsonencode([{\nrequest_template_id  = google_model_armor_template.shield.id\n"
-                    "response_template_id = google_model_armor_template.shield.id\n}])\n}")
-    out.append("# Model Armor authz extension, one per gateway project. The CONTENT_AUTHZ policies that attach it\n"
-               "# are the Model Armor checkbox (see above; present only when Model Armor is on).\n"
-               + _fix_indent(b.render()) + "\n")
+    # Model Armor template + extension (themes with Model Armor; the Private Networking region has none)
+    if theme.has_model_armor:
+        from .gcp import model_armor as ma
+        body = ma.template_body(cfg)
+        b = Block('resource "google_model_armor_template" "shield"')
+        b.a("project", "var.project_id").a("location", "var.region")
+        b.t("template_id", x.pfx(cfg.model_armor_template))
+        b.a("labels", "local.labels")
+        b.nl()
+        fc = b.b("filter_config")
+        f = body["filterConfig"]
+        if "piAndJailbreakFilterSettings" in f:
+            s = f["piAndJailbreakFilterSettings"]
+            fc.b("pi_and_jailbreak_filter_settings").s("filter_enforcement", s["filterEnforcement"]) \
+                .s("confidence_level", s["confidenceLevel"])
+        if "sdpSettings" in f:
+            fc.b("sdp_settings").b("basic_config").s("filter_enforcement", f["sdpSettings"]["basicConfig"]["filterEnforcement"])
+        if "maliciousUriFilterSettings" in f:
+            fc.b("malicious_uri_filter_settings").s("filter_enforcement", "ENABLED")
+        if "raiSettings" in f:
+            rs = fc.b("rai_settings")
+            for rf in f["raiSettings"]["raiFilters"]:
+                rs.b("rai_filters").s("filter_type", rf["filterType"]).s("confidence_level", rf["confidenceLevel"])
+        b.nl()
+        tm = b.b("template_metadata")
+        m = body["templateMetadata"]
+        tm.a("log_sanitize_operations", "true").a("log_template_operations", "true")
+        tm.a("custom_prompt_safety_error_code", str(m["customPromptSafetyErrorCode"]))
+        tm.s("custom_prompt_safety_error_message", m["customPromptSafetyErrorMessage"])
+        tm.a("custom_llm_response_safety_error_code", str(m["customLlmResponseSafetyErrorCode"]))
+        tm.s("custom_llm_response_safety_error_message", m["customLlmResponseSafetyErrorMessage"])
+        out.append(f"# Model Armor template (filters: {', '.join(cfg.model_armor.filters)})\n" + b.render() + "\n")
+        b = Block('resource "google_network_services_authz_extension" "model_armor"')
+        b.a("for_each", "toset(distinct([var.project_id, local.gateway_project]))")
+        b.nl()
+        b.a("project", "each.value").a("location", "var.region")
+        b.t("name", x.pfx(gw.ma_extension_name(cfg)))
+        b.t("service", "modelarmor.${var.region}.rep.googleapis.com")
+        b.a("fail_open", "false")
+        b.s("timeout", "5s")
+        b.a("labels", "local.labels")
+        b.a("metadata", "{\nmodel_armor_settings = jsonencode([{\nrequest_template_id  = google_model_armor_template.shield.id\n"
+                        "response_template_id = google_model_armor_template.shield.id\n}])\n}")
+        out.append("# Model Armor authz extension, one per gateway project. The CONTENT_AUTHZ policies that attach it\n"
+                   "# are the Model Armor checkbox (see above; present only when Model Armor is on).\n"
+                   + _fix_indent(b.render()) + "\n")
 
     # Agent Registry: theme components
     out.append(_section(f"Agent Registry entries for theme {theme.id} (registered by ./agdemo deploy-theme)"))
@@ -942,16 +946,17 @@ def _readme(x: Ctx, pols: list[Policy], model_armor: bool, include_shared: bool,
     ]
     imp_lines = []
     if model_armor:
-        for path in ("egress", "ingress"):
+        for path in _paths(theme):
             proj = gw.gateway_project(cfg, path)
             imp_lines.append(f"terraform import google_network_security_authz_policy.model_armor_{path} "
                              f"projects/{proj}/locations/{cfg.region}/authzPolicies/{gw.ma_policy_name(cfg, path)}")
     if include_shared:
-        for path in ("egress", "ingress"):
+        for path in _paths(theme):
             imp_lines.append(f"terraform import google_network_services_agent_gateway.{path} "
                              f"{gw.gateway_resource(cfg, path)}")
-        imp_lines.append(f"terraform import google_model_armor_template.shield "
-                         f"projects/{cfg.project}/locations/{cfg.region}/templates/{cfg.model_armor_template}")
+        if theme.has_model_armor:
+            imp_lines.append(f"terraform import google_model_armor_template.shield "
+                             f"projects/{cfg.project}/locations/{cfg.region}/templates/{cfg.model_armor_template}")
         imp_lines.append("# ... and likewise for the authz extensions/policy, registry services and service accounts")
     return f"""# Terraform export: {theme.name} (`{theme.id}`)
 

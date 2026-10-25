@@ -568,6 +568,7 @@ def test_cli_export_terraform_uses_theme_region(monkeypatch, tmp_path):
     # that owns the connectivity template.
     assert 'resource "google_network_services_agent_gateway" "ingress"' not in text and "ingress_gateway" not in text
     assert "modules/private_egress" in text
+    assert "google_model_armor_template" not in text      # privnet has no Model Armor: no template or extension
 
     monkeypatch.setattr(cli, "_cfg", lambda: cfg(pn=False))     # mode off: a clear error, nothing written
     res = CliRunner().invoke(cli.app, ["export-terraform", "privnet", "--out", str(tmp_path / "off")])

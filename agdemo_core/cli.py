@@ -567,12 +567,14 @@ def tf_import(dry_run: bool = typer.Option(False, "--dry-run", help="Print the i
 @tf_app.command("check-plan")
 def tf_check_plan(plan_json: str, allow_replace: bool = typer.Option(False, "--allow-replace"),
                   allow_template_swap: bool = typer.Option(False, "--allow-template-swap"),
-                  migration: bool = typer.Option(False, "--migration", help="T2: refuse non-additive creates")):
+                  migration: bool = typer.Option(False, "--migration", help="T2: refuse non-additive creates"),
+                  allow_role_changes: bool = typer.Option(False, "--allow-role-changes", help=ROLE_CHANGES_HELP)):
     """Plan-safety check on `terraform show -json` output: exit 1 on any delete or replace (and, with
     --migration, on any create other than additive IAM/API)."""
     from . import tf_safety
     args = [plan_json] + (["--allow-replace"] if allow_replace else []) + \
-        (["--allow-template-swap"] if allow_template_swap else []) + (["--migration"] if migration else [])
+        (["--allow-template-swap"] if allow_template_swap else []) + (["--migration"] if migration else []) + \
+        (["--allow-role-changes"] if allow_role_changes else [])
     raise typer.Exit(tf_safety.main(args))
 
 

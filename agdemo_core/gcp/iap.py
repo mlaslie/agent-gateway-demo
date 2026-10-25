@@ -37,6 +37,8 @@ def get_policy(r: Rest, url: str) -> dict:
 
 
 def set_policy(r: Rest, url: str, policy: dict) -> dict:
+    """Write the whole policy back (pass the fetched policy with edited bindings, so its etag and any
+    auditConfigs survive): setIamPolicy without an update mask replaces every field."""
     policy = {**policy, "version": 3}
     return r.post(f"{url}:setIamPolicy", json={"policy": policy})
 
@@ -83,7 +85,7 @@ def add_binding(r: Rest, url: str, member: str, role: str = EGRESSOR, condition:
             nb["condition"] = condition
         bindings.append(nb)
         try:
-            set_policy(r, url, {"bindings": bindings, "etag": pol.get("etag")})
+            set_policy(r, url, {**pol, "bindings": bindings})
             return True
         except GcpError as e:
             if e.status in (409, 412) and attempt < retries - 1:
@@ -111,7 +113,7 @@ def remove_member(r: Rest, url: str, member: str, role: str = EGRESSOR, retries:
                 continue
             bindings.append(b)
         try:
-            set_policy(r, url, {"bindings": bindings, "etag": pol.get("etag")})
+            set_policy(r, url, {**pol, "bindings": bindings})
             return True
         except GcpError as e:
             if e.status in (409, 412) and attempt < retries - 1:
@@ -142,7 +144,7 @@ def remove_binding(r: Rest, url: str, member: str, role: str = EGRESSOR, conditi
         if not changed:
             return False
         try:
-            set_policy(r, url, {"bindings": bindings, "etag": pol.get("etag")})
+            set_policy(r, url, {**pol, "bindings": bindings})
             return True
         except GcpError as e:
             if e.status in (409, 412) and attempt < retries - 1:

@@ -171,6 +171,28 @@ def test_live_tests_and_probes_need_admin(client, monkeypatch):
     assert client.post(f"/api/themes/helpdesk/probe", json={"mode": "live"}).status_code == 403
     assert client.post(f"/api/themes/helpdesk/tests/{test_id}/run", json={"mode": "live_with_fallback"}).status_code == 403
     assert client.post(f"/api/themes/helpdesk/probe", json={"mode": "demo"}).status_code == 200
+    for ep in ("sync", "verify"):
+        assert client.post(f"/api/themes/helpdesk/{ep}", json={"mode": "live"}).status_code == 403
+        assert client.post(f"/api/themes/helpdesk/{ep}", json={"mode": "demo"}).status_code == 200
+
+
+def test_iap_writes_keep_the_rest_of_the_policy():
+    """setIamPolicy without an update mask replaces every field: auditConfigs and the etag must go back as read."""
+    from agdemo_core.gcp import iap
+
+    class R:
+        def __init__(self):
+            self.sent = None
+
+        def post(self, url, json=None):
+            if url.endswith(":getIamPolicy"):
+                return {"etag": "E", "auditConfigs": [{"service": "allServices"}], "bindings": []}
+            self.sent = json["policy"]
+            return self.sent
+    r = R()
+    assert iap.add_binding(r, "https://iap/x", "principal://p", "roles/iap.egressor") is not False
+    assert r.sent["auditConfigs"] == [{"service": "allServices"}] and r.sent["etag"] == "E" and r.sent["version"] == 3
+    assert {"role": "roles/iap.egressor", "members": ["principal://p"]} in r.sent["bindings"]
 
 
 def test_spa_fallback(client, monkeypatch, tmp_path):

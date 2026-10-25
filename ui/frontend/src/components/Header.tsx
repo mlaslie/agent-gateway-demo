@@ -20,6 +20,9 @@ export function Header({ d }: { d: Demo }) {
   const env = cfg?.environment;
   const liveOk = !!cfg?.live_available;
   const adminTip = d.canAdmin ? undefined : "Read-only viewer — only presenters (admins) can change policies";
+  // Sync and Verify read GCP as the UI's service account and update shared pending state: presenters only in Live.
+  const liveLocked = !d.canAdmin && d.mode !== "demo";
+  const liveTip = "Read-only viewer — Live Sync and Verify are for presenters (Demo mode works for everyone)";
   const maEnabled = !!d.state?.model_armor.enabled;
   const ma = d.state?.model_armor;
   const maPending = ma?.status === "pending";
@@ -162,8 +165,8 @@ export function Header({ d }: { d: Demo }) {
 
       <button
         className="btn btn-outline"
-        disabled={!d.theme || !!d.busy}
-        title="Re-read every policy and Model Armor from GCP and clear any stuck pending state"
+        disabled={liveLocked || !d.theme || !!d.busy}
+        title={liveLocked ? liveTip : "Re-read every policy and Model Armor from GCP and clear any stuck pending state"}
         aria-label="Sync with GCP"
         onClick={() => d.sync()}
       >
@@ -173,8 +176,8 @@ export function Header({ d }: { d: Demo }) {
 
       <button
         className="btn btn-outline"
-        disabled={!d.theme || d.busy === "verify" || d.busy === "reset"}
-        title="Check that this theme is back at step 1: no policies, no gateways, Model Armor off, every connection direct"
+        disabled={liveLocked || !d.theme || d.busy === "verify" || d.busy === "reset"}
+        title={liveLocked ? liveTip : "Check that this theme is back at step 1: no policies, no gateways, Model Armor off, every connection direct"}
         aria-label="Verify the start state"
         onClick={() => d.verify()}
       >

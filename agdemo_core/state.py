@@ -57,7 +57,9 @@ def update_state(*keys: str, value: Any, path: Path = STATE_PATH) -> dict[str, A
             node = node.setdefault(k, {})
         node[keys[-1]] = value
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state, indent=2, sort_keys=True))
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, indent=2, sort_keys=True))
+        tmp.replace(path)              # atomic, like save_state: the UI may read it at the same time
         return state
 
 

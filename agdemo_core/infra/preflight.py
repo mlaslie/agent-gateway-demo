@@ -18,7 +18,11 @@ PERMS = [
     "modelarmor.templates.create", "run.services.create", "cloudbuild.builds.create",
     "artifactregistry.repositories.create", "iam.serviceAccounts.create", "resourcemanager.projects.setIamPolicy",
     "serviceusage.services.enable",
+    # up also creates buckets, sets Cloud Run IAM and deploys as the demo's service accounts
+    "storage.buckets.create", "run.services.setIamPolicy", "iam.serviceAccounts.actAs",
 ]
+PN_PERMS = ["compute.networks.create", "compute.networkAttachments.create", "compute.globalForwardingRules.create",
+            "dns.managedZones.create"]
 
 
 @dataclass
@@ -84,10 +88,11 @@ def run(cfg: DemoConfig, r: Rest, fix: bool = False) -> list[Check]:
 
     # your (the operator's) permissions
     try:
-        granted = project.test_permissions(r, P, PERMS)
-        lacking = [p for p in PERMS if p not in granted]
+        want = PERMS + (PN_PERMS if cfg.private_networking.enabled else [])
+        granted = project.test_permissions(r, P, want)
+        lacking = [p for p in want if p not in granted]
         out.append(Check("your permissions", not lacking, "ok" if not lacking else "missing: " + ", ".join(lacking),
-                         "Project Owner is simplest; see docs/SETUP.md §2"))
+                         "Project Owner is simplest, or the roles ./agdemo deployer-roles prints (docs/PERMISSIONS.md)"))
     except GcpError as e:
         out.append(Check("your permissions", None, e.message[:120]))
 
