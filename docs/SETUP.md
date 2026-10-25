@@ -50,9 +50,9 @@ Edit `config/demo.yaml`. At minimum, set:
 | `environment.project_id` | Your project |
 | `environment.region` | A supported region (see prerequisites) |
 | `environment.resource_prefix` | A short unique prefix (lowercase, 10 characters or fewer), so several copies can share a project |
-| `ui.iap_access` / `ui.admin_access` | Who can view the UI / who can change Live policy (`./agdemo up` also grants `ui.admin_access` members `roles/aiplatform.user`, see §7) |
+| `ui.iap_access` / `ui.admin_access` | Who can view the UI / who can change Live policy and run Live tests and probes (list `user:` or `domain:` entries: the UI can't expand `group:` members, so they'd be view-only) (`./agdemo up` also grants `ui.admin_access` members `roles/aiplatform.user`, see §7) |
 
-Optional: `gateway_project_id` (egress gateway in another project), `gateways.create: false` (reuse existing gateways), `themes.enabled` / `themes.default`, `default_mode`, `models.default`, `model_armor.filters`, `cloud_run.public_targets` (whether the mock Cloud Run targets allow unauthenticated invocation; enforcement happens at the gateway either way).
+Optional: `gateway_project_id` (egress gateway in another project), `gateways.create: false` (reuse existing gateways), `themes.enabled` / `themes.default`, `default_mode`, `models.default`, `model_armor.filters`, `cloud_run.public_targets` (whether the mock Cloud Run targets allow unauthenticated invocation. The gateway only governs calls that go through it: with `true`, anyone who knows a target's run.app URL can call it directly, which is what the bypass tests show. The targets serve fake data only; set `false` to require Google ID tokens).
 
 Optional, **least privilege** ([PERMISSIONS.md](PERMISSIONS.md), "Auth strategy"):
 

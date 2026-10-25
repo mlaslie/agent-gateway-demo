@@ -45,7 +45,7 @@ def tf_dir() -> Path:
 # ------------------------------------------------------------------ names
 def state_bucket(cfg: DemoConfig) -> str:
     """One state bucket per project, shared by every environment (prefix keys them)."""
-    return f"{cfg.project}-agdemo-tfstate"[:63]
+    return c.bucket_name(f"{cfg.project}-agdemo-tfstate")
 
 
 def state_prefix(cfg: DemoConfig) -> str:
@@ -53,7 +53,7 @@ def state_prefix(cfg: DemoConfig) -> str:
 
 
 def recordings_bucket(cfg: DemoConfig) -> str:
-    return f"{cfg.project}-{cfg.prefix}-recordings"[:63]
+    return c.bucket_name(f"{cfg.project}-{cfg.prefix}-recordings")
 
 
 # ------------------------------------------------------------------ tfvars (pure)

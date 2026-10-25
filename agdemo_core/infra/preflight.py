@@ -1,6 +1,8 @@
 """./agdemo preflight — pass/fail checks with the exact fix for each failure."""
 from __future__ import annotations
 
+import os
+import shutil
 from dataclasses import dataclass
 
 from ..config import DemoConfig
@@ -45,6 +47,11 @@ def run(cfg: DemoConfig, r: Rest, fix: bool = False) -> list[Check]:
         out.append(Check("Application Default Credentials", False, str(e)[:120],
                          "gcloud auth application-default login"))
         return out
+
+    # Terraform (./agdemo up builds the foundation with it)
+    tf_bin = os.environ.get("AGDEMO_TERRAFORM") or shutil.which("terraform")
+    out.append(Check("terraform", bool(tf_bin), tf_bin or "not found on PATH",
+                     "install Terraform 1.7+ (https://developer.hashicorp.com/terraform/install) or set AGDEMO_TERRAFORM"))
 
     # project + billing
     try:

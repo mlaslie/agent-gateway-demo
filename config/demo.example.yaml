@@ -33,7 +33,7 @@ cloud_run:
 ui:
   deploy: cloud_run                   # cloud_run | local
   iap_access: []                      # e.g. ["group:demo-viewers@example.com"] - who can open the UI
-  admin_access: []                    # e.g. ["user:presenter@example.com"] - who can change Live policies
+  admin_access: []                    # e.g. ["user:presenter@example.com"] - who can change Live policies and run Live tests (user:/domain: entries; group: can't be checked by the UI)
 
 themes:
   enabled: [helpdesk, retail]

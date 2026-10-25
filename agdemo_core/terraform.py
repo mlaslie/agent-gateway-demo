@@ -386,7 +386,7 @@ def _main(x: Ctx, pols: list[Policy], model_armor: bool, include_shared: bool, t
     if model_armor:
         out.append("\n")
         out.append(_section("Model Armor (CONTENT_AUTHZ authz policy on each gateway)"))
-        out.extend(_join(_ma_policy(x, path) for path in ("egress", "ingress")))
+        out.extend(_join(_ma_policy(x, path) for path in _paths(x.theme)))
     if include_shared:
         out.append("\n")
         out.append(_shared(x))
@@ -429,13 +429,15 @@ def _locals(x: Ctx, gws: dict[str, Policy], egress_pols: list[Policy], model_arm
     if include_shared:
         lo.c("Agent Gateways (managed below).")
         lo.a("egress_gateway", "google_network_services_agent_gateway.egress.id")
-        lo.a("ingress_gateway", "google_network_services_agent_gateway.ingress.id")
+        if "ingress" in _paths(x.theme):
+            lo.a("ingress_gateway", "google_network_services_agent_gateway.ingress.id")
     else:
         lo.c("Shared resources created by `./agdemo bootstrap` (referenced by name).")
         lo.t("egress_gateway", f"projects/${{local.gateway_project}}/locations/${{var.region}}/agentGateways/"
                                f"{x.pfx(cfg.egress_gateway)}")
-        lo.t("ingress_gateway", f"projects/${{var.project_id}}/locations/${{var.region}}/agentGateways/"
-                                f"{x.pfx(cfg.ingress_gateway)}")
+        if "ingress" in _paths(x.theme):
+            lo.t("ingress_gateway", f"projects/${{var.project_id}}/locations/${{var.region}}/agentGateways/"
+                                    f"{x.pfx(cfg.ingress_gateway)}")
         if model_armor:
             ext = x.pfx(gw.ma_extension_name(cfg))
             lo.a("model_armor_extension", "{\n"
@@ -652,11 +654,20 @@ def _ma_policy(x: Ctx, path: str) -> str:
 
 
 # ---------------------------------------------------------------------- shared infrastructure
+def _paths(theme: Theme) -> tuple[str, ...]:
+    """Gateway directions a theme's region has: Private Networking regions have only the VPC-enabled egress gateway."""
+    return ("egress",) if theme.network_mode == "private_networking" else ("egress", "ingress")
+
+
 def _shared(x: Ctx) -> str:
     cfg, theme = x.cfg, x.theme
     out: list[str] = [_section("Shared infrastructure (created by ./agdemo bootstrap)")]
+    if theme.network_mode == "private_networking":
+        out.append("# Private Networking: the egress gateway below is VPC-enabled. Its agent connectivity template, the VPC,\n"
+                   "# network attachment, PSC endpoint and private run.app DNS zone come from the demo's Terraform module\n"
+                   "# infra/terraform/modules/private_egress and aren't repeated here; there is no ingress gateway.\n")
     # gateways
-    for path in ("egress", "ingress"):
+    for path in _paths(theme):
         b = Block(f'resource "google_network_services_agent_gateway" "{path}"')
         b.a("project", "local.gateway_project" if path == "egress" else "var.project_id")
         b.a("location", "var.region")

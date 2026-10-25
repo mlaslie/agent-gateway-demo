@@ -124,7 +124,7 @@ principal://agents.global.org-000000000000.system.id.goog/resources/aiplatform/p
 ```
 
 - The trust domain is `agents.global.org-<ORG_ID>.system.id.goog`. Get `ORG_ID` from `gcloud projects get-ancestors P`. In a project with no organization it's `agents.global.proj-<PROJECT_NUMBER>.system.id.goog` (the demo picks it automatically: `engines.trust_domain()`, Terraform's `trust_domain` local). The path uses the project **number**.
-- All agents in the project: `principalSet://agents.global.org-<ORG_ID>.system.id.goog/attribute.platformContainer/aiplatform/projects/<NUMBER>`.
+- All agents in the project: `principalSet://agents.global.org-<ORG_ID>.system.id.goog/attribute.platformContainer/aiplatform/projects/<NUMBER>` (`agents.global.proj-<NUMBER>…` without an organization).
 
 Grant or revoke (the handlers do the same through `…:getIamPolicy` / `…:setIamPolicy` with etag retry):
 
@@ -322,7 +322,7 @@ Scenario 5 has one `user` node and one edge, `ingress:user`. Simulation: no ingr
 ## 12. UI on Cloud Run (`./agdemo ui deploy`)
 
 - Cloud Build runs from the repo root with `-f ui/Dockerfile` (the config is generated at `config/generated/ui-cloudbuild.yaml`). The image is pushed to `R-docker.pkg.dev/P/agdemo/ui:latest`.
-- `gcloud beta run deploy agdemo-ui --iap --no-allow-unauthenticated --service-account=agdemo-ui@…` sets `AGDEMO_CONFIG_YAML`, `AGDEMO_STATE_JSON` and `AGDEMO_RECORDINGS_DIR=/tmp/recordings` from `config/generated/ui.env.yaml`. Re-run `ui deploy --skip-build` after `deploy-theme`, so the UI picks up new state.
+- `gcloud beta run deploy agdemo-ui --iap --no-allow-unauthenticated --service-account=agdemo-ui@…` sets `AGDEMO_CONFIG_YAML`, `AGDEMO_STATE_JSON`, `AGDEMO_RECORDINGS_URI=gs://<project>-<prefix>-recordings/recordings` (the staging bucket when there's no recordings bucket) and `AGDEMO_IAP_AUDIENCE` (the backend verifies IAP's signed header against it) from `config/generated/ui.env.yaml`. The container runs as a non-root user. Re-run `ui deploy --skip-build` after `deploy-theme`, so the UI picks up new state.
 - The IAP service agent `service-<NUM>@gcp-sa-iap.iam.gserviceaccount.com` gets `roles/run.invoker`. Each member of `ui.iap_access` and `ui.admin_access` gets `roles/iap.httpsResourceAccessor` (`gcloud beta iap web add-iam-policy-binding --resource-type=cloud-run --service=agdemo-ui`). Bootstrap also grants each `ui.admin_access` member `roles/aiplatform.user` on the project, so presenters can call the agent from Gemini Enterprise.
 
 Project roles for `agdemo-ui` (from bootstrap), and why each is needed:

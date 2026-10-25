@@ -564,6 +564,10 @@ def test_cli_export_terraform_uses_theme_region(monkeypatch, tmp_path):
     text = "\n".join(p.read_text() for p in tmp_path.iterdir())
     assert "us-west1" in text and "us-east1" not in text
     assert "agdtest-pn-egress" in text
+    # Private Networking has only the VPC-enabled egress gateway: no ingress gateway, and a pointer to the module
+    # that owns the connectivity template.
+    assert 'resource "google_network_services_agent_gateway" "ingress"' not in text and "ingress_gateway" not in text
+    assert "modules/private_egress" in text
 
     monkeypatch.setattr(cli, "_cfg", lambda: cfg(pn=False))     # mode off: a clear error, nothing written
     res = CliRunner().invoke(cli.app, ["export-terraform", "privnet", "--out", str(tmp_path / "off")])

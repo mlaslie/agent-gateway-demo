@@ -46,8 +46,13 @@ def staging_bucket(cfg: DemoConfig) -> str:
     """Agent Runtime staging bucket of the view's region: <project>-<prefix>-staging in the base region,
     <project>-<prefix>-staging-<region> in the Private Networking region (Terraform modules/regional)."""
     if cfg.is_home:
-        return f"{cfg.project}-{cfg.prefix}-staging"[:63]
-    return f"{cfg.project}-{cfg.prefix}-staging-{cfg.region}"[:63]
+        return bucket_name(f"{cfg.project}-{cfg.prefix}-staging")
+    return bucket_name(f"{cfg.project}-{cfg.prefix}-staging-{cfg.region}")
+
+
+def bucket_name(name: str) -> str:
+    """GCS bucket names are at most 63 characters and can't end with '-'."""
+    return name[:63].rstrip("-_.")
 
 
 def psc_rule_name(cfg: DemoConfig) -> str:
