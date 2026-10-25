@@ -24,7 +24,7 @@ RUN npm run build
 
 # ---------- 2. backend ----------
 FROM python:3.12-slim
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.11.13 /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PROJECT_ENVIRONMENT=/app/.venv PYTHONUNBUFFERED=1
 WORKDIR /app
 
@@ -40,6 +40,10 @@ COPY config/demo.example.yaml ./config/demo.example.yaml
 RUN uv sync --frozen --no-dev
 
 COPY --from=frontend /src/ui/frontend/dist ./ui/frontend/dist
+
+# Run as an unprivileged user (it still owns /app: the local recordings fallback writes under themes/).
+RUN useradd --system --uid 10001 --home-dir /app app && chown -R app /app
+USER app
 
 ENV PATH="/app/.venv/bin:$PATH" PORT=8080
 EXPOSE 8080

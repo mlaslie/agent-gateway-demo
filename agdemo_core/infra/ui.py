@@ -51,7 +51,9 @@ def deploy(cfg: DemoConfig, skip_build: bool = False) -> str:
     rec = state.get("shared", {}).get("recordings_bucket")
     env = {"AGDEMO_CONFIG_YAML": config_path().read_text(),
            "AGDEMO_STATE_JSON": json.dumps(state),
-           "AGDEMO_RECORDINGS_URI": f"gs://{rec}/recordings" if rec else f"gs://{c.staging_bucket(cfg)}/recordings"}
+           "AGDEMO_RECORDINGS_URI": f"gs://{rec}/recordings" if rec else f"gs://{c.staging_bucket(cfg)}/recordings",
+           # The audience of IAP's signed header, which the backend verifies (settings.iap_email).
+           "AGDEMO_IAP_AUDIENCE": f"/projects/{project_number(cfg.project)}/locations/{cfg.region}/services/{svc}"}
     envf = CONFIG_DIR / "generated" / "ui.env.yaml"
     envf.write_text(yaml.safe_dump(env))
     labels = ",".join(f"{k}={v}" for k, v in cfg.labels.items())

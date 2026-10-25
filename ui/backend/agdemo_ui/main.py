@@ -84,8 +84,9 @@ def _test(theme: Theme, test_id: str, scenario_id: str | None):
 
 
 def _require_admin(request: Request, mode: str) -> None:
+    """Live policy changes, tests and probes act in GCP as the UI's service account: presenters only."""
     if mode != "demo" and not settings.can_admin(request.headers):
-        raise HTTPException(403, "Live changes are limited to ui.admin_access")
+        raise HTTPException(403, "Live changes, tests and probes are limited to ui.admin_access")
 
 
 def _enabled_themes() -> list[str]:
@@ -235,6 +236,7 @@ async def set_model_armor(body: ModelArmorBody, request: Request) -> dict[str, A
 
 @app.post("/api/themes/{theme_id}/tests/{test_id}/run")
 async def run_test(theme_id: str, test_id: str, body: RunBody, request: Request):
+    _require_admin(request, body.mode)
     theme = _theme(theme_id)
     scenario, test = _test(theme, test_id, body.scenario_id)
     pace = settings.pace()
@@ -257,6 +259,7 @@ async def run_test(theme_id: str, test_id: str, body: RunBody, request: Request)
 
 @app.post("/api/themes/{theme_id}/probe")
 async def probe(theme_id: str, body: ModeBody, request: Request) -> dict[str, Any]:
+    _require_admin(request, body.mode)
     theme = _theme(theme_id)
     if body.mode == "demo":
         edges = engine.demo.state(theme)["edges"]

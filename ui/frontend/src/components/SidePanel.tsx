@@ -240,6 +240,8 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
   const maOff = !!d.state && !d.state.model_armor.enabled;
   // Recording always runs against Live GCP (backend: Live only, admin only). Hidden in GE Demo.
   const showRecord = !ge && !isDemo && d.canAdmin && !!d.config?.live_available;
+  // Live tests and probes act in GCP as the UI's service account: presenters only (the backend enforces it).
+  const liveLocked = !ge && !isDemo && !d.canAdmin;
   return (
     <aside className="side">
       <div className="side-scroll" ref={scrollRef}>
@@ -368,9 +370,9 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
                 <div key={t.id} className={`test-row ${ge ? "ge" : ""}`}>
                   <button
                     className={`test-btn ${running ? "running" : ""} ${t.malicious ? "malicious" : ""}`}
-                    disabled={!ge && !!d.runningTest && !running}
+                    disabled={liveLocked || (!ge && !!d.runningTest && !running)}
                     onClick={() => (ge ? d.copyPrompt(t.id) : running ? d.stopTest() : d.runTest(t.id, { focus: true }))}
-                    title={ge ? `Copy prompt: ${t.prompt}` : t.prompt}
+                    title={liveLocked ? "Read-only viewer: Live tests are for presenters. Switch to Demo to try it." : ge ? `Copy prompt: ${t.prompt}` : t.prompt}
                     aria-label={ge ? `Copy the prompt for ${t.label}` : running ? `Stop ${t.label}` : `Run ${t.label}`}
                   >
                     <span className="test-icon">{ge ? <CopyIcon size={15} /> : running ? <span className="mini-spinner light" /> : <PlayIcon size={16} />}</span>
@@ -412,7 +414,7 @@ export function SidePanel({ d, api }: { d: Demo; api: Api }) {
               );
             })}
           </div>
-          <button className="btn btn-text btn-sm probe-btn" disabled={d.busy === "probe" || !!d.runningTest} onClick={d.probe} title="Probe every edge and refresh the diagram">
+          <button className="btn btn-text btn-sm probe-btn" disabled={liveLocked || d.busy === "probe" || !!d.runningTest} onClick={d.probe} title={liveLocked ? "Read-only viewer: Live probes are for presenters" : "Probe every edge and refresh the diagram"}>
             <RefreshIcon size={14} /> {d.busy === "probe" ? "Probing…" : "Probe all connections"}
           </button>
         </section>

@@ -11,6 +11,9 @@ Other:
   AGDEMO_LIVE_TIMEOUT seconds before a live call counts as failed (default 45)
   AGDEMO_FRONTEND_DIST built frontend dir (default ui/frontend/dist)
   AGDEMO_ADMIN_ALL=1  treat every viewer as admin (local/dev only)
+  AGDEMO_IAP_AUDIENCE expected audience of IAP's signed header on Cloud Run
+                      (/projects/<NUMBER>/locations/<REGION>/services/<SERVICE>; `ui deploy` sets it,
+                      else it's built from the metadata server)
 """
 from __future__ import annotations
 
@@ -142,14 +145,64 @@ def _norm_member(m: str) -> str:
     return m
 
 
+IAP_ISSUER = "https://cloud.google.com/iap"
+IAP_CERTS = "https://www.gstatic.com/iap/verify/public_key"
+_METADATA = "http://metadata.google.internal/computeMetadata/v1"
+_iap_audience: str | None = None
+_iap_seen: dict[str, tuple[float, str]] = {}      # token -> (exp, email); IAP tokens live ~10 min
+
+
+def iap_audience() -> str:
+    """Audience of IAP's signed header for IAP directly on Cloud Run (docs: signed-headers-howto)."""
+    global _iap_audience
+    if _iap_audience is None:
+        aud = os.environ.get("AGDEMO_IAP_AUDIENCE", "")
+        if not aud:
+            import requests
+            h = {"Metadata-Flavor": "Google"}
+            num = requests.get(f"{_METADATA}/project/numeric-project-id", headers=h, timeout=5).text.strip()
+            region = requests.get(f"{_METADATA}/instance/region", headers=h, timeout=5).text.strip().split("/")[-1]
+            aud = f"/projects/{num}/locations/{region}/services/{os.environ['K_SERVICE']}"
+        _iap_audience = aud
+    return _iap_audience
+
+
+def iap_email(headers: Any) -> str:
+    """The caller's email from IAP's signed header (x-goog-iap-jwt-assertion), verified against IAP's public
+    keys, issuer and this service's audience. '' when missing or invalid. The plain
+    x-goog-authenticated-user-email header isn't trusted: anything else allowed to invoke the service could
+    set it."""
+    token = headers.get("x-goog-iap-jwt-assertion") or ""
+    if not token:
+        return ""
+    now = time.time()
+    hit = _iap_seen.get(token)
+    if hit and hit[0] > now:
+        return hit[1]
+    try:
+        from google.auth.transport import requests as gar
+        from google.oauth2 import id_token
+        claims = id_token.verify_token(token, gar.Request(), audience=iap_audience(), certs_url=IAP_CERTS)
+    except Exception:  # noqa: BLE001
+        return ""
+    if claims.get("iss") != IAP_ISSUER:
+        return ""
+    email = str(claims.get("email") or "").split(":")[-1].strip().lower()
+    if len(_iap_seen) > 256:
+        _iap_seen.clear()
+    _iap_seen[token] = (float(claims.get("exp", now + 60)), email)
+    return email
+
+
 def can_admin(headers: Any) -> bool:
-    """Locally always true. On Cloud Run (K_SERVICE set) behind IAP, the IAP user email must be listed
-    in ui.admin_access (user:/serviceAccount: entries, or domain:<d>). Groups can't be resolved here."""
+    """Locally always true. On Cloud Run (K_SERVICE set) behind IAP, the caller's email from IAP's verified
+    signed header must be listed in ui.admin_access (user:/serviceAccount: entries, or domain:<d>). Groups
+    can't be resolved here."""
     if os.environ.get("AGDEMO_ADMIN_ALL") == "1":
         return True
     if not os.environ.get("K_SERVICE"):
         return True
-    email = (headers.get("x-goog-authenticated-user-email") or "").split(":")[-1].strip().lower()
+    email = iap_email(headers)
     if not email:
         return False
     cfg, _ = get_config()

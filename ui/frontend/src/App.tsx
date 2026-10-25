@@ -42,7 +42,7 @@ export default function App({ api }: { api: Api }) {
       text: `Live GCP access isn't available${d.config.live_unavailable_reason ? ` (${d.config.live_unavailable_reason})` : ""} — running in Demo (simulated) mode.`,
     });
   if (d.state?.live_error && d.mode !== "demo") notices.push({ tone: "warn", text: `Live state unavailable: ${d.state.live_error}` });
-  if (d.config && !d.config.can_admin) notices.push({ tone: "info", text: "View-only: policy toggles, Model Armor and Reset are disabled for your account." });
+  if (d.config && !d.config.can_admin) notices.push({ tone: "info", text: "View-only: policy toggles, Model Armor, Reset and Live tests are disabled for your account. Demo mode works for everyone." });
   if (d.themeSummary && !d.themeSummary.deployed && d.mode !== "demo") notices.push({ tone: "warn", text: `${d.themeSummary.name} isn't deployed in this project — Live calls will fail. Use Demo mode.` });
 
   const sc = d.scenario;

@@ -12,6 +12,7 @@ tool-level conditions (verified codelab agw-cuj-arun-egress-emcp):
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .rest import IAP, GcpError, Rest
@@ -151,9 +152,22 @@ def remove_binding(r: Rest, url: str, member: str, role: str = EGRESSOR, conditi
 
 
 # ---------------------------------------------------------------- MCP tool conditions
+TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,128}$")
+
+
+def cel_string(value: str) -> str:
+    """A single-quoted CEL string literal."""
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
 def tool_name_condition(tools: list[str], title: str) -> dict:
-    """Allow only these tools. '' keeps non-tool MCP traffic (initialize, tools/list, notifications) working."""
-    names = ", ".join(f"'{t}'" for t in [*tools, ""])
+    """Allow only these tools. '' keeps non-tool MCP traffic (initialize, tools/list, notifications) working.
+    Tool names come from theme files; anything that isn't a plain identifier is refused, so a name can't
+    change the condition's meaning (it's also escaped as a CEL string)."""
+    bad = [t for t in tools if not TOOL_NAME_RE.match(t)]
+    if bad:
+        raise ValueError(f"invalid MCP tool name(s) for an IAM condition: {bad!r}")
+    names = ", ".join(cel_string(t) for t in [*tools, ""])
     return {"title": title[:100],
             "description": "Agent Gateway MCP tool-level policy (agdemo)",
             "expression": f"api.getAttribute('iap.googleapis.com/mcp.toolName', '') in [{names}]"}

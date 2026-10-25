@@ -144,9 +144,33 @@ def test_can_admin_on_cloud_run(monkeypatch):
     cfg = DemoConfig.model_validate({"environment": {"project_id": "p"},
                                      "ui": {"admin_access": ["user:boss@example.com"]}})
     monkeypatch.setattr(settings, "get_config", lambda: (cfg, ""))
-    assert settings.can_admin({"x-goog-authenticated-user-email": "accounts.google.com:boss@example.com"})
-    assert not settings.can_admin({"x-goog-authenticated-user-email": "accounts.google.com:other@example.com"})
+    monkeypatch.setenv("AGDEMO_IAP_AUDIENCE", "/projects/1/locations/r/services/agdemo-ui")
+    monkeypatch.setattr(settings, "_iap_audience", None)
+    monkeypatch.setattr(settings, "_iap_seen", {})
+    from google.oauth2 import id_token
+    good = {"tok-boss": "boss@example.com", "tok-other": "other@example.com"}
+
+    def verify(token, request, audience=None, certs_url=None):
+        assert audience == "/projects/1/locations/r/services/agdemo-ui" and certs_url == settings.IAP_CERTS
+        if token not in good:
+            raise ValueError("bad signature")
+        return {"iss": settings.IAP_ISSUER, "email": "accounts.google.com:" + good[token], "exp": time.time() + 60}
+    monkeypatch.setattr(id_token, "verify_token", verify)
+    assert settings.can_admin({"x-goog-iap-jwt-assertion": "tok-boss"})
+    assert not settings.can_admin({"x-goog-iap-jwt-assertion": "tok-other"})
+    assert not settings.can_admin({"x-goog-iap-jwt-assertion": "forged"})
+    # The plain header isn't trusted on its own any more.
+    assert not settings.can_admin({"x-goog-authenticated-user-email": "accounts.google.com:boss@example.com"})
     assert not settings.can_admin({})
+
+
+def test_live_tests_and_probes_need_admin(client, monkeypatch):
+    monkeypatch.setattr(settings, "can_admin", lambda headers: False)
+    t = load_theme("helpdesk")
+    test_id = t.scenarios[0].tests[0].id
+    assert client.post(f"/api/themes/helpdesk/probe", json={"mode": "live"}).status_code == 403
+    assert client.post(f"/api/themes/helpdesk/tests/{test_id}/run", json={"mode": "live_with_fallback"}).status_code == 403
+    assert client.post(f"/api/themes/helpdesk/probe", json={"mode": "demo"}).status_code == 200
 
 
 def test_spa_fallback(client, monkeypatch, tmp_path):
